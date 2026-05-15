@@ -31,6 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source shared output framework
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 source "${SCRIPT_DIR}/lib/yaml.sh"
+source "${SCRIPT_DIR}/lib/load-profile.sh"
 
 # Global variables
 OUTPUT_MODE="json"  # json or raw
@@ -269,7 +270,11 @@ fetch_gitlab_tasks() {
 
     local token=$(cat "$HOME/.gitlab-token")
     local project_id=$(yaml_get '.task_management.gitlab.project_id' PROJECT.yaml)
-    local gitlab_url=$(yaml_get_default '.task_management.gitlab.instance' 'https://git.turnersrus.com' PROJECT.yaml)
+    # Resolution: PROJECT.yaml override → profile .git.instance → empty (caller errors)
+    local profile_instance
+    profile_instance=$(profile_env_get .git.instance 2>/dev/null)
+    [[ -n "$profile_instance" && "$profile_instance" != http* ]] && profile_instance="https://${profile_instance}"
+    local gitlab_url=$(yaml_get_default '.task_management.gitlab.instance' "$profile_instance" PROJECT.yaml)
 
     # Build query parameters
     local state_param="opened"

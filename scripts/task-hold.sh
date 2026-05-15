@@ -56,6 +56,7 @@ map_status_to_action() {
 # Source shared libraries
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 source "${SCRIPT_DIR}/lib/yaml.sh"
+source "${SCRIPT_DIR}/lib/load-profile.sh"
 source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
 
@@ -579,19 +580,21 @@ Branch ${CURRENT_BRANCH} preserved. Will resume when response received."
     if [[ -n "$ISSUE_ID" ]]; then
         local gitlab_token=$(cat ~/.gitlab-token 2>/dev/null || echo "")
         local project_id=$(yaml_get '.task_management.gitlab.project_id' PROJECT.yaml)
+        local gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
+        local gitlab_base="https://${gitlab_host}/api/v4/projects/${project_id}"
 
-        if [[ -n "$gitlab_token" ]] && [[ -n "$project_id" ]]; then
+        if [[ -n "$gitlab_token" ]] && [[ -n "$project_id" ]] && [[ -n "$gitlab_host" ]]; then
             # Post comment
             curl -s -X POST \
                 --header "PRIVATE-TOKEN: ${gitlab_token}" \
                 --data "body=⏸️ Task on hold: ${HOLD_REASON}. Waiting on: ${WAITING_ON}. Expected: ${EXPECTED_DATE}" \
-                "https://git.turnersrus.com/api/v4/projects/${project_id}/issues/${ISSUE_ID}/notes" >/dev/null 2>&1 || true
+                "${gitlab_base}/issues/${ISSUE_ID}/notes" >/dev/null 2>&1 || true
 
             # Add label
             curl -s -X PUT \
                 --header "PRIVATE-TOKEN: ${gitlab_token}" \
                 --data "add_labels=on-hold" \
-                "https://git.turnersrus.com/api/v4/projects/${project_id}/issues/${ISSUE_ID}" >/dev/null 2>&1 || true
+                "${gitlab_base}/issues/${ISSUE_ID}" >/dev/null 2>&1 || true
 
             log "${GREEN}✓${NC} GitLab issue #$ISSUE_ID marked as on-hold"
             EXTERNAL_UPDATED=true

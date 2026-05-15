@@ -29,6 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source the project config library
 # shellcheck source=lib/project-config.sh
 source "${SCRIPT_DIR}/lib/project-config.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -195,8 +197,11 @@ validate_gitlab_config() {
 
     # Check for token
     if [[ ! -f "${HOME}/.gitlab-token" ]]; then
+        local gitlab_host
+        gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
+        gitlab_host="${gitlab_host:-gitlab.com}"
         echo -e "${YELLOW}Warning: ~/.gitlab-token not found${NC}" >&2
-        echo "Create token at: https://git.turnersrus.com/-/profile/personal_access_tokens" >&2
+        echo "Create token at: https://${gitlab_host}/-/profile/personal_access_tokens" >&2
         echo "Then save: echo 'YOUR_TOKEN' > ~/.gitlab-token && chmod 600 ~/.gitlab-token" >&2
         return 1
     fi

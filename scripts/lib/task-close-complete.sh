@@ -4,6 +4,10 @@
 
 [[ -n "${_TASK_CLOSE_COMPLETE_LOADED:-}" ]] && return 0; _TASK_CLOSE_COMPLETE_LOADED=1
 
+# Ensure profile accessors are available (idempotent if parent sourced it)
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/load-profile.sh"
+
 section_complete() {
     print_header "Task Completion"
 
@@ -193,8 +197,9 @@ EOF
         if [[ -f "$HOME/.gitlab-token" ]]; then
             local gitlab_token=$(cat "$HOME/.gitlab-token")
             local project_id=$(git remote get-url origin | sed 's#.*[:/]\(.*\)\.git#\1#' | sed 's#/#%2F#g')
+            local gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
             local mr_info=$(curl -s --header "PRIVATE-TOKEN: $gitlab_token" \
-                "https://git.turnersrus.com/api/v4/projects/${project_id}/merge_requests?source_branch=${CURRENT_BRANCH}&state=opened" \
+                "https://${gitlab_host}/api/v4/projects/${project_id}/merge_requests?source_branch=${CURRENT_BRANCH}&state=opened" \
                 | jq '.[0]' 2>/dev/null || echo "")
             if [[ -n "$mr_info" ]] && [[ "$mr_info" != "null" ]]; then
                 MR_NUMBER=$(echo "$mr_info" | jq -r '.iid')
@@ -233,9 +238,10 @@ EOF
         if [[ -f "$HOME/.gitlab-token" ]]; then
             local gitlab_token=$(cat "$HOME/.gitlab-token")
             local project_id=$(git remote get-url origin | sed 's#.*[:/]\(.*\)\.git#\1#' | sed 's#/#%2F#g')
+            local gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
             curl -s --header "PRIVATE-TOKEN: $gitlab_token" \
                 --request PUT \
-                "https://git.turnersrus.com/api/v4/projects/${project_id}/issues/${ISSUE_ID}?state_event=close" \
+                "https://${gitlab_host}/api/v4/projects/${project_id}/issues/${ISSUE_ID}?state_event=close" \
                 > /dev/null && \
                 EXTERNAL_UPDATED=true && \
                 log "${GREEN}✓${NC} Closed GitLab issue #$ISSUE_ID" || \

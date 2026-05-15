@@ -31,6 +31,9 @@ NC='\033[0m'
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+
 # Default mode
 OUTPUT_MODE="json"
 SECTION="full"
@@ -154,8 +157,16 @@ detect_source() {
         return 0
     fi
 
-    # GitLab URL pattern
-    if [[ "$input" =~ gitlab\.com.*issues/([0-9]+) ]] || [[ "$input" =~ git\.turnersrus\.com.*issues/([0-9]+) ]]; then
+    # GitLab URL pattern — matches public gitlab.com or the profile's
+    # configured self-hosted instance (regex-escaped for safety).
+    local gitlab_host
+    gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
+    local gitlab_host_re=""
+    if [[ -n "$gitlab_host" && "$gitlab_host" != "gitlab.com" ]]; then
+        gitlab_host_re=$(printf '%s' "$gitlab_host" | sed 's/[.[\*^$()+?{|]/\\&/g')
+    fi
+    if [[ "$input" =~ gitlab\.com.*issues/([0-9]+) ]] \
+       || { [[ -n "$gitlab_host_re" ]] && [[ "$input" =~ ${gitlab_host_re}.*issues/([0-9]+) ]]; }; then
         echo "gitlab_url"
         return 0
     fi
