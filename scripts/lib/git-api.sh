@@ -71,7 +71,10 @@ git_adapter_name() {
 #
 # Usage: gitlab_api GET "/projects/ID/pipelines" [extra_curl_args...]
 # Requires: GIT_API_URL and GIT_TOKEN_FILE variables set by caller.
-# Returns JSON on stdout; exit 1 with stderr message on HTTP error.
+# Returns JSON on stdout. Exit codes match the contract:
+#   0 on 2xx
+#   2 on 404 (not found)
+#   1 on any other HTTP error (with stderr message)
 # ----------------------------------------------------------------------
 gitlab_api() {
   local method="${1:?method required}"
@@ -96,6 +99,9 @@ gitlab_api() {
   if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
     cat "$tmpfile"
     return 0
+  elif [[ "$http_code" == "404" ]]; then
+    # Quiet — callers will translate this to exit 2; not necessarily an error
+    return 2
   else
     echo "GitLab API error: HTTP ${http_code} on ${method} ${endpoint}" >&2
     cat "$tmpfile" >&2

@@ -39,6 +39,36 @@ _gh() {
   fi
 }
 
+# Run a gh command and translate "resource not found" exits into exit 2
+# (per the contract). Other errors remain exit 1.
+_gh_get() {
+  local stderr
+  stderr=$(mktemp)
+  trap 'rm -f "$stderr"' RETURN
+  if _gh "$@" 2>"$stderr"; then
+    return 0
+  fi
+  local rc=$?
+  if grep -qiE "could not resolve|not found|no .* found" "$stderr"; then
+    return 2
+  fi
+  cat "$stderr" >&2
+  return "$rc"
+}
+
+# Parse a numeric resource id from a gh-printed URL.
+# gh CLI prints URLs in the canonical form .../issues/42, .../pull/42,
+# .../actions/runs/42 — always ending in a numeric id. Validate the
+# extracted value strictly so we error out instead of silently using "".
+_gh_parse_id_from_url() {
+  local url="$1"
+  local num="${url##*/}"
+  if [[ ! "$num" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  echo "$num"
+}
+
 # Map gh run conclusion+status into the normalized contract value.
 _github_normalize_status() {
   local status="$1" conclusion="$2"
@@ -60,13 +90,14 @@ _github_normalize_status() {
 
 git_issue_get() {
   local id="${1:?id required}"
-  _gh issue view "$id" --json number,title,state,assignees,labels,url,body \
-    | jq -c '{
-        id: .number, title: .title, state: (.state | ascii_downcase),
-        assignee: (.assignees[0].login // null),
-        labels: (.labels | map(.name)),
-        url: .url, raw: .
-      }'
+  local raw
+  raw=$(_gh_get issue view "$id" --json number,title,state,assignees,labels,url,body) || return $?
+  jq -c '{
+    id: .number, title: .title, state: (.state | ascii_downcase),
+    assignee: (.assignees[0].login // null),
+    labels: (.labels | map(.name)),
+    url: .url, raw: .
+  }' <<<"$raw"
 }
 
 git_issue_list() {
@@ -90,10 +121,12 @@ git_issue_list() {
 
 git_issue_create() {
   local title="${1:?title required}" body="${2:-}"
-  local url
+  local url num
   url=$(_gh issue create --title "$title" --body "$body") || return $?
-  local num
-  num=$(echo "$url" | grep -oE '[0-9]+$')
+  num=$(_gh_parse_id_from_url "$url") || {
+    echo "git_issue_create: created issue but could not parse id from url '$url'" >&2
+    return 1
+  }
   jq -nc --arg id "$num" --arg url "$url" '{id: ($id | tonumber), url: $url}'
 }
 
@@ -135,10 +168,12 @@ git_pr_create() {
   local title="${1:?title required}" body="${2:-}" base="${3:-}"
   local args=(--title "$title" --body "$body")
   [[ -n "$base" ]] && args+=(--base "$base")
-  local url
+  local url num
   url=$(_gh pr create "${args[@]}") || return $?
-  local num
-  num=$(echo "$url" | grep -oE '[0-9]+$')
+  num=$(_gh_parse_id_from_url "$url") || {
+    echo "git_pr_create: created PR but could not parse id from url '$url'" >&2
+    return 1
+  }
   jq -nc --arg id "$num" --arg url "$url" '{id: ($id | tonumber), url: $url}'
 }
 
@@ -183,7 +218,7 @@ git_pipeline_list() {
 git_pipeline_status() {
   local id="${1:?id required}"
   local raw jobs status conclusion normalized
-  raw=$(_gh run view "$id" --json databaseId,status,conclusion,jobs,url) || return $?
+  raw=$(_gh_get run view "$id" --json databaseId,status,conclusion,jobs,url) || return $?
   status=$(jq -r .status <<<"$raw")
   conclusion=$(jq -r '.conclusion // ""' <<<"$raw")
   normalized=$(_github_normalize_status "$status" "$conclusion")

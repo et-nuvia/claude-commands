@@ -13,8 +13,11 @@ _GITLAB_HOST="${_GITLAB_HOST:-gitlab.com}"
 _GITLAB_TOKEN_FILE="${GITLAB_TOKEN_FILE:-${HOME}/.gitlab-token}"
 
 # Project ID resolution: try PROJECT.yaml first, then derive from remote.
+# Exits 1 with a clear message if nothing resolves — prevents calls that
+# would otherwise build URLs like /projects//issues/42 and confuse with
+# upstream 404s.
 _gitlab_project_id() {
-  local id
+  local id=""
   if [[ -f PROJECT.yaml ]]; then
     id=$(yaml_get '.task_management.gitlab.project_id' PROJECT.yaml 2>/dev/null || true)
     if [[ -z "$id" || "$id" == "null" ]]; then
@@ -22,7 +25,11 @@ _gitlab_project_id() {
     fi
   fi
   if [[ -z "$id" || "$id" == "null" ]]; then
-    id=$(git remote get-url origin 2>/dev/null | sed 's#.*[:/]\(.*\)\.git#\1#')
+    id=$(git remote get-url origin 2>/dev/null | sed 's#.*[:/]\(.*\)\.git#\1#' || true)
+  fi
+  if [[ -z "$id" || "$id" == "null" ]]; then
+    echo "gitlab.sh: cannot determine project_id (set PROJECT.yaml .git.repo or run from a git repo)" >&2
+    return 1
   fi
   # URL-encode '/' for the API
   echo "$id" | sed 's#/#%2F#g'
@@ -38,6 +45,8 @@ _gitlab_call() {
 }
 
 # Map a raw GitLab pipeline status to the normalized contract value.
+# Used from both bash (git_pipeline_status) and jq (git_pipeline_list) —
+# the jq form below MUST stay in sync with this case statement.
 _gitlab_normalize_status() {
   case "$1" in
     success)                       echo "success" ;;
@@ -48,6 +57,21 @@ _gitlab_normalize_status() {
   esac
 }
 
+# jq snippet that performs the same normalization on .status. Embed by
+# string-pasting into a larger jq expression. Kept here so both
+# occurrences live next to the bash version above.
+#
+# Uses `as $s` to capture .status before the inner pipe (otherwise the
+# `index(...)` call would re-bind `.` and lose context).
+_GITLAB_NORMALIZE_JQ='
+  (.status as $s |
+   if $s == "success" then "success"
+   elif $s == "failed" then "failed"
+   elif $s == "canceled" or $s == "cancelled" then "cancelled"
+   elif (["created","pending","running","preparing","waiting_for_resource","manual","scheduled"] | index($s)) then "running"
+   else "unknown" end)
+'
+
 # ----------------------------------------------------------------------
 # Issues
 # ----------------------------------------------------------------------
@@ -55,7 +79,7 @@ _gitlab_normalize_status() {
 git_issue_get() {
   local id="${1:?id required}"
   local proj raw
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   raw=$(_gitlab_call GET "/projects/${proj}/issues/${id}") || return $?
   jq -c '{
     id: .iid,
@@ -92,7 +116,7 @@ git_issue_list() {
   done
 
   local proj raw
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   raw=$(_gitlab_call GET "/projects/${proj}/issues?state=${state}${assignee_filter}&per_page=100") || return $?
   jq -c '[.[] | {
     id: .iid, title: .title, state: .state,
@@ -104,7 +128,7 @@ git_issue_list() {
 git_issue_create() {
   local title="${1:?title required}" body="${2:-}"
   local proj raw
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   raw=$(_gitlab_call POST "/projects/${proj}/issues" \
     --data-urlencode "title=${title}" \
     --data-urlencode "description=${body}") || return $?
@@ -114,7 +138,7 @@ git_issue_create() {
 git_issue_close() {
   local id="${1:?id required}" comment="${2:-}"
   local proj
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   if [[ -n "$comment" ]]; then
     git_issue_comment "$id" "$comment" || true
   fi
@@ -124,7 +148,7 @@ git_issue_close() {
 git_issue_comment() {
   local id="${1:?id required}" body="${2:?body required}"
   local proj
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   _gitlab_call POST "/projects/${proj}/issues/${id}/notes" \
     --data-urlencode "body=${body}" >/dev/null
 }
@@ -132,7 +156,7 @@ git_issue_comment() {
 git_issue_label_add() {
   local id="${1:?id required}" label="${2:?label required}"
   local proj
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   _gitlab_call PUT "/projects/${proj}/issues/${id}" \
     --data-urlencode "add_labels=${label}" >/dev/null
 }
@@ -144,7 +168,7 @@ git_issue_label_add() {
 git_pr_find_for_branch() {
   local branch="${1:?branch required}"
   local proj raw
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   raw=$(_gitlab_call GET "/projects/${proj}/merge_requests?source_branch=${branch}&state=opened") || return $?
   local first
   first=$(jq -c '.[0] // empty' <<<"$raw")
@@ -155,7 +179,7 @@ git_pr_find_for_branch() {
 git_pr_create() {
   local title="${1:?title required}" body="${2:-}" base="${3:-}"
   local proj raw current
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   current=$(git symbolic-ref --short HEAD 2>/dev/null) || {
     echo "git_pr_create: cannot determine current branch" >&2; return 1
   }
@@ -185,26 +209,22 @@ git_pipeline_list() {
   done
 
   local proj qs="per_page=${limit}"
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   [[ -n "$ref" ]] && qs="${qs}&ref=${ref}"
   [[ -n "$sha" ]] && qs="${qs}&sha=${sha}"
   local raw
   raw=$(_gitlab_call GET "/projects/${proj}/pipelines?${qs}") || return $?
-  jq -c --arg host "https://${_GITLAB_HOST}" '[.[] | {
+  jq -c "[.[] | {
     id: .id,
-    status: (
-      if .status == "success" then "success"
-      elif .status == "failed" then "failed"
-      elif .status == "canceled" or .status == "cancelled" then "cancelled"
-      else "running" end),
+    status: (${_GITLAB_NORMALIZE_JQ}),
     sha: .sha, ref: .ref, url: .web_url, created_at: .created_at, raw: .
-  }]' <<<"$raw"
+  }]" <<<"$raw"
 }
 
 git_pipeline_status() {
   local id="${1:?id required}"
   local proj raw jobs
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   raw=$(_gitlab_call GET "/projects/${proj}/pipelines/${id}") || return $?
   jobs=$(_gitlab_call GET "/projects/${proj}/pipelines/${id}/jobs?per_page=100") || jobs="[]"
   local normalized
@@ -222,7 +242,7 @@ git_pipeline_status() {
 git_pipeline_logs() {
   local id="${1:?id required}" job_name="${2:-}"
   local proj jobs
-  proj=$(_gitlab_project_id)
+  proj=$(_gitlab_project_id) || return 1
   jobs=$(_gitlab_call GET "/projects/${proj}/pipelines/${id}/jobs?per_page=100") || return $?
 
   if [[ -n "$job_name" ]]; then
@@ -234,10 +254,9 @@ git_pipeline_logs() {
     fi
     _gitlab_call GET "/projects/${proj}/jobs/${job_id}/trace"
   else
-    # Concatenate logs from all jobs
-    jq -r '.[] | .id' <<<"$jobs" | while read -r job_id; do
-      local name
-      name=$(jq -r --argjson id "$job_id" '.[] | select(.id == $id) | .name' <<<"$jobs")
+    # Concatenate logs from all jobs. Emit "id:name" pairs from jq, then
+    # split in bash — no nested jq lookup inside the loop.
+    jq -r '.[] | "\(.id):\(.name)"' <<<"$jobs" | while IFS=: read -r job_id name; do
       echo "=== job: $name ($job_id) ==="
       _gitlab_call GET "/projects/${proj}/jobs/${job_id}/trace" 2>/dev/null || true
     done
