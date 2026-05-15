@@ -16,6 +16,10 @@ shift
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/project-config.sh"
 source "${SCRIPT_DIR}/lib/colors.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+# Resolved once; used in --domain args below
+SECRETS_API_URL="$(profile_env_get .secrets.url)/api"
 
 DRY_RUN=false
 
@@ -65,7 +69,7 @@ else
         --env "$ENV" \
         --path "/${BUCKET}" \
         --plain \
-        --domain https://secrets.turnersrus.com/api)
+        --domain "${SECRETS_API_URL}")
 fi
 
 echo "Current secret:"
@@ -104,7 +108,7 @@ if [[ "$DRY_RUN" == "false" ]]; then
         infisical secrets set "DATA=${NEW_SECRET}" \
             --env "$ENV" \
             --path "/${BUCKET}" \
-            --domain https://secrets.turnersrus.com/api
+            --domain "${SECRETS_API_URL}"
     fi
 
     echo "${GREEN}✓${NC} Secret updated"

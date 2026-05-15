@@ -38,6 +38,7 @@ environments:
     secrets:
       backend: infisical         # infisical | aws-secrets-manager
       bootstrap_dir: .secrets
+      url: https://secrets.example.com   # only used by self-hosted Infisical
     task_management:
       backend: gitlab            # asana | gitlab | github | none
     deploy:
