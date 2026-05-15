@@ -1,0 +1,229 @@
+# Training Videos Configuration Template
+# Copy this file to your project root as training-videos.yaml
+# Documentation: ~/.claude/references/training-videos.md (or ~/.claude/commands/training-videos.md)
+
+version: "1.0"
+project: "project-name"  # Your project name
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Global Constraints - Apply to ALL videos unless overridden per video
+# ═══════════════════════════════════════════════════════════════════════════
+constraints:
+  # Voice configuration (edge-tts)
+  voice: "en-US-JennyNeural"  # Professional female, American
+  # Options: en-US-JennyNeural, en-US-GuyNeural, en-US-AriaNeural
+  # List all: edge-tts --list-voices | grep en-
+
+  rate: "-5%"  # Slightly slower for clarity (-50% to +100%)
+  pitch: "+0Hz"  # Optional: Adjust pitch (-50Hz to +50Hz)
+  volume: "+0%"  # Optional: Adjust volume (-50% to +50%)
+
+  # Video configuration
+  resolution: "2560x1440"  # 1920x1080 (1080p), 2560x1440 (1440p), 3840x2160 (4K)
+  video_bitrate: "8M"      # 5M for 1080p, 8M for 1440p, 15M for 4K
+  audio_bitrate: "192k"    # Standard: 128k, High: 192k
+
+  # Branding
+  highlight_color: "#ff6b00"  # Highlight border color (CSS hex)
+  label_background: "#ff6b00"  # Label background color
+
+  # Directory structure
+  videos_root: "./videos"  # Root directory for all training videos
+
+  # FFmpeg encoding settings (optional, advanced)
+  ffmpeg:
+    crf: 18          # Quality (0-51, lower=better, 18=high quality)
+    preset: "slow"   # ultrafast/fast/medium/slow/veryslow (slower=better compression)
+
+  # Privacy protection (optional)
+  # Enable this if videos contain sensitive data (PII, HIPAA, internal data)
+  privacy:
+    enabled: false
+
+    # CSS selectors to blur
+    blur_fields: []
+    # Example:
+    # - ".patient-name"
+    # - ".ssn"
+    # - "[data-sensitive]"
+
+    # Text replacement (replaces content, not just blur)
+    mask_fields: []
+    # Example:
+    # - selector: ".patient-name"
+    #   replacement: "Demo Patient"
+    # - selector: ".email"
+    #   replacement: "demo@example.com"
+
+    # Blur specific table columns
+    blur_table_columns: []
+    # Example:
+    # - table: ".results-table"
+    #   columns: [0, 2]  # Zero-indexed: Name and ID columns
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Video Definitions
+# ═══════════════════════════════════════════════════════════════════════════
+videos:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Example Video 1: Dashboard Overview
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: "dashboard-overview"
+    title: "Dashboard Overview"
+    description: "Tour of the main dashboard and key metrics"
+
+    # Metadata
+    duration: "0:00"  # Updated after first generation (MM:SS format)
+    last_updated_version: ""  # Git tag or version (e.g., "1.2.1", "v1.2.1")
+    last_updated_date: ""     # ISO date (YYYY-MM-DD)
+    status: "planned"         # planned, in-progress, completed, needs-update
+
+    # Change detection - Which files trigger an update for this video?
+    covers:
+      files:
+        - "src/pages/dashboard/**/*"
+        - "src/components/analytics/**/*"
+        - "src/components/charts/**/*"
+      # Optional: Ignore patterns (if covers is too broad)
+      ignore:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/*.md"
+
+    # All files for this video are in: videos/dashboard-overview/
+    # Structure:
+    #   videos/dashboard-overview/
+    #   ├── screenplay/       # Screenplay markdown files
+    #   ├── audio/           # Generated audio files (.mp3)
+    #   ├── video/           # Playwright recorded video (.webm)
+    #   ├── tests/           # Playwright test files (.ts)
+    #   └── output/          # Final combined video (.mp4)
+
+    # These paths are relative to videos_root/dashboard-overview/
+    paths:
+      screenplay: "screenplay/dashboard-overview.md"
+      voiceover_script: "audio/generate-voiceover.sh"
+      playwright_test: "tests/dashboard-demo.spec.ts"
+      output_video: "output/dashboard-overview.mp4"
+
+    # Optional: Override global constraints for this video
+    overrides: {}
+    # Example overrides:
+    # overrides:
+    #   voice: "en-US-GuyNeural"
+    #   resolution: "1920x1080"
+    #   highlight_color: "#0066cc"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Example Video 2: User Management
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: "user-management"
+    title: "User Management"
+    description: "Creating, editing, and managing user accounts"
+
+    duration: "0:00"
+    last_updated_version: ""
+    last_updated_date: ""
+    status: "planned"
+
+    covers:
+      files:
+        - "src/pages/users/**/*"
+        - "src/components/user-form/**/*"
+        - "src/components/user-table/**/*"
+
+    paths:
+      screenplay: "screenplay/user-management.md"
+      voiceover_script: "audio/generate-voiceover.sh"
+      playwright_test: "tests/user-management-demo.spec.ts"
+      output_video: "output/user-management.mp4"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Example Video 3: Reports (with privacy protection)
+  # ─────────────────────────────────────────────────────────────────────────
+  - id: "reports-generation"
+    title: "Generating Reports"
+    description: "How to create and export custom reports"
+
+    duration: "0:00"
+    last_updated_version: ""
+    last_updated_date: ""
+    status: "planned"
+
+    covers:
+      files:
+        - "src/pages/reports/**/*"
+        - "src/components/report-builder/**/*"
+
+    paths:
+      screenplay: "screenplay/reports.md"
+      voiceover_script: "audio/generate-voiceover.sh"
+      playwright_test: "tests/reports-demo.spec.ts"
+      output_video: "output/reports-generation.mp4"
+
+    # Privacy protection for this specific video
+    overrides:
+      privacy:
+        enabled: true
+        blur_fields:
+          - ".patient-name"
+          - ".account-number"
+        mask_fields:
+          - selector: ".email"
+            replacement: "demo@example.com"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Notes
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Change Detection:
+# - Uses last_updated_version to find git tag or commit
+# - Falls back to last_updated_date if no version tag
+# - Compares files in covers.files against changes since baseline
+# - Run: /training-videos check
+#
+# Creating Videos:
+# - Specific: /training-videos create dashboard-overview
+# - All: /training-videos create --all
+# - Auto-detect: /training-videos create --auto
+#
+# Updating Videos:
+# - Same commands work for updates
+# - Status will be set to "needs-update" when changes detected
+#
+# Status Values:
+# - planned: Not yet created
+# - in-progress: Currently being worked on
+# - completed: Video exists and is up to date
+# - needs-update: Changes detected in covered files
+#
+# Directory Structure:
+# project/
+# ├── training-videos.yaml                    # This file
+# └── videos/                                 # All training videos
+#     ├── dashboard-overview/                 # Video: dashboard-overview
+#     │   ├── screenplay/                     # Screenplay files
+#     │   │   └── dashboard-overview.md
+#     │   ├── audio/                          # Audio generation
+#     │   │   ├── generate-voiceover.sh
+#     │   │   ├── 01-intro.mp3
+#     │   │   ├── 02-feature.mp3
+#     │   │   └── full-voiceover.mp3
+#     │   ├── video/                          # Recorded video (gitignored)
+#     │   │   └── recording.webm
+#     │   ├── tests/                          # Playwright tests
+#     │   │   └── dashboard-demo.spec.ts
+#     │   └── output/                         # Final video (gitignored)
+#     │       └── dashboard-overview.mp4
+#     ├── user-management/                    # Video: user-management
+#     │   ├── screenplay/
+#     │   ├── audio/
+#     │   ├── video/
+#     │   ├── tests/
+#     │   └── output/
+#     └── reports-generation/                 # Video: reports-generation
+#         ├── screenplay/
+#         ├── audio/
+#         ├── video/
+#         ├── tests/
+#         └── output/

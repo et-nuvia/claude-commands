@@ -1,0 +1,126 @@
+# Release Notes
+
+**Version**: {{VERSION}}
+**Released**: {{DATE}}
+
+Welcome to version {{VERSION}}! This release brings {{FEATURE_COUNT}} new features, {{FIX_COUNT}} bug fixes, and improvements based on your feedback.
+
+---
+
+## What's New
+
+{{#if NEW_FEATURES}}
+{{#each NEW_FEATURES}}
+### {{this.icon}} {{this.title}}
+
+{{this.user_description}}
+
+{{#if this.screenshot}}
+![{{this.title}}]({{this.screenshot}})
+{{/if}}
+
+{{#if this.video}}
+[Watch demo]({{this.video}})
+{{/if}}
+
+{{/each}}
+{{else}}
+_This release focuses on performance and stability improvements._
+{{/if}}
+
+---
+
+## Improvements
+
+{{#if IMPROVEMENTS}}
+{{#each IMPROVEMENTS}}
+- **{{this.area}}**: {{this.improvement}}
+{{/each}}
+{{/if}}
+
+---
+
+## Bug Fixes
+
+{{#if BUG_FIXES}}
+We've fixed several issues to improve your experience:
+
+{{#each BUG_FIXES}}
+- {{this.description}}
+{{/each}}
+
+{{else}}
+_No major bug fixes in this release._
+{{/if}}
+
+---
+
+## Action Required
+
+{{#if ACTIONS_REQUIRED}}
+{{#each ACTIONS_REQUIRED}}
+### {{this.title}}
+
+{{this.description}}
+
+**What you need to do**: {{this.action}}
+
+**Deadline**: {{this.deadline}}
+
+{{/each}}
+
+{{else}}
+_No action required - just update and you're good to go!_
+{{/if}}
+
+---
+
+## How to Update
+
+{{#if UPDATE_INSTRUCTIONS}}
+{{UPDATE_INSTRUCTIONS}}
+{{else}}
+Updates will be applied automatically. You'll see the new version next time you log in.
+{{/if}}
+
+---
+
+## Known Issues
+
+{{#if KNOWN_ISSUES}}
+We're aware of these issues and working on fixes:
+
+{{#each KNOWN_ISSUES}}
+- {{this.description}} - Workaround: {{this.workaround}}
+{{/each}}
+
+{{else}}
+_No known issues at this time._
+{{/if}}
+
+---
+
+## Coming Soon
+
+{{#if COMING_SOON}}
+Here's what we're working on next:
+
+{{#each COMING_SOON}}
+- {{this.feature}} - {{this.eta}}
+{{/each}}
+
+{{/if}}
+
+---
+
+## Feedback
+
+We'd love to hear what you think! Contact us:
+
+- **Support**: {{SUPPORT_EMAIL}}
+- **Feature requests**: {{FEEDBACK_URL}}
+- **Community**: {{COMMUNITY_URL}}
+
+---
+
+Thank you for using {{PRODUCT_NAME}}! 🎉

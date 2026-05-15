@@ -1,0 +1,189 @@
+# Release Notes - Operations
+
+**Version**: {{VERSION}}
+**Released**: {{DATE}}
+**Target Audience**: DevOps, SRE, Operations Teams
+
+---
+
+## Deployment Steps
+
+{{#if DEPLOYMENT_STEPS}}
+{{#each DEPLOYMENT_STEPS}}
+### {{@index}}. {{this.step}}
+
+{{this.details}}
+
+```bash
+{{this.commands}}
+```
+
+**Estimated time**: {{this.duration}}
+
+{{/each}}
+{{else}}
+Standard deployment procedure applies.
+{{/if}}
+
+---
+
+## Configuration Changes
+
+{{#if CONFIG_CHANGES}}
+{{#each CONFIG_CHANGES}}
+### {{this.config_name}}
+
+**Action required**: {{this.action}}
+**Default value**: `{{this.default}}`
+**Example**: `{{this.example}}`
+
+{{#if this.required}}
+⚠️ **REQUIRED** - Deployment will fail without this configuration.
+{{/if}}
+
+{{/each}}
+{{else}}
+_No configuration changes required._
+{{/if}}
+
+---
+
+## Infrastructure Changes
+
+{{#if INFRA_CHANGES}}
+{{#each INFRA_CHANGES}}
+### {{this.component}}
+
+**Change**: {{this.change}}
+**Impact**: {{this.impact}}
+**Action required**: {{this.action}}
+
+{{/each}}
+{{else}}
+_No infrastructure changes._
+{{/if}}
+
+---
+
+## Environment Variables
+
+{{#if ENV_VARS}}
+### New Variables
+
+{{#each ENV_VARS}}
+- **{{this.name}}** {{#if this.required}}(required){{/if}}
+  - Purpose: {{this.purpose}}
+  - Format: {{this.format}}
+  - Example: `{{this.example}}`
+  - Default: {{this.default}}
+
+{{/each}}
+
+{{else}}
+_No new environment variables._
+{{/if}}
+
+---
+
+## Security Updates
+
+{{#if SECURITY_UPDATES}}
+{{#each SECURITY_UPDATES}}
+### {{this.title}} {{#if this.severity}}[{{this.severity}}]{{/if}}
+
+**CVE**: {{this.cve}}
+**Description**: {{this.description}}
+**Action**: {{this.action}}
+
+{{/each}}
+
+⚠️ Apply this update promptly to address security vulnerabilities.
+
+{{else}}
+_No security updates._
+{{/if}}
+
+---
+
+## Performance Impact
+
+{{#if PERFORMANCE_IMPACT}}
+### Resource Changes
+
+- **Memory**: {{PERFORMANCE_IMPACT.memory_change}}
+- **CPU**: {{PERFORMANCE_IMPACT.cpu_change}}
+- **Disk**: {{PERFORMANCE_IMPACT.disk_change}}
+- **Network**: {{PERFORMANCE_IMPACT.network_change}}
+
+### Scaling Recommendations
+
+{{PERFORMANCE_IMPACT.scaling_recommendations}}
+
+{{else}}
+_No significant performance impact expected._
+{{/if}}
+
+---
+
+## Monitoring & Alerts
+
+{{#if MONITORING_CHANGES}}
+### New Metrics
+
+{{#each MONITORING_CHANGES.metrics}}
+- **{{this.name}}**: {{this.description}}
+{{/each}}
+
+### New Alerts
+
+{{#each MONITORING_CHANGES.alerts}}
+- **{{this.name}}**: Triggers when {{this.condition}}
+{{/each}}
+
+{{else}}
+_No monitoring changes._
+{{/if}}
+
+---
+
+## Rollback Procedure
+
+{{#if ROLLBACK_STEPS}}
+If issues arise, follow these steps to rollback:
+
+{{#each ROLLBACK_STEPS}}
+{{@index}}. {{this.step}}
+   ```bash
+   {{this.commands}}
+   ```
+
+{{/each}}
+
+**Rollback time**: ~{{ROLLBACK_TIME}}
+
+{{else}}
+Standard rollback procedure: redeploy previous version.
+{{/if}}
+
+---
+
+## Health Checks
+
+{{#if HEALTH_CHECKS}}
+After deployment, verify:
+
+{{#each HEALTH_CHECKS}}
+- [ ] {{this.check}} - Expected: {{this.expected}}
+{{/each}}
+
+{{else}}
+Standard health checks apply.
+{{/if}}
+
+---
+
+## Support Contacts
+
+- **On-call**: {{ONCALL_CONTACT}}
+- **Slack**: #{{SLACK_CHANNEL}}
+- **Incident response**: {{INCIDENT_PROCESS}}

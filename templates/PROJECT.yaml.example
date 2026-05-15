@@ -1,0 +1,170 @@
+# PROJECT.yaml - Example Configuration
+# This is a fully populated example showing all available options
+# Copy sections you need and remove comments
+
+# Project Identity
+name: "my-awesome-project"
+description: "A full-stack web application with Python backend and Next.js frontend"
+
+# Version Management (RECOMMENDED: Use git tags with conventional commits)
+# version_file: "package.json"    # LEGACY: Only if not using git tags
+
+# Tech Stack
+languages:
+  - name: "python"
+    version: "3.14"
+  - name: "typescript"
+    version: "5.0"
+
+# Testing Configuration (REQUIRED)
+testing:
+  command: "make test"
+  coverage_command: "make test-coverage"
+  e2e_command: "make test-e2e"
+  min_coverage: 80
+
+# Quality Configuration
+quality:
+  lint_command: "make lint"
+  format_command: "make format"
+  typecheck_command: "make typecheck"
+
+# Docker Configuration
+docker:
+  compose_file: "docker-compose.yml"
+  services:
+    - backend
+    - frontend
+    - database
+
+# Secrets Configuration
+secrets:
+  backend: "aws"                  # "aws" or "infisical"
+  required:
+    - database
+    - redis
+    - api-keys
+
+# CI/CD Configuration
+ci:
+  platform: "github"              # "github" or "gitlab"
+  branches:
+    staging: "dev"
+    production: "main"
+
+# Git Configuration
+git:
+  platform: "github"
+  instance: "github.com"
+  repo: "owner/my-awesome-project"
+
+# ============================================================================
+# OPTIONAL SECTIONS
+# ============================================================================
+
+# Database Configuration
+databases:
+  - name: "primary"
+    type: "postgresql"
+    purpose: "main"
+    users:
+      migration:                  # DDL user (CREATE, DROP, ALTER)
+        secret_bucket: "database"
+        secret_keys:
+          host: "DB_HOST"
+          port: "DB_PORT"
+          username: "DB_MIGRATION_USER"
+          password: "DB_MIGRATION_PASSWORD"
+          database: "DB_NAME"
+      app:                        # DML user (SELECT, INSERT, UPDATE, DELETE)
+        secret_bucket: "database"
+        secret_keys:
+          host: "DB_HOST"
+          port: "DB_PORT"
+          username: "DB_APP_USER"
+          password: "DB_APP_PASSWORD"
+          database: "DB_NAME"
+    migrations:
+      enabled: true
+      tool: "alembic"
+      directory: "migrations"
+
+  - name: "cache"
+    type: "redis"
+    purpose: "cache"
+    users:
+      app:
+        secret_bucket: "redis"
+        secret_keys:
+          host: "REDIS_HOST"
+          port: "REDIS_PORT"
+          password: "REDIS_PASSWORD"
+
+# Deployment Configuration
+deployment:
+  method: "ssh"                   # script, ssh, ssm, pipeline
+  health_check_path: "/health"
+  staging:
+    url: "https://staging.example.com"
+    host: "staging.example.com"
+    user: "deploy"
+    path: "/opt/app"
+  production:
+    url: "https://example.com"
+    host: "prod.example.com"
+    user: "deploy"
+    path: "/opt/app"
+
+# Task Management - Example for Work Environment (macOS + Asana)
+task_management:
+  backend: "asana"
+  asana:
+    workspace_id: "1234567890123456"           # Your Asana workspace GID
+    project: "Engineering"                     # Project name or GID to add tasks to
+    section: "To Do"                           # Section within project (optional)
+
+# Task Management - Example for Home Environment (Linux + GitLab)
+# task_management:
+#   backend: "gitlab"
+#   gitlab:
+#     project_id: "group/my-awesome-project"
+#     default_labels:
+#       - "backend"
+#       - "task"
+
+# Notifications
+notifications:
+  enabled: true
+  channels:
+    slack:
+      enabled: true
+      secret_bucket: "notifications"
+      secret_key: "slack_webhook_url"
+    email:
+      enabled: false
+      provider: "resend"
+      secret_bucket: "notifications"
+      secret_key: "email_api_key"
+      from_address: "noreply@example.com"
+      to_addresses:
+        - "team@example.com"
+
+# Infrastructure
+infrastructure:
+  enabled: true
+  repo:
+    type: "git"
+    url: "https://github.com/owner/infrastructure.git"
+    branch: "main"
+  link:
+    target: "infrastructure"
+    source: "terraform/app"
+  tools:
+    - name: "terraform"
+      enabled: true
+      version: "1.6.0"
+      backend: "s3"
+      workspaces:
+        development: "dev"
+        staging: "staging"
+        production: "prod"

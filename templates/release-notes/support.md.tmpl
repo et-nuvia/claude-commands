@@ -1,0 +1,231 @@
+# Release Notes - Customer Support Guide
+
+**Version**: {{VERSION}}
+**Released**: {{DATE}}
+**Target Audience**: Customer Support, Success Teams
+
+---
+
+## Quick Reference
+
+| What Changed | Expected Questions | How to Help |
+|--------------|-------------------|-------------|
+{{#each QUICK_REFERENCE}}
+| {{this.change}} | {{this.question}} | {{this.response}} |
+{{/each}}
+
+---
+
+## New Features Support
+
+{{#if NEW_FEATURES}}
+{{#each NEW_FEATURES}}
+### {{this.title}}
+
+**What it does**: {{this.description}}
+
+**Common questions**:
+{{#each this.common_questions}}
+- **Q**: {{this.question}}
+  **A**: {{this.answer}}
+{{/each}}
+
+**Troubleshooting**:
+{{#if this.troubleshooting}}
+{{#each this.troubleshooting}}
+- **Issue**: {{this.issue}}
+  **Solution**: {{this.solution}}
+{{/each}}
+{{else}}
+_No known issues._
+{{/if}}
+
+**Limitations**:
+{{#if this.limitations}}
+{{#each this.limitations}}
+- {{this.limitation}}
+{{/each}}
+{{/if}}
+
+**Support materials**:
+{{#if this.materials}}
+- Documentation: {{this.docs_url}}
+- Video tutorial: {{this.video_url}}
+- Help article: {{this.help_url}}
+{{/if}}
+
+{{/each}}
+{{/if}}
+
+---
+
+## Bug Fixes
+
+{{#if BUG_FIXES}}
+### What was fixed
+
+{{#each BUG_FIXES}}
+#### {{this.title}}
+
+**Symptoms customers reported**:
+{{#each this.symptoms}}
+- {{this.symptom}}
+{{/each}}
+
+**Fixed in this version**: {{this.fix_description}}
+
+**If customers still experience this**:
+{{this.escalation_path}}
+
+{{/each}}
+{{/if}}
+
+---
+
+## Breaking Changes
+
+{{#if BREAKING_CHANGES}}
+⚠️ **Important**: These changes may affect existing workflows
+
+{{#each BREAKING_CHANGES}}
+### {{this.title}}
+
+**What changed**: {{this.change}}
+
+**Who is affected**: {{this.affected_users}}
+
+**Customer action required**: {{this.customer_action}}
+
+**Migration support**:
+{{#if this.migration_help}}
+- Self-service: {{this.self_service_url}}
+- Guided migration: {{this.guided_migration}}
+- Support ticket priority: {{this.priority}}
+{{/if}}
+
+**Script for explaining to customers**:
+> "{{this.customer_script}}"
+
+{{/each}}
+
+{{/if}}
+
+---
+
+## Known Issues
+
+{{#if KNOWN_ISSUES}}
+{{#each KNOWN_ISSUES}}
+### {{this.title}}
+
+**Description**: {{this.description}}
+
+**Affected users**: {{this.affected}}
+
+**Workaround**:
+```
+{{this.workaround}}
+```
+
+**ETA for fix**: {{this.eta}}
+
+**How to explain to customers**:
+> "{{this.customer_message}}"
+
+{{/each}}
+
+{{else}}
+_No known issues in this release._
+{{/if}}
+
+---
+
+## Common Support Scenarios
+
+{{#if SUPPORT_SCENARIOS}}
+{{#each SUPPORT_SCENARIOS}}
+### Scenario: {{this.scenario}}
+
+**Symptoms**:
+{{#each this.symptoms}}
+- {{this.symptom}}
+{{/each}}
+
+**Quick diagnosis**:
+{{#each this.diagnosis_steps}}
+{{@index}}. {{this.step}}
+{{/each}}
+
+**Resolution**:
+{{this.resolution}}
+
+**Escalation criteria**:
+{{this.escalation}}
+
+{{/each}}
+{{/if}}
+
+---
+
+## Testing Checklist
+
+Before helping customers, verify these are working:
+
+{{#if TESTING_CHECKLIST}}
+{{#each TESTING_CHECKLIST}}
+- [ ] {{this.check}} - How: {{this.how_to_test}}
+{{/each}}
+{{/if}}
+
+---
+
+## Escalation Paths
+
+{{#if ESCALATION}}
+| Issue Type | Tier 1 Action | When to Escalate | Escalate To |
+|------------|---------------|------------------|-------------|
+{{#each ESCALATION}}
+| {{this.issue_type}} | {{this.tier1_action}} | {{this.escalation_criteria}} | {{this.escalate_to}} |
+{{/each}}
+
+{{/if}}
+
+---
+
+## Internal Resources
+
+- **Engineering contact**: {{ENG_CONTACT}}
+- **Product contact**: {{PRODUCT_CONTACT}}
+- **Internal docs**: {{INTERNAL_DOCS_URL}}
+- **Slack channel**: #{{SUPPORT_CHANNEL}}
+- **Release postmortem**: {{POSTMORTEM_URL}}
+
+---
+
+## Customer Communication Templates
+
+{{#if COMM_TEMPLATES}}
+{{#each COMM_TEMPLATES}}
+### {{this.scenario}}
+
+**Subject**: {{this.subject}}
+
+**Body**:
+```
+{{this.body}}
+```
+
+{{/each}}
+{{/if}}
+
+---
+
+## Success Metrics
+
+Track these to measure release impact:
+
+{{#if SUCCESS_METRICS}}
+{{#each SUCCESS_METRICS}}
+- **{{this.metric}}**: Target {{this.target}}, Alert if {{this.alert_condition}}
+{{/each}}
+{{/if}}

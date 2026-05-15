@@ -1,0 +1,344 @@
+# GitLab CI/CD Pipeline - Python Project
+#
+# This template provides a production-ready CI/CD pipeline for Python projects.
+# It includes validation, security scanning, building, migrations, deployment,
+# testing, and notifications.
+#
+# Variables:
+#   PROJECT_NAME          - Project identifier (default: from PROJECT.yaml)
+#   STAGING_BRANCH        - Branch for staging deployments (default: dev)
+#   PRODUCTION_BRANCH     - Branch for production deployments (default: main)
+#   REGISTRY_URL          - Docker registry URL
+#   TEST_COMMAND          - Test command (default: pytest)
+#   LINT_COMMAND          - Lint command (default: ruff check .)
+#   FORMAT_COMMAND        - Format check command (default: ruff format --check .)
+#   TYPECHECK_COMMAND     - Type check command (default: pyright)
+#   MIN_COVERAGE          - Minimum test coverage % (default: 80)
+#
+# Conditional Features (set to any non-empty value to enable):
+#   INCLUDE_MIGRATIONS    - Include database migration stage
+#   INCLUDE_E2E           - Include E2E tests for staging
+#   INCLUDE_NOTIFICATIONS - Include success/failure notifications
+#   INCLUDE_SECURITY      - Include security scanning
+#
+# Customization points:
+#   - Modify test/lint/typecheck commands for your Python setup
+#   - Adjust branch rules for your git workflow
+#   - Add custom stages or jobs as needed
+#   - Configure environment URLs in GitLab CI/CD settings
+
+stages:
+  - validate
+#IF:INCLUDE_SECURITY
+  - security
+#ENDIF:INCLUDE_SECURITY
+  - build
+#IF:INCLUDE_MIGRATIONS
+  - migrate
+#ENDIF:INCLUDE_MIGRATIONS
+  - deploy
+  - test
+#IF:INCLUDE_NOTIFICATIONS
+  - notify
+#ENDIF:INCLUDE_NOTIFICATIONS
+
+variables:
+  PUSH_IMAGES: "true"
+  STAGING_BRANCH: "${STAGING_BRANCH:-dev}"
+  PRODUCTION_BRANCH: "${PRODUCTION_BRANCH:-main}"
+
+# ═══════════════════════════════════════════════════════════════
+# TEMPLATES
+# ═══════════════════════════════════════════════════════════════
+.read_deployment_config: &read_deployment_config
+  before_script:
+    - |
+      # Install yq if not present
+      if ! command -v yq &> /dev/null; then
+        wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        chmod +x /usr/local/bin/yq
+      fi
+    - |
+      # Read deployment config from PROJECT.yaml
+      export REGISTRY_STRATEGY=$(yq '.registry.strategy // "single"' PROJECT.yaml)
+      export PROJECT_NAME=$(yq '.project // "${PROJECT_NAME}"' PROJECT.yaml)
+
+.ecr_login: &ecr_login
+  - |
+    # ECR login based on strategy
+    login_ecr() {
+      local env="$1"
+      local url region role_arn
+
+      if [[ "${REGISTRY_STRATEGY}" == "single" ]]; then
+        url=$(yq '.registry.single.url' PROJECT.yaml)
+        region=$(yq '.registry.single.aws_region // "us-east-1"' PROJECT.yaml)
+      else
+        url=$(yq ".registry.separate.${env}.url" PROJECT.yaml)
+        region=$(yq ".registry.separate.${env}.aws_region // \"us-east-1\"" PROJECT.yaml)
+        role_arn=$(yq ".registry.separate.${env}.aws_role_arn // \"\"" PROJECT.yaml)
+
+        if [[ -n "${role_arn}" && "${role_arn}" != "null" ]]; then
+          echo "Assuming role: ${role_arn}"
+          CREDS=$(aws sts assume-role --role-arn "${role_arn}" --role-session-name "gitlab-${env}")
+          export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
+          export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')
+          export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r '.Credentials.SessionToken')
+        fi
+      fi
+
+      aws ecr get-login-password --region "${region}" | docker login --username AWS --password-stdin "${url}"
+    }
+
+# ═══════════════════════════════════════════════════════════════
+# VALIDATE
+# ═══════════════════════════════════════════════════════════════
+lint:
+  stage: validate
+  script:
+    - docker compose run --rm app ${LINT_COMMAND:-ruff check .}
+    - docker compose run --rm app ${FORMAT_COMMAND:-ruff format --check .}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(dev|staging|main)$/
+
+test:
+  stage: validate
+  script:
+    - docker compose build --build-arg RUN_TESTS=true app
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(dev|staging|main)$/
+
+typecheck:
+  stage: validate
+  script:
+    - docker compose run --rm app ${TYPECHECK_COMMAND:-pyright}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(dev|staging|main)$/
+
+#IF:INCLUDE_SECURITY
+# ═══════════════════════════════════════════════════════════════
+# SECURITY
+# ═══════════════════════════════════════════════════════════════
+security-scan:
+  stage: security
+  script:
+    - ./scripts/security-gate.sh
+  rules:
+    - if: $CI_COMMIT_BRANCH =~ /^(dev|staging|main)$/
+  allow_failure: false
+#ENDIF:INCLUDE_SECURITY
+
+# ═══════════════════════════════════════════════════════════════
+# BUILD (development only - first environment in chain)
+# ═══════════════════════════════════════════════════════════════
+build:
+  stage: build
+  <<: *read_deployment_config
+  script:
+    - *ecr_login
+    - login_ecr "development"
+    - |
+      # Get image path for development
+      if [[ "${REGISTRY_STRATEGY}" == "single" ]]; then
+        URL=$(yq '.registry.single.url' PROJECT.yaml)
+        PATTERN=$(yq '.registry.single.tag_pattern' PROJECT.yaml)
+        TAG="${PATTERN//\$\{environment\}/development}"
+        TAG="${TAG//\$\{version\}/${CI_COMMIT_SHA:0:8}}"
+        IMAGE="${URL}:${TAG}"
+      else
+        URL=$(yq '.registry.separate.development.url' PROJECT.yaml)
+        REPO=$(yq '.registry.separate.development.repository' PROJECT.yaml)
+        IMAGE="${URL}/${REPO}:${CI_COMMIT_SHA:0:8}"
+      fi
+
+      echo "Building: ${IMAGE}"
+      docker compose build app
+      docker tag ${PROJECT_NAME}:latest ${IMAGE}
+
+      if [[ "${PUSH_IMAGES}" == "true" ]]; then
+        docker push ${IMAGE}
+        # Also push as latest
+        docker tag ${IMAGE} ${IMAGE%:*}:latest
+        docker push ${IMAGE%:*}:latest
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
+
+# ═══════════════════════════════════════════════════════════════
+# PROMOTE (staging and production)
+# ═══════════════════════════════════════════════════════════════
+promote-to-staging:
+  stage: build
+  <<: *read_deployment_config
+  script:
+    - ./scripts/promote.sh development staging "${CI_COMMIT_SHA:0:8}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging"
+
+promote-to-production:
+  stage: build
+  <<: *read_deployment_config
+  script:
+    - ./scripts/promote.sh staging production "${CI_COMMIT_SHA:0:8}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $PRODUCTION_BRANCH
+  when: manual  # Require manual trigger for production
+
+#IF:INCLUDE_MIGRATIONS
+# ═══════════════════════════════════════════════════════════════
+# MIGRATE (runs before deploy with NEW image)
+# ═══════════════════════════════════════════════════════════════
+.migrate_template: &migrate_template
+  stage: migrate
+  <<: *read_deployment_config
+  script:
+    - |
+      # Check if migrations are enabled
+      MIGRATIONS_ENABLED=$(yq '.migrations.enabled // false' PROJECT.yaml)
+      if [[ "${MIGRATIONS_ENABLED}" != "true" ]]; then
+        echo "Migrations not enabled, skipping"
+        exit 0
+      fi
+    - |
+      # Get the image that was just built/promoted
+      REGISTRY=$(yq ".docker.environments.${ENVIRONMENT}.registry" PROJECT.yaml)
+      IMAGE="${REGISTRY}:${CI_COMMIT_SHA:0:8}"
+      echo "Running migrations with image: ${IMAGE}"
+    - ./scripts/run-migrations.sh "${IMAGE}" "${ENVIRONMENT}"
+
+migrate-staging:
+  <<: *migrate_template
+  variables:
+    ENVIRONMENT: staging
+  rules:
+    - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
+  needs:
+    - build
+
+migrate-production:
+  <<: *migrate_template
+  variables:
+    ENVIRONMENT: production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $PRODUCTION_BRANCH
+  needs:
+    - promote-to-production
+#ENDIF:INCLUDE_MIGRATIONS
+
+# ═══════════════════════════════════════════════════════════════
+# DEPLOY
+# ═══════════════════════════════════════════════════════════════
+.deploy_template: &deploy_template
+  stage: deploy
+  <<: *read_deployment_config
+  script:
+    - ./scripts/deploy.sh "${ENVIRONMENT}" "${CI_COMMIT_SHA:0:8}"
+
+deploy-staging:
+  <<: *deploy_template
+  variables:
+    ENVIRONMENT: staging
+  environment:
+    name: staging
+    url: $STAGING_URL
+  rules:
+    - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
+#IF:INCLUDE_MIGRATIONS
+  needs:
+    - migrate-staging
+#ENDIF:INCLUDE_MIGRATIONS
+
+deploy-production:
+  <<: *deploy_template
+  variables:
+    ENVIRONMENT: production
+  environment:
+    name: production
+    url: $PROD_URL
+  rules:
+    - if: $CI_COMMIT_BRANCH == $PRODUCTION_BRANCH
+#IF:INCLUDE_MIGRATIONS
+  needs:
+    - migrate-production
+#ENDIF:INCLUDE_MIGRATIONS
+
+# ═══════════════════════════════════════════════════════════════
+# SMOKE TEST & ROLLBACK
+# ═══════════════════════════════════════════════════════════════
+smoke-test-staging:
+  stage: test
+  <<: *read_deployment_config
+  variables:
+    ENVIRONMENT: staging
+  script:
+    - |
+      ENV_URL=$(yq ".environments.${ENVIRONMENT}.url" PROJECT.yaml)
+      ./scripts/smoke-test.sh "${ENV_URL}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
+  needs:
+    - deploy-staging
+
+smoke-test-production:
+  stage: test
+  <<: *read_deployment_config
+  variables:
+    ENVIRONMENT: production
+  script:
+    - |
+      ENV_URL=$(yq ".environments.${ENVIRONMENT}.url" PROJECT.yaml)
+      ./scripts/smoke-test.sh "${ENV_URL}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $PRODUCTION_BRANCH
+  needs:
+    - deploy-production
+
+rollback:
+  stage: test
+  script:
+    - ./scripts/rollback.sh production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $PRODUCTION_BRANCH
+  when: on_failure
+  needs:
+    - smoke-test-production
+
+#IF:INCLUDE_E2E
+# ═══════════════════════════════════════════════════════════════
+# E2E (staging only)
+# ═══════════════════════════════════════════════════════════════
+e2e-tests:
+  stage: test
+  script:
+    - docker compose -f docker-compose.e2e.yml run --rm e2e
+  rules:
+    - if: $CI_COMMIT_BRANCH == "staging"
+  needs:
+    - smoke-test-staging
+  allow_failure: true  # Don't block deployment on E2E failures
+#ENDIF:INCLUDE_E2E
+
+#IF:INCLUDE_NOTIFICATIONS
+# ═══════════════════════════════════════════════════════════════
+# NOTIFY
+# ═══════════════════════════════════════════════════════════════
+notify-success:
+  stage: notify
+  script:
+    - ./scripts/notify.sh success "Deployed ${CI_COMMIT_SHA:0:8} to ${ENVIRONMENT}"
+  when: on_success
+  rules:
+    - if: $CI_COMMIT_BRANCH =~ /^(dev|staging|main)$/
+
+notify-failure:
+  stage: notify
+  script:
+    - ./scripts/notify.sh failure "Deployment failed for ${CI_COMMIT_SHA:0:8}"
+  when: on_failure
+  rules:
+    - if: $CI_COMMIT_BRANCH =~ /^(dev|staging|main)$/
+#ENDIF:INCLUDE_NOTIFICATIONS

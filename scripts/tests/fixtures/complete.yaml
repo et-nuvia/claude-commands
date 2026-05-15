@@ -1,0 +1,23 @@
+name: test-app
+version_file: VERSION
+
+secrets:
+  backend: aws
+  infisical:
+    project_id: abc123
+
+deployment:
+  staging:
+    host: staging.example.com
+    port: 8000
+  production:
+    host: prod.example.com
+
+infrastructure:
+  staging:
+    ip: 192.168.1.100
+
+testing:
+  command: npm test
+  coverage_command: npm run test:coverage
+  min_coverage: 80

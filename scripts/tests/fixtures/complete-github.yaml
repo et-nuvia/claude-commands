@@ -1,0 +1,34 @@
+name: test-app
+version_file: package.json
+
+git:
+  platform: github
+  instance: github.com
+  repo: myorg/myrepo
+
+secrets:
+  backend: aws
+
+deployment:
+  staging:
+    host: staging.example.com
+    port: 8000
+    method: ssm
+  production:
+    host: prod.example.com
+    method: ssm
+
+infrastructure:
+  staging:
+    ip: 10.0.1.100
+
+testing:
+  command: npm test
+  coverage_command: npm run test:coverage
+  min_coverage: 80
+
+task_management:
+  backend: asana
+  asana:
+    workspace_id: "123456"
+    default_project: Engineering

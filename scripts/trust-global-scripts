@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Convenience wrapper to register all global auto-approvals (bash + MCP)
+exec "${HOME}/.claude/scripts/register-all-globals.sh" "$@"

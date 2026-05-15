@@ -1,0 +1,3 @@
+name: minimal-app
+
+secrets: {}  # Empty object - backend field intentionally missing

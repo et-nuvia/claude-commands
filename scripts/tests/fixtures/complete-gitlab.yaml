@@ -1,0 +1,35 @@
+name: test-app
+version_file: VERSION
+
+git:
+  platform: gitlab
+  instance: git.turnersrus.com
+  repo: docker/mcps
+
+secrets:
+  backend: infisical
+  infisical:
+    project_id: abc123
+
+deployment:
+  staging:
+    host: staging.example.com
+    port: 8000
+    method: ssh
+  production:
+    host: prod.example.com
+    method: ssh
+
+infrastructure:
+  staging:
+    ip: 192.168.1.100
+
+testing:
+  command: make test
+  coverage_command: make test-coverage
+  min_coverage: 80
+
+task_management:
+  backend: gitlab
+  gitlab:
+    project_id: docker/mcps

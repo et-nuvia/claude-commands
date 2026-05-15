@@ -1,0 +1,9 @@
+name: test-app
+
+testing:
+  command: npm test
+  invalid_field: true
+
+secrets:
+  backend: invalid_backend
+  another_invalid: value

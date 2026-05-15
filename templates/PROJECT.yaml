@@ -1,0 +1,401 @@
+# PROJECT.yaml - Claude Code Project Configuration
+# This file contains project-specific settings for Claude Code commands and skills.
+# Only commit-safe values - no secrets, tokens, or credentials.
+#
+# Environment: This config represents ONE environment (work OR home, not both)
+# Auto-detected from: OS (macOS=work, Linux=home) or git remote domain
+
+# Project Identity
+name: ""                          # Project name (auto-detected from package.json/pyproject.toml)
+description: ""                   # Brief project description
+# docs_dir: "docs"                # Documentation directory (default: "docs"). Change if your project uses a different folder (e.g., "documentation")
+
+# Version Management (RECOMMENDED: Use git tags with conventional commits)
+# version_file: ""                # LEGACY: Only needed if not using git tags (VERSION, package.json, etc.)
+                                  # Leave commented to use git tags (feat: = minor, fix: = patch, BREAKING CHANGE: = major)
+
+# Tech Stack (auto-detected, minimal by default)
+languages: []                     # e.g., [{name: "python", version: "3.14"}, {name: "typescript", version: "5.0"}]
+
+# Testing Configuration (REQUIRED)
+testing:
+  command: ""                     # e.g., "pytest", "npm test", "go test ./...", "cargo test"
+  coverage_command: ""            # e.g., "pytest --cov", "npm run test:coverage"
+  min_coverage: 80                # Minimum coverage percentage
+  e2e_command: ""                 # E2E test command (used by /test-e2e, /deploy-to-stage) e.g., "playwright test"
+  e2e_timeout: 300                # E2E test timeout in seconds
+  smoke_command: ""               # Smoke test command (used by /deploy-to-prod) e.g., "pytest tests/smoke"
+
+# Code Quality Configuration (optional — used by /format, /lint, typecheck)
+quality:
+  lint_command: ""                # e.g., "ruff check .", "eslint .", "golangci-lint run"
+  format_command: ""              # e.g., "ruff format .", "prettier --write .", "gofmt ./..."
+  typecheck_command: ""           # e.g., "pyright", "tsc --noEmit", "mypy ."
+
+# Docker Configuration (if using Docker)
+docker:
+  compose_file: "docker-compose.yml"
+  # ecr_namespace: ""             # ECR namespace prefix for image repos (e.g., "nuvia" -> nuvia/project/service)
+  services: []                    # Expected service names for health checks
+  base_image: ""                  # Base image for Dockerfile (used by /dockerfile-build) e.g., "python:3.14-slim"
+  environments:
+    staging:
+      registry: ""                # Container registry URL e.g., "123456789.dkr.ecr.us-west-1.amazonaws.com"
+      profile: ""                 # Docker compose profile for this env (optional)
+    production:
+      registry: ""
+      profile: ""
+
+# Secrets Configuration (REQUIRED)
+# Backend auto-detected: macOS → aws, Linux → infisical
+secrets:
+  backend: ""                     # "aws" or "infisical"
+  required: []                    # Bucket names this project uses: ["database", "redis", "api-keys"]
+  # Infisical-specific (Home/Linux only):
+  # infisical:
+  #   project_id: ""              # Infisical project ID (used by refresh-nextjs-secrets.sh)
+  # Secret rotation schedules (optional — used by /rotate-secret):
+  # rotation:
+  #   enabled: false
+  #   schedules:
+  #     database:                 # Bucket name from secrets.required[]
+  #       frequency_days: 90
+  #       auto_rotate: true
+  #       strategy: ""           # Rotation strategy (database, generic, etc.)
+  #       notification_days_before: 7
+
+# CI/CD Configuration (auto-detected from git remote)
+ci:
+  platform: ""                    # "github" or "gitlab"
+  branches:
+    dev: "dev"                    # Integration branch — feature branches merge here (used by task-close, task-merge, git-merge)
+    staging: "dev"                # Branch that deploys to staging (often same as dev)
+    production: "prod"            # Branch that deploys to production
+
+# Git Configuration (auto-detected from git remote)
+git:
+  platform: ""                    # "github" or "gitlab"
+  instance: ""                    # "github.com" or "git.turnersrus.com"
+  repo: ""                        # "owner/repo" or "group/project"
+
+# ============================================================================
+# ============================================================================
+# OPTIONAL SECTIONS - Only add these if you use them
+# Use: /project-config add-database, add-deployment, add-notifications, etc.
+# ============================================================================
+#
+# Version File (LEGACY - only if not using git tags)
+# Uncomment if you need backward compatibility with version files:
+# version_file: "package.json"    # Or: VERSION, pyproject.toml, Cargo.toml, pom.xml
+#
+# ── Container Registry Configuration ─────────────────────────────────────────
+# Used by /pipeline-setup and /deployment-config for image build and push.
+# Choose ONE strategy: "single" (one registry for all envs) or "separate" (per env)
+#
+# registry:
+#   strategy: "single"            # "single" or "separate"
+#   single:
+#     url: ""                     # ECR or registry URL (all envs share same registry)
+#     aws_region: "us-east-1"
+#     tag_pattern: "${environment}-${version}"  # Image tag template
+#   separate:
+#     development:
+#       url: ""
+#       repository: ""            # e.g., "myapp-dev"
+#     staging:
+#       url: ""
+#       repository: ""
+#       aws_region: "us-east-1"
+#     production:
+#       url: ""
+#       repository: ""
+#       aws_region: "us-east-1"
+#       aws_role_arn: ""          # IAM role ARN for cross-account pushes
+#
+# ── Top-Level Migrations (for projects without databases[] array) ─────────────
+# Used by run-migrations.sh and /pipeline-setup for simple migration workflows.
+# If using databases[] with per-db migration config, leave this commented out.
+#
+# migrations:
+#   enabled: false
+#   command: ""                   # e.g., "alembic upgrade head", "prisma migrate deploy"
+#   timeout: 300                  # Migration timeout in seconds
+#   health_check:
+#     enabled: true
+#     command: ""                 # Command to verify app is healthy after migration
+#
+# ============================================================================
+
+# Database Configuration (optional - add with: /project-config add-database)
+#
+# Two-user security model per database (REQUIRED for HIPAA/security):
+#   migration user: DDL permissions (CREATE, DROP, ALTER) - used only during deployments
+#   app user:       DML permissions (SELECT, INSERT, UPDATE, DELETE) - used by running app
+#
+# Multiple databases on one server: Use separate entries with different secret_buckets.
+# optional: true means the app falls back gracefully if DB is absent (e.g. use Prometheus instead).
+#
+# ── Pattern 1: App + Analytics databases on same RDS instance ────────────────
+# databases:
+#   - name: "application"
+#     type: "postgresql"          # postgresql, mysql, mongodb, redis, minio, sqlite
+#     optional: false             # App cannot start without this DB
+#     users:
+#       migration:                # DDL user (CREATE, DROP, ALTER) - deployment only
+#         secret_bucket: "database"
+#         secret_keys:            # KEY NAMES in JSON secret (NOT actual values)
+#           host: "DB_HOST"
+#           port: "DB_PORT"
+#           username: "DB_MIGRATION_USERNAME"
+#           password: "DB_MIGRATION_PASSWORD"
+#           database: "DB_NAME"
+#       app:                      # DML user (SELECT, INSERT, UPDATE, DELETE) - runtime
+#         secret_bucket: "database"
+#         secret_keys:
+#           host: "DB_HOST"
+#           port: "DB_PORT"
+#           username: "DB_APP_USERNAME"
+#           password: "DB_APP_PASSWORD"
+#           database: "DB_NAME"
+#     migrations:
+#       enabled: true
+#       tool: "alembic"           # alembic, prisma, knex, typeorm, django, goose
+#       service: "backend"        # Docker Compose service name to run migrations in (default: first component)
+#       directory: "migrations"
+#
+#   - name: "analytics"
+#     type: "postgresql"
+#     optional: true              # Falls back to Prometheus if absent
+#     users:
+#       migration:
+#         secret_bucket: "database-analytics"
+#         secret_keys:
+#           host: "DB_HOST"
+#           username: "DB_ANALYTICS_MIGRATION_USERNAME"
+#           password: "DB_ANALYTICS_MIGRATION_PASSWORD"
+#           database: "DB_ANALYTICS_NAME"
+#       app:
+#         secret_bucket: "database-analytics"
+#         secret_keys:
+#           host: "DB_HOST"
+#           username: "DB_ANALYTICS_APP_USERNAME"
+#           password: "DB_ANALYTICS_APP_PASSWORD"
+#           database: "DB_ANALYTICS_NAME"
+#     migrations:
+#       enabled: true
+#       tool: "alembic"
+#       directory: "migrations/analytics"
+#
+# ── Pattern 2: App database only (metrics via Prometheus) ────────────────────
+# databases:
+#   - name: "application"
+#     type: "postgresql"
+#     optional: false
+#     users:
+#       migration:
+#         secret_bucket: "database"
+#         secret_keys: {host: "DB_HOST", username: "DB_MIGRATION_USERNAME", password: "DB_MIGRATION_PASSWORD", database: "DB_NAME"}
+#       app:
+#         secret_bucket: "database"
+#         secret_keys: {host: "DB_HOST", username: "DB_APP_USERNAME", password: "DB_APP_PASSWORD", database: "DB_NAME"}
+#     migrations:
+#       enabled: true
+#       tool: "alembic"
+#       directory: "migrations"
+#
+# ── Pattern 3: Cache only (no relational DB) ─────────────────────────────────
+# databases:
+#   - name: "cache"
+#     type: "redis"
+#     optional: false
+#     users:
+#       app:
+#         secret_bucket: "redis"
+#         secret_keys: {host: "REDIS_HOST", port: "REDIS_PORT", password: "REDIS_PASSWORD"}
+#
+# ── Pattern 4: No databases (pipeline/API-only project) ──────────────────────
+# databases: []                   # Or omit the section entirely
+
+# Deployment Configuration (optional - add with: /project-config add-deployment)
+#
+# Read values with: ~/.claude/scripts/get-config.sh --FIELD [--env ENV] [--color COLOR]
+# Example: ~/.claude/scripts/get-config.sh --deploy-instance --env staging
+#
+# strategy choices:
+#   blue-green  Two instances per environment (staging + production)
+#   standard    One instance per environment (staging + production)
+#   single      One server only, no staging/production split
+#   none        No server deployment (pipeline/CI only or local dev)
+#
+# ip_access: Which IP to return for --deploy-ip (default: private)
+#   private     Use VPC private IP (when agent runs inside same VPC/network)
+#   public      Use public IP (when agent runs outside VPC)
+#
+# deployment:
+#   health_check_path: "/health"  # Health check endpoint (used by deploy scripts, default: /health)
+#   version_path: "/api/version"  # Version endpoint to verify deployed version (default: /api/version)
+#
+# ── Strategy: blue-green ─────────────────────────────────────────────────────
+#   strategy: "blue-green"
+#   ip_access: "private"          # or "public"
+#   work:
+#     staging:
+#       method: "ssm"             # ssm | ssh | pipeline | script
+#       region: "us-west-1"
+#       active: "green"           # Which color currently serves traffic
+#       blue:
+#         instance_id: ""
+#         name: ""                # EC2 name tag (reference only)
+#         private_ip: ""
+#         public_ip: ""
+#       green:
+#         instance_id: ""
+#         name: ""
+#         private_ip: ""
+#         public_ip: ""
+#       rds_host: ""              # Shared DB (both colors use same RDS)
+#       firebase_project: ""      # Firebase project ID (if applicable)
+#       containers: []            # Expected container names on each instance
+#     production:
+#       method: "ssm"
+#       region: "us-west-1"
+#       active: "green"
+#       blue:
+#         instance_id: ""
+#         name: ""
+#         private_ip: ""
+#         public_ip: ""
+#       green:
+#         instance_id: ""
+#         name: ""
+#         private_ip: ""
+#         public_ip: ""
+#       rds_host: ""
+#       containers: []
+#
+# ── Strategy: standard ───────────────────────────────────────────────────────
+#   strategy: "standard"
+#   ip_access: "private"
+#   work:
+#     staging:
+#       method: "ssm"
+#       region: "us-west-1"
+#       instance_id: ""
+#       name: ""
+#       private_ip: ""
+#       public_ip: ""
+#       containers: []
+#     production:
+#       method: "ssm"
+#       region: "us-west-1"
+#       instance_id: ""
+#       name: ""
+#       private_ip: ""
+#       public_ip: ""
+#       containers: []
+#
+# ── Strategy: single ─────────────────────────────────────────────────────────
+#   strategy: "single"
+#   ip_access: "private"
+#   work:
+#     server:
+#       method: "ssm"
+#       region: "us-west-1"
+#       instance_id: ""
+#       name: ""
+#       private_ip: ""
+#       public_ip: ""
+#       containers: []
+#
+# ── Strategy: none ───────────────────────────────────────────────────────────
+#   strategy: "none"              # Pipeline/CI only or local dev — no servers
+
+# Smoke Test Configuration (optional - used by scripts/deploy/smoke-test.sh)
+# Validates access control after deployment. Tests run ON the server via SSH/SSM.
+# smoke_tests:
+#   public_endpoints:               # Endpoints that MUST be accessible from public IPs
+#     - path: "/"                   # Tested with X-Forwarded-For: 8.8.8.8
+#       expect: "html"              # "html" = expect <!DOCTYPE html>, "status:200" = expect HTTP 200
+#   private_endpoints:              # Endpoints that MUST be restricted to private IPs only
+#     - path: "/api/metrics"        # Expects HTTP 403 with public IP, HTTP 200/503 from private
+
+# Task Management (optional - add with: /project-config add-tasks)
+# task_management:
+#   backend: ""                   # "asana" or "gitlab" (auto-detected: work=asana, home=gitlab)
+#   asana:
+#     workspace_id: ""            # Asana workspace GID (find at https://app.asana.com/api/1.0/workspaces)
+#     project: ""                 # Project name or GID to add tasks to
+#     section: ""                 # Section name or GID within the project (optional)
+#     sync_on_operations:         # Which task lifecycle ops sync to Asana (used by /task-start, /task-close, etc.)
+#       - capture                 # /task-capture: create Asana task when capturing
+#       - start                   # /task-start: update Asana status to "In Progress"
+#       - update                  # /task-update: post progress comment
+#       - hold                    # /task-hold: update Asana status to "On Hold"
+#       - close                   # /task-close: update Asana status to "Done"
+#   gitlab:
+#     project_id: ""              # Project ID or "owner/repo"
+#     default_labels: []          # Default labels for issues
+
+# Notifications (optional - add with: /project-config add-notifications)
+# CI/CD pipeline notifications via webhook (Slack, Discord, Teams, or generic)
+# Webhook URL stored in GitHub/GitLab secret: NOTIFY_WEBHOOK_URL
+# notifications:
+#   provider: "slack"             # slack, discord, teams, or generic (webhook payload format)
+#   on_success: true              # Notify on successful deployments
+#   on_failure: true              # Notify on failed deployments
+#   channel: "#deployments"       # Channel/room for notifications (documentation only — actual routing via webhook config)
+#
+# App-level notifications (email, in-app, etc.):
+# notifications:
+#   enabled: false
+#   channels:
+#     slack:
+#       enabled: false
+#       secret_bucket: "notifications"
+#       secret_key: "slack_webhook_url"
+#     email:
+#       enabled: false
+#       provider: "resend"        # aws_ses, resend, mailgun, sendgrid
+#       secret_bucket: "notifications"
+#       secret_key: "email_api_key"
+#       from_address: ""
+#       to_addresses: []
+
+# Schema Sync to Open Metadata (optional - used by schema-sync scripts)
+# Automatically syncs database schema changes to Open Metadata during production deploys.
+# Only tracks databases where migrations.enabled: true and type is a relational DB.
+#
+# schema_sync:
+#   enabled: false
+#   open_metadata:
+#     url: ""                       # Open Metadata instance URL (e.g., "https://catalog.example.com")
+#                                   # Token comes from OPEN_METADATA_TOKEN secret, not PROJECT.yaml
+#   exclude_tables:                 # Tables to exclude from schema capture (framework internals)
+#     - "migrations"
+#     - "typeorm_metadata"
+#   ai:
+#     domain: ""                    # Project domain for AI context (e.g., "healthcare", "e-commerce")
+#     context: |                    # Project-specific context injected into AI description prompt
+#       Describe what this application does, who uses it, and what kind
+#       of data the databases contain. This helps the AI generate
+#       accurate field descriptions.
+
+# Infrastructure (optional - add with: /project-config add-infrastructure)
+# infrastructure:
+#   enabled: false
+#   repo:
+#     type: "git"                 # git or local
+#     url: ""                     # Git URL or absolute path
+#     branch: "main"
+#   link:
+#     target: "infrastructure"    # Symlink name in project root
+#     source: ""                  # Path within infra repo to link
+#   tools:
+#     - name: "terraform"
+#       enabled: true
+#       version: ""
+#       backend: "s3"             # s3, gcs, azurerm, local
+#       workspaces:
+#         development: "dev"
+#         staging: "staging"
+#         production: "prod"

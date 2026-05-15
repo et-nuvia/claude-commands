@@ -1,0 +1,86 @@
+# Release Notes - Technical
+
+**Version**: {{VERSION}}
+**Released**: {{DATE}}
+**Target Audience**: Engineers, Developers
+
+---
+
+## Breaking Changes
+
+{% if BREAKING_CHANGES %}
+{% for change in BREAKING_CHANGES %}
+### {{change.subject}}
+
+{{change.body}}
+
+{% endfor %}
+{% else %}
+_No breaking changes in this release._
+{% endif %}
+
+---
+
+## New Features
+
+{% if FEATURES %}
+{% for feature in FEATURES %}
+### {{feature.subject}}
+
+{{feature.body}}
+
+{% endfor %}
+{% else %}
+_No new features in this release._
+{% endif %}
+
+---
+
+## Bug Fixes
+
+{% if FIXES %}
+{% for fix in FIXES %}
+### {{fix.subject}}
+
+{{fix.body}}
+
+{% endfor %}
+{% else %}
+_No bug fixes in this release._
+{% endif %}
+
+---
+
+## Other Changes
+
+{% if OTHER %}
+{% for change in OTHER %}
+- {{change.subject}}
+{% endfor %}
+{% else %}
+_No other changes in this release._
+{% endif %}
+
+---
+
+## Migration Guide
+
+{% if BREAKING_CHANGES %}
+This release includes breaking changes. Follow these steps to migrate:
+
+{% for change in BREAKING_CHANGES %}
+1. **{{change.subject}}**: Review commit {{change.hash[:7]}} for details
+{% endfor %}
+
+{% else %}
+No migration required for this release.
+{% endif %}
+
+---
+
+## Internal Notes
+
+- Total commits: {{COMMIT_COUNT}}
+- Features: {{FEATURE_COUNT}}
+- Fixes: {{FIX_COUNT}}
+- Author(s): {% for commit in COMMITS %}{{commit.author}}{% if not loop.last %}, {% endif %}{% endfor %}

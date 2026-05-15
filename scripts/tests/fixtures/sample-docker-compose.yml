@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  api:
+    build: ./backend
+    container_name: test-app-api
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: development
+
+  web:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  db:
+    image: postgres:16
+    container_name: test-app-db
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:

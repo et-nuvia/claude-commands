@@ -1,0 +1,291 @@
+# GitHub Actions CI/CD Pipeline - Node.js Project
+#
+# This template provides a production-ready CI/CD pipeline for Node.js/Next.js projects.
+# It includes validation, security scanning, building, migrations, deployment,
+# testing, and notifications.
+#
+# Variables:
+#   PROJECT_NAME          - Project identifier (default: from PROJECT.yaml)
+#   STAGING_BRANCH        - Branch for staging deployments (default: dev)
+#   PRODUCTION_BRANCH     - Branch for production deployments (default: main)
+#   REGISTRY_URL          - Docker registry URL
+#   TEST_COMMAND          - Test command (default: npm test)
+#   LINT_COMMAND          - Lint command (default: npm run lint)
+#   TYPECHECK_COMMAND     - Type check command (default: npm run typecheck)
+#   MIN_COVERAGE          - Minimum test coverage % (default: 80)
+#
+# Conditional Features (set to any non-empty value to enable):
+#   INCLUDE_MIGRATIONS    - Include database migration stage
+#   INCLUDE_E2E           - Include E2E tests for staging
+#   INCLUDE_NOTIFICATIONS - Include success/failure notifications
+#   INCLUDE_SECURITY      - Include security scanning
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [${STAGING_BRANCH}, ${PRODUCTION_BRANCH}]
+
+env:
+  PROJECT_NAME: ${PROJECT_NAME}
+  REGISTRY_URL: ${REGISTRY_URL}
+  PUSH_IMAGES: 'true'
+  STAGING_BRANCH: ${STAGING_BRANCH:-dev}
+  PRODUCTION_BRANCH: ${PRODUCTION_BRANCH:-main}
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # VALIDATE
+  # ═══════════════════════════════════════════════════════════════
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lint checks
+        run: docker compose run --rm app ${LINT_COMMAND:-npm run lint}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests with coverage
+        run: docker compose build --build-arg RUN_TESTS=true app
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run type checking
+        run: docker compose run --rm app ${TYPECHECK_COMMAND:-npm run typecheck}
+
+#IF:INCLUDE_SECURITY
+  # ═══════════════════════════════════════════════════════════════
+  # SECURITY
+  # ═══════════════════════════════════════════════════════════════
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: [lint, test, typecheck]
+    if: github.ref_name == env.STAGING_BRANCH || github.ref_name == env.PRODUCTION_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run security scan
+        run: ./scripts/security-gate.sh
+#ENDIF:INCLUDE_SECURITY
+
+  # ═══════════════════════════════════════════════════════════════
+  # BUILD (development only - first environment in chain)
+  # ═══════════════════════════════════════════════════════════════
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test, typecheck]
+    if: github.ref_name == env.STAGING_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Build and push Docker image
+        run: |
+          # Install yq if not present
+          if ! command -v yq &> /dev/null; then
+            wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+            chmod +x /usr/local/bin/yq
+          fi
+
+          # Read deployment config
+          export REGISTRY_STRATEGY=$(yq '.registry.strategy // "single"' PROJECT.yaml)
+          export PROJECT_NAME=$(yq '.project // "${PROJECT_NAME}"' PROJECT.yaml)
+
+          # ECR login
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${REGISTRY_URL}
+
+          # Build image
+          if [[ "${REGISTRY_STRATEGY}" == "single" ]]; then
+            URL=$(yq '.registry.single.url' PROJECT.yaml)
+            PATTERN=$(yq '.registry.single.tag_pattern' PROJECT.yaml)
+            TAG="${PATTERN//\$\{environment\}/development}"
+            TAG="${TAG//\$\{version\}/${{ github.sha }}}"
+            IMAGE="${URL}:${TAG}"
+          else
+            URL=$(yq '.registry.separate.development.url' PROJECT.yaml)
+            REPO=$(yq '.registry.separate.development.repository' PROJECT.yaml)
+            IMAGE="${URL}/${REPO}:${{ github.sha }}"
+          fi
+
+          echo "Building: ${IMAGE}"
+          docker compose build app
+          docker tag ${PROJECT_NAME}:latest ${IMAGE}
+
+          if [[ "${PUSH_IMAGES}" == "true" ]]; then
+            docker push ${IMAGE}
+            docker tag ${IMAGE} ${IMAGE%:*}:latest
+            docker push ${IMAGE%:*}:latest
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # PROMOTE (staging and production)
+  # ═══════════════════════════════════════════════════════════════
+  promote-to-staging:
+    runs-on: ubuntu-latest
+    needs: [lint, test, typecheck]
+    if: github.ref_name == 'staging'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Promote image to staging
+        run: ./scripts/promote.sh development staging "${{ github.sha }}"
+
+  promote-to-production:
+    runs-on: ubuntu-latest
+    needs: [lint, test, typecheck]
+    if: github.ref_name == env.PRODUCTION_BRANCH
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Promote image to production
+        run: ./scripts/promote.sh staging production "${{ github.sha }}"
+
+#IF:INCLUDE_MIGRATIONS
+  # ═══════════════════════════════════════════════════════════════
+  # MIGRATE (runs before deploy with NEW image)
+  # ═══════════════════════════════════════════════════════════════
+  migrate-staging:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref_name == env.STAGING_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run staging migrations
+        run: |
+          MIGRATIONS_ENABLED=$(yq '.migrations.enabled // false' PROJECT.yaml)
+          if [[ "${MIGRATIONS_ENABLED}" != "true" ]]; then
+            echo "Migrations not enabled, skipping"
+            exit 0
+          fi
+          REGISTRY=$(yq ".docker.environments.staging.registry" PROJECT.yaml)
+          IMAGE="${REGISTRY}:${{ github.sha }}"
+          ./scripts/run-migrations.sh "${IMAGE}" "staging"
+
+  migrate-production:
+    runs-on: ubuntu-latest
+    needs: [promote-to-production]
+    if: github.ref_name == env.PRODUCTION_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run production migrations
+        run: |
+          MIGRATIONS_ENABLED=$(yq '.migrations.enabled // false' PROJECT.yaml)
+          if [[ "${MIGRATIONS_ENABLED}" != "true" ]]; then
+            echo "Migrations not enabled, skipping"
+            exit 0
+          fi
+          REGISTRY=$(yq ".docker.environments.production.registry" PROJECT.yaml)
+          IMAGE="${REGISTRY}:${{ github.sha }}"
+          ./scripts/run-migrations.sh "${IMAGE}" "production"
+#ENDIF:INCLUDE_MIGRATIONS
+
+  # ═══════════════════════════════════════════════════════════════
+  # DEPLOY
+  # ═══════════════════════════════════════════════════════════════
+  deploy-staging:
+    runs-on: ubuntu-latest
+#IF:INCLUDE_MIGRATIONS
+    needs: [migrate-staging]
+#ENDIF:INCLUDE_MIGRATIONS
+    if: github.ref_name == env.STAGING_BRANCH
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to staging
+        run: ./scripts/deploy.sh staging "${{ github.sha }}"
+
+  deploy-production:
+    runs-on: ubuntu-latest
+#IF:INCLUDE_MIGRATIONS
+    needs: [migrate-production]
+#ENDIF:INCLUDE_MIGRATIONS
+    if: github.ref_name == env.PRODUCTION_BRANCH
+    environment:
+      name: production
+      url: ${{ vars.PROD_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to production
+        run: ./scripts/deploy.sh production "${{ github.sha }}"
+
+  # ═══════════════════════════════════════════════════════════════
+  # SMOKE TEST & ROLLBACK
+  # ═══════════════════════════════════════════════════════════════
+  smoke-test-staging:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: github.ref_name == env.STAGING_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run smoke tests
+        run: |
+          ENV_URL=$(yq ".environments.staging.url" PROJECT.yaml)
+          ./scripts/smoke-test.sh "${ENV_URL}"
+
+  smoke-test-production:
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref_name == env.PRODUCTION_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run smoke tests
+        run: |
+          ENV_URL=$(yq ".environments.production.url" PROJECT.yaml)
+          ./scripts/smoke-test.sh "${ENV_URL}"
+
+  rollback:
+    runs-on: ubuntu-latest
+    needs: [smoke-test-production]
+    if: failure() && github.ref_name == env.PRODUCTION_BRANCH
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rollback production
+        run: ./scripts/rollback.sh production
+
+#IF:INCLUDE_E2E
+  # ═══════════════════════════════════════════════════════════════
+  # E2E (staging only)
+  # ═══════════════════════════════════════════════════════════════
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: [smoke-test-staging]
+    if: github.ref_name == 'staging'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run E2E tests
+        run: docker compose -f docker-compose.e2e.yml run --rm e2e
+#ENDIF:INCLUDE_E2E
+
+#IF:INCLUDE_NOTIFICATIONS
+  # ═══════════════════════════════════════════════════════════════
+  # NOTIFY
+  # ═══════════════════════════════════════════════════════════════
+  notify-success:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: success()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send success notification
+        run: ./scripts/notify.sh success "Deployed ${{ github.sha }} to ${ENVIRONMENT}"
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: failure()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send failure notification
+        run: ./scripts/notify.sh failure "Deployment failed for ${{ github.sha }}"
+#ENDIF:INCLUDE_NOTIFICATIONS

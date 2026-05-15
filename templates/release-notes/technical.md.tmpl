@@ -1,0 +1,160 @@
+# Release Notes - Technical
+
+**Version**: {{VERSION}}
+**Released**: {{DATE}}
+**Target Audience**: Engineers, Developers, Technical Integrators
+
+---
+
+## Breaking Changes
+
+{{#if BREAKING_CHANGES}}
+{{#each BREAKING_CHANGES}}
+### {{this.title}}
+
+**What breaks**: {{this.what_breaks}}
+
+**Migration path**: {{this.migration}}
+
+**Who is affected**: {{this.affected}}
+
+```
+{{this.code_example}}
+```
+
+{{/each}}
+{{else}}
+_No breaking changes in this release._
+{{/if}}
+
+---
+
+## API Changes
+
+{{#if API_CHANGES}}
+{{#each API_CHANGES}}
+### {{this.endpoint}}
+
+- **Method**: {{this.method}}
+- **Change**: {{this.change}}
+- **New signature**: `{{this.signature}}`
+- **Deprecation**: {{this.deprecation}}
+
+{{/each}}
+{{else}}
+_No API changes in this release._
+{{/if}}
+
+---
+
+## New Features
+
+{{#if FEATURES}}
+{{#each FEATURES}}
+### {{this.title}}
+
+{{this.description}}
+
+**Technical details**:
+- {{this.tech_detail_1}}
+- {{this.tech_detail_2}}
+
+**Usage**:
+```{{this.language}}
+{{this.code_example}}
+```
+
+**Dependencies**: {{this.dependencies}}
+
+{{/each}}
+{{else}}
+_No new features in this release._
+{{/if}}
+
+---
+
+## Bug Fixes
+
+{{#if FIXES}}
+{{#each FIXES}}
+### {{this.title}}
+
+**Issue**: {{this.issue}}
+**Fix**: {{this.fix}}
+**Impact**: {{this.impact}}
+
+{{/each}}
+{{else}}
+_No bug fixes in this release._
+{{/if}}
+
+---
+
+## Performance Improvements
+
+{{#if PERFORMANCE}}
+{{#each PERFORMANCE}}
+### {{this.title}}
+
+**Improvement**: {{this.improvement}}
+**Benchmark**: {{this.benchmark}}
+**Details**: {{this.details}}
+
+{{/each}}
+{{else}}
+_No performance improvements in this release._
+{{/if}}
+
+---
+
+## Internal Changes
+
+{{#if INTERNAL}}
+{{#each INTERNAL}}
+- {{this.change}}
+{{/each}}
+{{else}}
+_No significant internal changes._
+{{/if}}
+
+---
+
+## Dependencies
+
+{{#if DEPENDENCY_UPDATES}}
+### Updated Dependencies
+
+{{#each DEPENDENCY_UPDATES}}
+- **{{this.name}}**: {{this.old_version}} → {{this.new_version}} {{#if this.security}}🔒{{/if}}
+{{/each}}
+
+{{else}}
+_No dependency updates._
+{{/if}}
+
+---
+
+## Migration Guide
+
+{{#if MIGRATION_STEPS}}
+{{#each MIGRATION_STEPS}}
+### Step {{@index}}: {{this.title}}
+
+{{this.description}}
+
+```bash
+{{this.commands}}
+```
+
+{{/each}}
+{{else}}
+_No migration required._
+{{/if}}
+
+---
+
+## Full Changelog
+
+For complete commit history, see: {{CHANGELOG_URL}}
+
+**Commits in this release**: {{COMMIT_COUNT}}

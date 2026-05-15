@@ -1,0 +1,172 @@
+# Release Notes - Business Impact
+
+**Version**: {{VERSION}}
+**Released**: {{DATE}}
+**Target Audience**: Product Managers, Business Stakeholders, Leadership
+
+---
+
+## Executive Summary
+
+{{EXECUTIVE_SUMMARY}}
+
+---
+
+## Business Value
+
+{{#if BUSINESS_VALUE}}
+{{#each BUSINESS_VALUE}}
+### {{this.title}}
+
+**Problem solved**: {{this.problem}}
+
+**Value delivered**: {{this.value}}
+
+**Customer impact**: {{this.customer_impact}}
+
+{{#if this.metrics}}
+**Expected metrics**:
+- {{this.metrics}}
+{{/if}}
+
+{{/each}}
+{{else}}
+This release focuses on technical improvements and maintenance.
+{{/if}}
+
+---
+
+## Customer Impact
+
+{{#if CUSTOMER_IMPACT}}
+### Positive Changes
+
+{{#each CUSTOMER_IMPACT.positive}}
+- {{this.change}} - {{this.benefit}}
+{{/each}}
+
+{{#if CUSTOMER_IMPACT.considerations}}
+### Considerations
+
+{{#each CUSTOMER_IMPACT.considerations}}
+- {{this.consideration}}
+{{/each}}
+{{/if}}
+
+{{else}}
+_This release has minimal direct customer impact._
+{{/if}}
+
+---
+
+## Revenue Impact
+
+{{#if REVENUE_IMPACT}}
+### Revenue Opportunities
+
+{{#each REVENUE_IMPACT.opportunities}}
+- **{{this.title}}**: {{this.description}}
+  - Potential: {{this.potential}}
+  - Timeline: {{this.timeline}}
+{{/each}}
+
+{{#if REVENUE_IMPACT.cost_savings}}
+### Cost Savings
+
+{{#each REVENUE_IMPACT.cost_savings}}
+- **{{this.area}}**: {{this.savings}} ({{this.timeframe}})
+{{/each}}
+{{/if}}
+
+{{else}}
+_No direct revenue impact._
+{{/if}}
+
+---
+
+## Competitive Advantages
+
+{{#if COMPETITIVE_ADVANTAGES}}
+{{#each COMPETITIVE_ADVANTAGES}}
+### {{this.title}}
+
+{{this.description}}
+
+**Differentiator**: {{this.differentiator}}
+
+{{/each}}
+{{else}}
+_This release maintains competitive parity._
+{{/if}}
+
+---
+
+## Strategic Alignment
+
+{{#if STRATEGIC_ALIGNMENT}}
+This release aligns with strategic objectives:
+
+{{#each STRATEGIC_ALIGNMENT}}
+- **{{this.objective}}**: {{this.alignment}}
+{{/each}}
+
+{{/if}}
+
+---
+
+## Contract & Compliance
+
+{{#if CONTRACT_COMPLIANCE}}
+### Contract Obligations
+
+{{#each CONTRACT_COMPLIANCE.obligations}}
+- **{{this.client}}**: {{this.requirement}} - {{this.status}}
+{{/each}}
+
+{{#if CONTRACT_COMPLIANCE.regulatory}}
+### Regulatory Compliance
+
+{{#each CONTRACT_COMPLIANCE.regulatory}}
+- **{{this.regulation}}**: {{this.compliance_status}}
+{{/each}}
+{{/if}}
+
+{{else}}
+_No contract or compliance requirements in this release._
+{{/if}}
+
+---
+
+## Market Positioning
+
+{{#if MARKET_POSITIONING}}
+{{MARKET_POSITIONING}}
+{{else}}
+_This release maintains current market positioning._
+{{/if}}
+
+---
+
+## Key Metrics to Track
+
+{{#if KEY_METRICS}}
+Monitor these business metrics post-release:
+
+{{#each KEY_METRICS}}
+- **{{this.metric}}**: Baseline {{this.baseline}}, Target {{this.target}}
+{{/each}}
+
+{{/if}}
+
+---
+
+## Next Quarter Roadmap Impact
+
+{{#if ROADMAP_IMPACT}}
+This release enables/affects:
+
+{{#each ROADMAP_IMPACT}}
+- {{this.item}} - {{this.impact}}
+{{/each}}
+
+{{/if}}

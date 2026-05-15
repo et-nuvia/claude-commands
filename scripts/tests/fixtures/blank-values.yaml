@@ -1,0 +1,9 @@
+name: ""
+version_file:
+
+secrets:
+  backend: aws
+
+deployment:
+  staging:
+    host:
