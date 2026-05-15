@@ -438,6 +438,12 @@ class TestDetectGit:
         # a public provider, detection should return that host. With no
         # CLAUDE_PROFILE set, load-profile falls back to default.yaml.example
         # whose home env has git.example.com.
+        #
+        # IMPLICIT COUPLING: this test depends on the home env's
+        # .git.instance in profiles/default.yaml.example being
+        # "git.example.com". If you change that example value, update
+        # the remote URL below to match, or set CLAUDE_PROFILE here to
+        # a dedicated test fixture.
         r = self._run_with_remote(tmp_project, "git@git.example.com:eric/my-project.git")
         assert r["platform"]["value"] == "gitlab"
         assert r["instance"]["value"] == "git.example.com"

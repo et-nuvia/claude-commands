@@ -99,10 +99,11 @@ load_profile() {
 
   _lp_resolve_path || return 1
 
-  if [[ "$_PROFILE_IS_FALLBACK" == "1" ]]; then
+  if [[ "$_PROFILE_IS_FALLBACK" == "1" && -z "${_PROFILE_WARNED:-}" ]]; then
     echo "load-profile: WARN no active profile, using example values from" >&2
     echo "  $_PROFILE_PATH" >&2
     echo "  Run: cp ${HOME}/.claude/profiles/default.yaml.example ${HOME}/.claude/profiles/active.yaml" >&2
+    _PROFILE_WARNED=1
   fi
 
   _PROFILE_ENV=$(yaml_get '.active_environment' "$_PROFILE_PATH" 2>/dev/null || true)

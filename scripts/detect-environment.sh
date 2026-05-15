@@ -89,7 +89,11 @@ detect_environment() {
   env=$(profile_active_environment 2>/dev/null || true)
   if [[ -n "$env" ]]; then echo "$env"; return; fi
 
-  # Last-resort fallback for first-run / no-profile cases.
+  # Last-resort fallback for first-run / no-profile cases. The labels
+  # "work" / "home" are the original author's convention — anyone forking
+  # for a team should configure profiles/active.yaml with their own
+  # environment names instead of relying on this OS-based mapping. See
+  # profiles/default.yaml.example for the schema.
   case "$(uname -s)" in
     Darwin) echo "work" ;;
     Linux)  echo "home" ;;

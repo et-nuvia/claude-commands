@@ -408,7 +408,10 @@ generate_gitlab_pipeline() {
         registry=$(yq -r ".docker.registries.${active_env} // \"\"" PROJECT.yaml 2>/dev/null || true)
     fi
     [[ -z "$registry" || "$registry" == "null" ]] && registry=$(profile_env_get .registry.host)
-    [[ -z "$registry" ]] && registry="REPLACE_ME.example.com"
+    if [[ -z "$registry" ]]; then
+        registry="REPLACE_ME.example.com"
+        echo "pipeline-create: WARN no registry configured (PROJECT.yaml docker.registries.${active_env} or profile .registry.host); generated pipeline contains '${registry}' — edit before pushing" >&2
+    fi
 
     # Start writing pipeline
     cat > "$pipeline_file" << EOF

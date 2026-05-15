@@ -18,6 +18,10 @@ source "${SCRIPT_DIR}/lib/colors.sh"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/load-profile.sh"
 SECRETS_URL="$(profile_env_get .secrets.url)"
+if [[ -z "$SECRETS_URL" ]]; then
+  echo "rollback-secret: .secrets.url not configured in profile" >&2
+  exit 1
+fi
 SECRETS_API_URL="${SECRETS_URL}/api"
 
 OUTPUT_FORMAT="human"
