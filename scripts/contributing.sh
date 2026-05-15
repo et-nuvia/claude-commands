@@ -109,6 +109,16 @@ detect_platform() {
   fi
 }
 
+# True if the given remote URL looks like a personal/self-hosted project:
+# either contains the literal substring "personal", or matches the user's
+# self-hosted git instance from their profile (excluding public providers).
+_is_personal_remote() {
+  local url="$1" host
+  [[ "$url" =~ personal ]] && return 0
+  host=$(profile_env_get .git.instance 2>/dev/null)
+  [[ -n "$host" && "$host" != "github.com" && "$host" != "gitlab.com" && "$url" == *"$host"* ]]
+}
+
 # Detect project type
 detect_project_type() {
   local remote_url
@@ -117,17 +127,8 @@ detect_project_type() {
   # Check if this is a fork
   if git remote | grep -q upstream; then
     echo "fork"
-  # Check if it's a personal project (no CONTRIBUTING.md, and the remote
-  # matches the user's self-hosted git instance from their profile, or
-  # is literally labeled "personal" in the URL)
-  elif [[ ! -f "CONTRIBUTING.md" ]] && {
-    [[ "$remote_url" =~ personal ]] ||
-    { personal_host=$(profile_env_get .git.instance 2>/dev/null); \
-      [[ -n "$personal_host" ]] && \
-      [[ "$personal_host" != "github.com" ]] && \
-      [[ "$personal_host" != "gitlab.com" ]] && \
-      [[ "$remote_url" == *"$personal_host"* ]]; };
-  }; then
+  # Check if it's a personal project (no CONTRIBUTING.md + self-hosted)
+  elif [[ ! -f "CONTRIBUTING.md" ]] && _is_personal_remote "$remote_url"; then
     echo "personal"
   # Has CONTRIBUTING.md = likely open source
   elif [[ -f "CONTRIBUTING.md" ]]; then

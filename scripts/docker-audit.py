@@ -40,19 +40,31 @@ from typing import Any
 SCHEMA_VERSION = 2
 
 
+_PROFILE_PATH_RE = re.compile(r"^\.[A-Za-z_][A-Za-z0-9_.]*$")
+
+
 def _profile_get_env(yaml_path: str) -> str:
     """Read a value from the active profile's current environment block.
 
     Shells out to lib/load-profile.sh because the profile schema and
     resolution rules live there. Returns empty string on any failure —
     callers should treat absence as "use the built-in default".
+
+    yaml_path is validated against a strict regex before being passed to
+    the shell — only literals like ".git.instance" are accepted. This
+    guards against shell injection if a future caller plumbs user input
+    through.
     """
+    if not _PROFILE_PATH_RE.match(yaml_path):
+        return ""
     lib = Path(__file__).parent / "lib" / "load-profile.sh"
     if not lib.exists():
         return ""
     try:
+        # yaml_path is now whitelist-validated, but pass via positional
+        # arg ($1) so it can never be interpreted as shell syntax.
         result = subprocess.run(
-            ["bash", "-c", f'source "{lib}" && profile_env_get "{yaml_path}"'],
+            ["bash", "-c", f'source "{lib}" && profile_env_get "$1"', "_", yaml_path],
             capture_output=True, text=True, timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else ""

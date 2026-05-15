@@ -24,19 +24,28 @@ from pathlib import Path
 from typing import Any
 
 
+_PROFILE_PATH_RE = re.compile(r"^\.[A-Za-z_][A-Za-z0-9_.]*$")
+
+
 def _profile_get_env(yaml_path: str) -> str:
     """Read a value from the active profile's current environment block.
 
     Shells out to lib/load-profile.sh because the profile schema and
     resolution rules live there. Returns "" on any failure — callers
     should treat absence as "fall back to generic public defaults".
+
+    yaml_path is validated against a strict regex before invocation and
+    passed as a positional bash arg, so it cannot be interpreted as
+    shell syntax even if a future caller plumbs user input through.
     """
+    if not _PROFILE_PATH_RE.match(yaml_path):
+        return ""
     lib = Path(__file__).parent / "lib" / "load-profile.sh"
     if not lib.exists():
         return ""
     try:
         result = subprocess.run(
-            ["bash", "-c", f'source "{lib}" && profile_env_get "{yaml_path}"'],
+            ["bash", "-c", f'source "{lib}" && profile_env_get "$1"', "_", yaml_path],
             capture_output=True, text=True, timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
