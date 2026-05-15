@@ -41,6 +41,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source shared libraries
 source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
 
 # Global variables
 OUTPUT_MODE="json"
@@ -169,7 +171,7 @@ section_list() {
         local token
         token=$(cat ~/.gitlab-token)
         local instance
-        instance=$(yaml_get_default '.git.instance' 'git.turnersrus.com' PROJECT.yaml)
+        instance=$(yaml_get_default '.git.instance' "$(profile_env_get .git.instance)" PROJECT.yaml)
 
         prs_json=$(curl -s -H "PRIVATE-TOKEN: $token" \
             "https://$instance/api/v4/projects/$(echo "$project_id" | jq -sRr @uri)/merge_requests?state=opened" \
@@ -215,7 +217,7 @@ section_fetch() {
         local token
         token=$(cat ~/.gitlab-token)
         local instance project_id
-        instance=$(yaml_get_default '.git.instance' 'git.turnersrus.com' PROJECT.yaml)
+        instance=$(yaml_get_default '.git.instance' "$(profile_env_get .git.instance)" PROJECT.yaml)
         project_id=$(yaml_get '.git.repo' PROJECT.yaml)
 
         PR_RAW_DATA=$(curl -s -H "PRIVATE-TOKEN: $token" \

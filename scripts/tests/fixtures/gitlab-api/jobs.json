@@ -5,7 +5,7 @@
     "stage": "test",
     "status": "success",
     "duration": 45.2,
-    "web_url": "https://git.turnersrus.com/docker/mcps/-/jobs/100"
+    "web_url": "https://git.example.com/docker/mcps/-/jobs/100"
   },
   {
     "id": 101,
@@ -13,7 +13,7 @@
     "stage": "test",
     "status": "success",
     "duration": 120.5,
-    "web_url": "https://git.turnersrus.com/docker/mcps/-/jobs/101"
+    "web_url": "https://git.example.com/docker/mcps/-/jobs/101"
   },
   {
     "id": 102,
@@ -21,7 +21,7 @@
     "stage": "build",
     "status": "success",
     "duration": 180.0,
-    "web_url": "https://git.turnersrus.com/docker/mcps/-/jobs/102"
+    "web_url": "https://git.example.com/docker/mcps/-/jobs/102"
   },
   {
     "id": 103,
@@ -29,6 +29,6 @@
     "stage": "deploy",
     "status": "failed",
     "duration": 30.1,
-    "web_url": "https://git.turnersrus.com/docker/mcps/-/jobs/103"
+    "web_url": "https://git.example.com/docker/mcps/-/jobs/103"
   }
 ]

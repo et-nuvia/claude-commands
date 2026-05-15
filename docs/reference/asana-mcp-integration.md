@@ -148,7 +148,7 @@ task_management:
 
   asana:
     # Default locations for new tasks
-    default_workspace: "nuviasmiles.com"          # Fuzzy matched
+    default_workspace: "acme-corp.com"          # Fuzzy matched
     default_project: "Med Clearance/NPPW"         # Fuzzy matched
     default_section: "NPPW"                       # Fuzzy matched (optional)
 
@@ -459,7 +459,7 @@ List all workspaces the authenticated user has access to.
 **Example**:
 ```python
 mcp__asana__list_workspaces()
-# Returns: [{"gid": "1162186193001399", "name": "nuviasmiles.com"}, ...]
+# Returns: [{"gid": "1162186193001399", "name": "acme-corp.com"}, ...]
 ```
 
 #### `mcp__asana__list_projects`
@@ -475,7 +475,7 @@ List projects in a workspace.
 **Example**:
 ```python
 mcp__asana__list_projects(
-  workspace: "nuviasmiles.com"
+  workspace: "acme-corp.com"
 )
 # Returns: [{"gid": "1211676392439164", "name": "Med Clearance/NPPW"}, ...]
 ```
@@ -521,7 +521,7 @@ List tasks with filters.
 mcp__asana__list_tasks(
   assignee: "me",
   project: "Med Clearance",
-  workspace: "nuviasmiles.com"
+  workspace: "acme-corp.com"
 )
 ```
 
@@ -572,7 +572,7 @@ Create a new task in Asana.
 mcp__asana__create_task(
   name: "Implement user authentication",
   notes: "Add OAuth 2.0 authentication to dashboard",
-  workspace: "nuviasmiles.com",
+  workspace: "acme-corp.com",
   projects: ["Med Clearance/NPPW"],
   section: "NPPW",
   assignee: "me",
@@ -639,7 +639,7 @@ Search for tasks with advanced filters.
 **Example**:
 ```python
 mcp__asana__search_tasks(
-  workspace: "nuviasmiles.com",
+  workspace: "acme-corp.com",
   text: "authentication",
   assignee: "me",
   projects: ["Med Clearance"]
@@ -1003,7 +1003,7 @@ grep -A 20 "^## External Tracking" "$TASK_DOC" | grep "^- Task GID:"
    **Asana**:
    - Task GID: [1234567890123456]
    - Task URL: [https://app.asana.com/0/1211676392439164/1234567890123456]
-   - Workspace: nuviasmiles.com
+   - Workspace: acme-corp.com
    - Project: Med Clearance/NPPW
    - Section: NPPW
    - Status: Not Started
@@ -1118,7 +1118,7 @@ task_management:
 
   asana:
     # Default locations
-    default_workspace: "nuviasmiles.com"
+    default_workspace: "acme-corp.com"
     default_project: "Med Clearance/NPPW"
     default_section: "NPPW"
 

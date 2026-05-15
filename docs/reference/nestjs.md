@@ -138,7 +138,7 @@ export class SecretsService implements OnModuleInit {
     const client = new InfisicalClient({
       clientId: process.env.INFISICAL_CLIENT_ID,
       clientSecret: process.env.INFISICAL_SECRET!,
-      siteUrl: 'https://secrets.turnersrus.com',
+      siteUrl: 'https://secrets.example.com',
     });
     const secret = await client.getSecret({
       projectId: process.env.INFISICAL_PROJECT_ID!,

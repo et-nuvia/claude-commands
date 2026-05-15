@@ -238,7 +238,7 @@ JSON
   "task_tracker": {
     "backend": "gitlab",
     "id": "42",
-    "url": "https://git.turnersrus.com/group/project/-/issues/42"
+    "url": "https://git.example.com/group/project/-/issues/42"
   }
 }
 JSON
@@ -318,13 +318,13 @@ JSON
     cat > PROJECT.yaml <<'YAML'
 git:
   platform: gitlab
-  instance: git.turnersrus.com
+  instance: git.example.com
   repo: docker/mcps
 YAML
     write_current_task "A3F2B9" "feature/A3F2B9-task" "main" "docs/TSK.md" "gitlab" "42"
     [ "$(jq -r '.task_tracker.backend' .current-task)" = "gitlab" ]
     [ "$(jq -r '.task_tracker.id' .current-task)" = "42" ]
-    [ "$(jq -r '.task_tracker.url' .current-task)" = "https://git.turnersrus.com/docker/mcps/-/issues/42" ]
+    [ "$(jq -r '.task_tracker.url' .current-task)" = "https://git.example.com/docker/mcps/-/issues/42" ]
 }
 
 @test "write_current_task: sets task_tracker for github" {

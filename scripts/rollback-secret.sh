@@ -15,6 +15,14 @@ BUCKET=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/project-config.sh"
 source "${SCRIPT_DIR}/lib/colors.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+SECRETS_URL="$(profile_env_get .secrets.url)"
+if [[ -z "$SECRETS_URL" ]]; then
+  echo "rollback-secret: .secrets.url not configured in profile" >&2
+  exit 1
+fi
+SECRETS_API_URL="${SECRETS_URL}/api"
 
 OUTPUT_FORMAT="human"
 INSTANCE_IPS=(${APP_INSTANCES:-localhost})
@@ -133,10 +141,10 @@ else
     log_step "restore_version" "Restoring via Infisical Web UI"
 
     if [[ "$OUTPUT_FORMAT" == "json" ]]; then
-        echo "{\"step\":\"restore_version\",\"status\":\"manual_required\",\"instructions\":\"Navigate to https://secrets.turnersrus.com, select project, environment ${ENV}, folder /${BUCKET}, click DATA secret, Version History, Restore previous version\",\"timestamp\":\"$(date -Iseconds)\"}"
+        echo "{\"step\":\"restore_version\",\"status\":\"manual_required\",\"instructions\":\"Navigate to ${SECRETS_URL}, select project, environment ${ENV}, folder /${BUCKET}, click DATA secret, Version History, Restore previous version\",\"timestamp\":\"$(date -Iseconds)\"}"
     else
         echo "${YELLOW}Manual action required:${NC}"
-        echo "1. Navigate to: https://secrets.turnersrus.com"
+        echo "1. Navigate to: ${SECRETS_URL}"
         echo "2. Project → Environment: ${ENV}"
         echo "3. Folder: /${BUCKET}"
         echo "4. Click secret: DATA"
@@ -215,7 +223,7 @@ if [[ "$BUCKET" == "database" ]]; then
             --env "$ENV" \
             --path "/${BUCKET}" \
             --plain \
-            --domain https://secrets.turnersrus.com/api 2>/dev/null)
+            --domain ${SECRETS_API_URL} 2>/dev/null)
     fi
 
     DB_HOST=$(echo "$CURRENT_SECRET" | jq -r .host)

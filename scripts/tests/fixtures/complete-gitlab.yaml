@@ -3,7 +3,7 @@ version_file: VERSION
 
 git:
   platform: gitlab
-  instance: git.turnersrus.com
+  instance: git.example.com
   repo: docker/mcps
 
 secrets:

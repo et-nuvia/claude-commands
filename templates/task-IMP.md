@@ -156,7 +156,7 @@ ENVIRONMENT=development  # or staging, production
 ```yaml
 # Define ONCE using YAML anchors in docker-compose.yml
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 
@@ -473,7 +473,7 @@ auth:
 ```yaml
 # Bootstrap config (Infisical - Home/WSL only)
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 
@@ -908,7 +908,7 @@ ENVIRONMENT=development
 ```yaml
 # Bootstrap config (defined ONCE with YAML anchor)
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 
@@ -927,7 +927,7 @@ x-infisical-bootstrap: &infisical-bootstrap
 **Adding New Secrets**:
 ```bash
 # Home (Infisical)
-# Add via Infisical UI: https://secrets.turnersrus.com
+# Add via Infisical UI: https://secrets.example.com
 # Select project, environment, add key-value pair
 
 # Work (AWS)

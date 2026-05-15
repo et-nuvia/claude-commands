@@ -425,7 +425,7 @@ elif [[ "$CI_PLATFORM" == "gitlab" ]]; then
     if [[ -n "$GITLAB_TOKEN" ]]; then
         PROJECT_ID=$(git config --get remote.origin.url | grep -oP '(?<=:).*(?=\.git)')
         STATUS=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-            "https://git.turnersrus.com/api/v4/projects/${PROJECT_ID}/pipelines?ref=$(git branch --show-current)" | \
+            "https://git.example.com/api/v4/projects/${PROJECT_ID}/pipelines?ref=$(git branch --show-current)" | \
             jq -r '.[0].status')
         if [[ "$STATUS" != "success" ]]; then
             echo "✗ Pipeline not passing: ${STATUS}"

@@ -15,7 +15,7 @@ Each project must have a `PROJECT.yaml` file with git configuration:
 ```yaml
 git:
   platform: gitlab  # or "github"
-  instance: git.turnersrus.com  # or "github.com"
+  instance: git.example.com  # or "github.com"
   repo: ""  # Optional, auto-detected from git remote if empty
 ```
 
@@ -61,7 +61,7 @@ Pipeline #2221
   SHA: 79baa92f
   Duration: 145s
   Created: 2024-02-08T21:40:15.000Z
-  URL: https://git.turnersrus.com/docker/mcps/-/pipelines/2221
+  URL: https://git.example.com/docker/mcps/-/pipelines/2221
 ```
 
 **Token Usage:** ~50 tokens (compact output)
@@ -122,13 +122,13 @@ Job: build:asana (ID: 12345)
   Stage: build
   Status: success
   Duration: 45s
-  URL: https://git.turnersrus.com/docker/mcps/-/jobs/12345
+  URL: https://git.example.com/docker/mcps/-/jobs/12345
 
 Job: build:invoice-ninja (ID: 12346)
   Stage: build
   Status: success
   Duration: 48s
-  URL: https://git.turnersrus.com/docker/mcps/-/jobs/12346
+  URL: https://git.example.com/docker/mcps/-/jobs/12346
 ```
 
 **Token Usage:** ~100-200 tokens depending on job count
@@ -151,8 +151,8 @@ Get job logs.
 Last 50 lines of job #12345:
 ========================================
 
-Successfully built docker.turnersrus.com/asana-mcp:79baa92f
-Successfully tagged docker.turnersrus.com/asana-mcp:master
+Successfully built docker.example.com/asana-mcp:79baa92f
+Successfully tagged docker.example.com/asana-mcp:master
 ...
 ```
 

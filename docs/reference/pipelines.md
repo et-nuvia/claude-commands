@@ -93,7 +93,7 @@ ENVIRONMENT=staging
 ```yaml
 # docker-compose.yml - Define once
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 
@@ -176,7 +176,7 @@ stages:
 
 variables:
   # Registry
-  REGISTRY: "docker.turnersrus.com"
+  REGISTRY: "docker.example.com"
   REGISTRY_BASE: "${REGISTRY}/${CI_PROJECT_NAME}"
   
   # Image names

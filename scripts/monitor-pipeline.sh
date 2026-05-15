@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib/load-profile.sh"
+
 # Detect CI platform if not provided
 detect_ci_platform() {
   # Tier 1: Git remote URL parsing
@@ -132,7 +135,11 @@ monitor_gitlab() {
     return 1
   fi
 
-  GITLAB_INSTANCE="git.turnersrus.com"
+  GITLAB_INSTANCE=$(profile_env_get .git.instance 2>/dev/null)
+  if [[ -z "$GITLAB_INSTANCE" ]]; then
+    echo "❌ GitLab instance not configured (set environments.<env>.git.instance in profile)" >&2
+    return 1
+  fi
   PROJECT_PATH=$(git config --get remote.origin.url | sed 's/.*:\(.*\)\.git/\1/')
   PROJECT_ID=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
     "https://$GITLAB_INSTANCE/api/v4/projects?search=$PROJECT_PATH" | jq -r '.[0].id')

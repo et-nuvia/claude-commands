@@ -9,6 +9,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/project-config.sh"
 source "${SCRIPT_DIR}/lib/colors.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+_secrets_url="$(profile_env_get .secrets.url)"
+if [[ -z "$_secrets_url" ]]; then
+  echo "rotate-database: .secrets.url not configured in profile" >&2
+  exit 1
+fi
+SECRETS_API_URL="${_secrets_url}/api"
 
 DRY_RUN=false
 AUTO_ROLLBACK=true
@@ -83,7 +91,7 @@ else
         --env "$ENV" \
         --path "/database" \
         --plain \
-        --domain https://secrets.turnersrus.com/api)
+        --domain ${SECRETS_API_URL})
 fi
 
 DB_HOST=$(echo "$CURRENT_SECRET" | jq -r .host)
@@ -170,7 +178,7 @@ if [[ "$DRY_RUN" == "false" ]]; then
         infisical secrets set "DATA=${NEW_SECRET}" \
             --env "$ENV" \
             --path "/database" \
-            --domain https://secrets.turnersrus.com/api
+            --domain ${SECRETS_API_URL}
     fi
 
     echo "${GREEN}✓${NC} Updated secret with dual users"
@@ -310,7 +318,7 @@ if [[ "$DRY_RUN" == "false" ]]; then
         infisical secrets set "DATA=${FINAL_SECRET}" \
             --env "$ENV" \
             --path "/database" \
-            --domain https://secrets.turnersrus.com/api
+            --domain ${SECRETS_API_URL}
     fi
 
     echo "${GREEN}✓${NC} Cleaned up secret"
