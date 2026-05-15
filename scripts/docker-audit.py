@@ -39,6 +39,26 @@ from typing import Any
 
 SCHEMA_VERSION = 2
 
+
+def _profile_get_env(yaml_path: str) -> str:
+    """Read a value from the active profile's current environment block.
+
+    Shells out to lib/load-profile.sh because the profile schema and
+    resolution rules live there. Returns empty string on any failure —
+    callers should treat absence as "use the built-in default".
+    """
+    lib = Path(__file__).parent / "lib" / "load-profile.sh"
+    if not lib.exists():
+        return ""
+    try:
+        result = subprocess.run(
+            ["bash", "-c", f'source "{lib}" && profile_env_get "{yaml_path}"'],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
 CATEGORIES = [
     "base_image", "compose", "security", "operations",
     "networking", "versions", "build_performance", "dhi_compliance",
@@ -1616,8 +1636,13 @@ def check_versions(state: AuditState, compose_file: str, project_root: Path,
         if quick:
             continue
 
-        # Skip private registries
-        private_patterns = [".amazonaws.com", ".gcr.io", "ghcr.io", "turnersrus.com"]
+        # Skip private registries. Generic public-cloud patterns are
+        # baked in; the user's own private registry host is read from the
+        # active profile so this list is not personal to any one user.
+        private_patterns = [".amazonaws.com", ".gcr.io", "ghcr.io", "azurecr.io"]
+        user_registry = _profile_get_env(".registry.host")
+        if user_registry and user_registry != "docker.io":
+            private_patterns.append(user_registry)
         if any(pat in image_name for pat in private_patterns):
             skipped_registries.append(image_name)
             continue

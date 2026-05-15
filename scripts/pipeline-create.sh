@@ -37,6 +37,8 @@ map_status_to_action() {
     esac
 }
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
 
 # JSON output via framework
 output_json() {
@@ -398,10 +400,20 @@ generate_gitlab_pipeline() {
         esac
     done
 
+    # Resolve registry host from PROJECT.yaml (active env) or profile
+    local active_env registry
+    active_env=$(profile_active_environment 2>/dev/null || echo "")
+    registry=""
+    if [[ -n "$active_env" ]] && command -v yq >/dev/null 2>&1 && [[ -f PROJECT.yaml ]]; then
+        registry=$(yq -r ".docker.registries.${active_env} // \"\"" PROJECT.yaml 2>/dev/null || true)
+    fi
+    [[ -z "$registry" || "$registry" == "null" ]] && registry=$(profile_env_get .registry.host)
+    [[ -z "$registry" ]] && registry="REPLACE_ME.example.com"
+
     # Start writing pipeline
     cat > "$pipeline_file" << EOF
 variables:
-  REGISTRY: docker.turnersrus.com
+  REGISTRY: ${registry}
   IMAGE_PREFIX: \${REGISTRY}/${project_name}
   UV_CACHE_DIR: .cache/uv
   PIP_CACHE_DIR: .cache/pip
