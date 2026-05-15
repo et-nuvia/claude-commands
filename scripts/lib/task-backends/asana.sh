@@ -229,8 +229,30 @@ task_hold() {
   local id="${1:?id required}" reason="${2:?reason required}" waiting_on="${3:?waiting_on required}"
   # Asana doesn't have a native "on-hold" state. Convention:
   #   1. Add a comment recording the reason + waiting_on
-  #   2. (Optional) move to a "Hold" section if the project has one
+  #   2. Move the task into a section whose name contains "hold"
+  #      (case-insensitive) so _asana_normalize_task detects on_hold
+  #      via .memberships[].section.name
   task_comment "$id" "⏸️ On hold: ${reason}. Waiting on: ${waiting_on}." || return $?
+
+  local project
+  project=$(_asana_default_project)
+  if [[ -z "$project" ]]; then
+    echo "task_hold(asana): no default_project configured; comment added but task is not marked on_hold" >&2
+    return 0
+  fi
+
+  # Find a section in the project whose name contains "hold"
+  local sections hold_section
+  sections=$(_asana_call GET "/projects/${project}/sections?opt_fields=gid,name") || return $?
+  hold_section=$(jq -r '.data[] | select((.name | ascii_downcase) | contains("hold")) | .gid' <<<"$sections" | head -1)
+
+  if [[ -z "$hold_section" ]]; then
+    echo "task_hold(asana): no section named '*hold*' found in project ${project}; comment added but task is not marked on_hold" >&2
+    return 0
+  fi
+
+  _asana_call POST "/sections/${hold_section}/addTask" -H "Content-Type: application/json" \
+    -d "$(jq -nc --arg t "$id" '{data: {task: $t}}')" >/dev/null
 }
 
 task_resume() {

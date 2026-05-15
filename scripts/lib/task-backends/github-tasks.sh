@@ -89,9 +89,30 @@ task_list() {
     | jq -sc .
 }
 
+# Resolve owner/repo in form "owner/repo". Tries PROJECT.yaml first,
+# then asks gh once (cheap; caches the result for the shell session).
+_github_tasks_full_repo() {
+  if [[ -n "${_GH_FULL_REPO_CACHED:-}" ]]; then
+    echo "$_GH_FULL_REPO_CACHED"
+    return
+  fi
+  local r
+  r=$(_github_tasks_repo)
+  if [[ -z "$r" ]]; then
+    r=$(_gh_tasks repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || return 1
+  fi
+  _GH_FULL_REPO_CACHED="$r"
+  echo "$r"
+}
+
 task_search() {
   local query="${1:?query required}"
-  # gh search issues supports the GitHub search syntax
+  # Auto-scope to current repo unless the query already includes repo: qualifier
+  if [[ ! "$query" =~ repo: ]]; then
+    local repo
+    repo=$(_github_tasks_full_repo 2>/dev/null)
+    [[ -n "$repo" ]] && query="repo:${repo} ${query}"
+  fi
   _gh_tasks search issues "$query" --limit 100 \
        --json "$_GH_ISSUE_FIELDS,repository" \
     | jq -c '.[]' \
@@ -101,7 +122,9 @@ task_search() {
 
 task_url() {
   local id="${1:?id required}"
-  _gh_tasks issue view "$id" --json url -q .url
+  local repo
+  repo=$(_github_tasks_full_repo) || return 1
+  echo "https://github.com/${repo}/issues/${id}"
 }
 
 task_health() {
