@@ -1,6 +1,6 @@
 # Infisical API Guide
 
-This guide documents how to interact with the Infisical API at `secrets.turnersrus.com` for programmatic secrets management.
+This guide documents how to interact with the Infisical API at `secrets.example.com` for programmatic secrets management.
 
 ## Authentication
 
@@ -25,7 +25,7 @@ Machine Identities are used for programmatic API access. To set up:
 
 ```bash
 # Exchange credentials for access token
-curl -X POST "https://secrets.turnersrus.com/api/v1/auth/universal-auth/login" \
+curl -X POST "https://secrets.example.com/api/v1/auth/universal-auth/login" \
   -H "Content-Type: application/json" \
   -d '{
     "clientId": "<client-id>",
@@ -63,7 +63,7 @@ POST /api/v2/workspace
 ```
 
 ```bash
-curl -X POST "https://secrets.turnersrus.com/api/v2/workspace" \
+curl -X POST "https://secrets.example.com/api/v2/workspace" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -88,7 +88,7 @@ POST /api/v1/projects/{projectId}/environments
 ```
 
 ```bash
-curl -X POST "https://secrets.turnersrus.com/api/v1/projects/$PROJECT_ID/environments" \
+curl -X POST "https://secrets.example.com/api/v1/projects/$PROJECT_ID/environments" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -116,7 +116,7 @@ POST /api/v3/secrets/raw/{secretName}
 ```
 
 ```bash
-curl -X POST "https://secrets.turnersrus.com/api/v3/secrets/raw/DATABASE_URL" \
+curl -X POST "https://secrets.example.com/api/v3/secrets/raw/DATABASE_URL" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -136,7 +136,7 @@ GET /api/v3/secrets/raw/{secretName}?environment={env}&workspaceId={projectId}&s
 ```
 
 ```bash
-curl "https://secrets.turnersrus.com/api/v3/secrets/raw/DATABASE_URL?environment=dev&workspaceId=$PROJECT_ID&secretPath=/" \
+curl "https://secrets.example.com/api/v3/secrets/raw/DATABASE_URL?environment=dev&workspaceId=$PROJECT_ID&secretPath=/" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -147,7 +147,7 @@ GET /api/v3/secrets/raw?environment={env}&workspaceId={projectId}&secretPath=/
 ```
 
 ```bash
-curl "https://secrets.turnersrus.com/api/v3/secrets/raw?environment=dev&workspaceId=$PROJECT_ID&secretPath=/" \
+curl "https://secrets.example.com/api/v3/secrets/raw?environment=dev&workspaceId=$PROJECT_ID&secretPath=/" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -164,7 +164,7 @@ POST /api/v2/workspace/{projectId}/memberships
 ```
 
 ```bash
-curl -X POST "https://secrets.turnersrus.com/api/v2/workspace/$PROJECT_ID/memberships" \
+curl -X POST "https://secrets.example.com/api/v2/workspace/$PROJECT_ID/memberships" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -182,7 +182,7 @@ POST /api/v2/workspace/{projectId}/identity-memberships/{identityId}
 ```
 
 ```bash
-curl -X POST "https://secrets.turnersrus.com/api/v2/workspace/$PROJECT_ID/identity-memberships/$IDENTITY_ID" \
+curl -X POST "https://secrets.example.com/api/v2/workspace/$PROJECT_ID/identity-memberships/$IDENTITY_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"role": "admin"}'
@@ -199,7 +199,7 @@ Here's a complete script to set up a new project with environments and secrets:
 set -euo pipefail
 
 # Configuration
-INFISICAL_URL="https://secrets.turnersrus.com"
+INFISICAL_URL="https://secrets.example.com"
 CLIENT_ID="your-client-id"
 CLIENT_SECRET="your-client-secret"
 PROJECT_NAME="my-project"

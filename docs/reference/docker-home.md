@@ -57,7 +57,7 @@ ENVIRONMENT=development
 **Server `.env` (written by deploy script):**
 ```bash
 ENVIRONMENT=staging
-REGISTRY=docker.turnersrus.com
+REGISTRY=docker.example.com
 IMAGE_TAG=0.53.0-staging.1234
 ```
 
@@ -78,7 +78,7 @@ and referenced by all application services. This is the only config in compose b
 ```yaml
 # In docker-compose.yml
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 ```
@@ -165,14 +165,14 @@ services:
 image: ${REGISTRY:-}${REGISTRY:+/}${IMAGE_REPO:-my-project}:${IMAGE_TAG:-dev}
 ```
 - Local: resolves to `my-project:dev` (builds locally)
-- Server: resolves to `docker.turnersrus.com/my-project:0.53.0-staging.1234`
+- Server: resolves to `docker.example.com/my-project:0.53.0-staging.1234`
 
 **Multi-service:**
 ```yaml
 image: ${REGISTRY:-}${REGISTRY:+/}${IMAGE_PROJECT:-my-project}/frontend:${IMAGE_TAG:-dev}
 ```
 - Local: resolves to `my-project/frontend:dev`
-- Server: resolves to `docker.turnersrus.com/my-project/frontend:0.53.0-staging.1234`
+- Server: resolves to `docker.example.com/my-project/frontend:0.53.0-staging.1234`
 
 ### Single-Service Project
 
@@ -182,7 +182,7 @@ image: ${REGISTRY:-}${REGISTRY:+/}${IMAGE_PROJECT:-my-project}/frontend:${IMAGE_
 name: my-project
 
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 
@@ -316,7 +316,7 @@ services:
 name: my-project
 
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "abc-123-def"
   INFISICAL_PROJECT_ID: "4fc89a1a..."
 
@@ -605,7 +605,7 @@ In addition to the [global checklist](docker.md#checklist):
 ### CI/CD
 - [ ] GitLab CI uses `docker build` with `--build-arg RUN_TESTS=true`
 - [ ] Trivy image scan before registry push
-- [ ] Registry login step before push (`docker.turnersrus.com`)
+- [ ] Registry login step before push (`docker.example.com`)
 
 ### .env Files
 - [ ] Local `.env`: `ENVIRONMENT=development` (and nothing else)

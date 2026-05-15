@@ -152,7 +152,7 @@ class SecretsService
     private function fetchFromInfisical(string $env, string $bucket): array
     {
         $client = new \GuzzleHttp\Client();
-        $response = $client->get('https://secrets.turnersrus.com/api/v3/secrets', [
+        $response = $client->get('https://secrets.example.com/api/v3/secrets', [
             'headers' => [
                 'Authorization' => 'Bearer ' . env('INFISICAL_TOKEN'),
             ],

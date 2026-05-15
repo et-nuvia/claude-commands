@@ -238,7 +238,7 @@ RESULT=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: app
     "tags": ["professional"],
     "technologies": ["Python", "Docker"],
     "url": "https://example.com",
-    "repository": "https://git.turnersrus.com/products/project",
+    "repository": "https://git.example.com/products/project",
     "sortOrder": 1
   }')
 DOC_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['documentId'])")

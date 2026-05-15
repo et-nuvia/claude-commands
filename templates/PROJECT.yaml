@@ -75,7 +75,7 @@ ci:
 # Git Configuration (auto-detected from git remote)
 git:
   platform: ""                    # "github" or "gitlab"
-  instance: ""                    # "github.com" or "git.turnersrus.com"
+  instance: ""                    # "github.com" or "git.example.com"
   repo: ""                        # "owner/repo" or "group/project"
 
 # ============================================================================

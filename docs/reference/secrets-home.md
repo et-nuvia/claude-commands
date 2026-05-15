@@ -20,7 +20,7 @@ This guide shows how to use Infisical with Docker containers using the most secu
 
 ### 1.1 Access Infisical UI
 
-Go to: `https://secrets.turnersrus.com/project/{your-project}/settings/machine-identities`
+Go to: `https://secrets.example.com/project/{your-project}/settings/machine-identities`
 
 ### 1.2 Create Identity for Each Environment
 
@@ -243,7 +243,7 @@ CMD ["npm", "run", "start"]
 ```yaml
 # Define bootstrap config ONCE at top (YAML anchor)
 x-infisical-bootstrap: &infisical-bootstrap
-  INFISICAL_URL: "https://secrets.turnersrus.com"
+  INFISICAL_URL: "https://secrets.example.com"
   INFISICAL_CLIENT_ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
   INFISICAL_PROJECT_ID: "4fc89a1a-cd59-46c5-809b-8997cc2353a2"
 
@@ -388,7 +388,7 @@ docker exec backend ls -la /run/secrets/
 ```bash
 # Test authentication manually
 CLIENT_SECRET=$(cat secrets/backend_client_secret)
-curl -X POST "https://secrets.turnersrus.com/api/v1/auth/universal-auth/login" \
+curl -X POST "https://secrets.example.com/api/v1/auth/universal-auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"clientId\":\"YOUR_CLIENT_ID\",\"clientSecret\":\"${CLIENT_SECRET}\"}"
 ```

@@ -127,7 +127,7 @@ aws secretsmanager update-secret \
 
 ## Infisical (Home)
 
-Instance: `secrets.turnersrus.com`
+Instance: `secrets.example.com`
 
 Infisical stores secrets as key-value pairs. To match the AWS JSON structure, we store the entire bucket as a single secret with JSON value.
 
@@ -173,7 +173,7 @@ infisical secrets set \
 ```
 
 ### Web UI Structure
-In Infisical web UI at secrets.turnersrus.com:
+In Infisical web UI at secrets.example.com:
 ```
 Project: myapp
 ├── Development
@@ -249,7 +249,7 @@ def _get_infisical_secret(app: str, env: str, bucket: str) -> dict[str, str]:
     client = InfisicalClient(ClientSettings(
         client_id=os.environ.get("INFISICAL_CLIENT_ID"),
         client_secret=os.environ["INFISICAL_SECRET"],
-        site_url="https://secrets.turnersrus.com"
+        site_url="https://secrets.example.com"
     ))
 
     # Get the DATA secret which contains the JSON bucket
@@ -333,7 +333,7 @@ async function getInfisicalSecret(
   const client = new InfisicalClient({
     clientId: process.env.INFISICAL_CLIENT_ID,
     clientSecret: process.env.INFISICAL_SECRET!,
-    siteUrl: "https://secrets.turnersrus.com",
+    siteUrl: "https://secrets.example.com",
   });
 
   // Get the DATA secret which contains the JSON bucket
@@ -531,7 +531,7 @@ async function fetchFromInfisical(app: string, env: string, bucket: string): Pro
   const client = new InfisicalClient({
     clientId: process.env.INFISICAL_CLIENT_ID,
     clientSecret: process.env.INFISICAL_SECRET!,
-    siteUrl: 'https://secrets.turnersrus.com',
+    siteUrl: 'https://secrets.example.com',
   });
   const secret = await client.getSecret({
     projectId: process.env.INFISICAL_PROJECT_ID!,
@@ -869,7 +869,7 @@ class SecretsService
     private function fetchFromInfisical(string $env, string $bucket): array
     {
         $client = new \GuzzleHttp\Client();
-        $response = $client->get("https://secrets.turnersrus.com/api/v3/secrets", [
+        $response = $client->get("https://secrets.example.com/api/v3/secrets", [
             'headers' => [
                 'Authorization' => 'Bearer ' . env('INFISICAL_TOKEN'),
             ],

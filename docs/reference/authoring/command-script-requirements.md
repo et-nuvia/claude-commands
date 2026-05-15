@@ -202,7 +202,7 @@ Scripts return these special values when config issues occur:
 #     registry=.docker.registry
 #
 # Output:
-#   {"staging_host":"192.168.1.10","staging_port":"22","registry":"docker.turnersrus.com"}
+#   {"staging_host":"192.168.1.10","staging_port":"22","registry":"docker.example.com"}
 #
 get_project_config() {
     local project_root="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"

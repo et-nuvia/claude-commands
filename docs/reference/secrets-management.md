@@ -51,7 +51,7 @@ All Infisical bootstrap values are Docker secret files, NOT environment variable
 
 ```
 .secrets/                          # Local dev (gitignored)
-├── infisical_url                  # https://secrets.turnersrus.com
+├── infisical_url                  # https://secrets.example.com
 ├── infisical_client_id            # Machine identity client ID
 ├── infisical_client_secret        # Machine identity client secret
 ├── infisical_project_id           # Infisical project UUID

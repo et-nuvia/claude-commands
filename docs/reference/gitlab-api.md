@@ -1,6 +1,6 @@
 # GitLab API Guide
 
-This guide documents how to interact with the GitLab API at `git.turnersrus.com` for programmatic project and CI/CD management.
+This guide documents how to interact with the GitLab API at `git.example.com` for programmatic project and CI/CD management.
 
 ## Authentication
 
@@ -17,7 +17,7 @@ This token has `api` scope and can be used for all GitLab API operations.
 
 ```bash
 GITLAB_TOKEN=$(cat ~/.gitlab-token)
-curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://git.turnersrus.com/api/v4/..."
+curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://git.example.com/api/v4/..."
 ```
 
 ---
@@ -29,7 +29,7 @@ curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://git.turnersrus.com/api/v4/..."
 ```bash
 # Get current user
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/user"
+  "https://git.example.com/api/v4/user"
 ```
 
 ### Projects
@@ -37,15 +37,15 @@ curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 ```bash
 # List all projects you have access to
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects?membership=true"
+  "https://git.example.com/api/v4/projects?membership=true"
 
 # Search for a project
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects?search=projectname"
+  "https://git.example.com/api/v4/projects?search=projectname"
 
 # Get project by ID
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/106"
+  "https://git.example.com/api/v4/projects/106"
 ```
 
 ---
@@ -56,14 +56,14 @@ curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 ```bash
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/variables"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/variables"
 ```
 
 ### Create Variable
 
 ```bash
 curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/variables" \
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/variables" \
   --form "key=MY_VARIABLE" \
   --form "value=my-value" \
   --form "masked=true" \
@@ -74,7 +74,7 @@ curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 ```bash
 curl -X PUT -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/variables/MY_VARIABLE" \
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/variables/MY_VARIABLE" \
   --form "value=new-value" \
   --form "masked=true"
 ```
@@ -83,7 +83,7 @@ curl -X PUT -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 ```bash
 curl -X DELETE -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/variables/MY_VARIABLE"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/variables/MY_VARIABLE"
 ```
 
 ---
@@ -95,11 +95,11 @@ For variables shared across multiple projects in a group:
 ```bash
 # List group variables
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/groups/$GROUP_ID/variables"
+  "https://git.example.com/api/v4/groups/$GROUP_ID/variables"
 
 # Create group variable
 curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/groups/$GROUP_ID/variables" \
+  "https://git.example.com/api/v4/groups/$GROUP_ID/variables" \
   --form "key=SHARED_VAR" \
   --form "value=shared-value"
 ```
@@ -112,21 +112,21 @@ curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 ```bash
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/pipelines"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/pipelines"
 ```
 
 ### Get Pipeline Details
 
 ```bash
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID"
 ```
 
 ### Trigger Pipeline
 
 ```bash
 curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/pipeline" \
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/pipeline" \
   --form "ref=main"
 ```
 
@@ -134,14 +134,14 @@ curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 ```bash
 curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID/retry"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID/retry"
 ```
 
 ### Cancel Pipeline
 
 ```bash
 curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID/cancel"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID/cancel"
 ```
 
 ---
@@ -152,21 +152,21 @@ curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
 
 ```bash
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID/jobs"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/pipelines/$PIPELINE_ID/jobs"
 ```
 
 ### Get Job Log
 
 ```bash
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/jobs/$JOB_ID/trace"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/jobs/$JOB_ID/trace"
 ```
 
 ### Retry Job
 
 ```bash
 curl -X POST -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://git.turnersrus.com/api/v4/projects/$PROJECT_ID/jobs/$JOB_ID/retry"
+  "https://git.example.com/api/v4/projects/$PROJECT_ID/jobs/$JOB_ID/retry"
 ```
 
 ---
@@ -188,7 +188,7 @@ from pathlib import Path
 class GitLabClient:
     """Client for GitLab API."""
 
-    def __init__(self, url: str = "https://git.turnersrus.com"):
+    def __init__(self, url: str = "https://git.example.com"):
         self.url = url.rstrip('/')
         self.token = Path("~/.gitlab-token").expanduser().read_text().strip()
 
