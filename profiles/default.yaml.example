@@ -36,7 +36,7 @@ environments:
       host: docker.example.com
       auth: infisical            # iam | infisical | docker-hub
     secrets:
-      backend: infisical         # infisical | aws-secrets-manager
+      backend: infisical         # infisical | aws-secrets-manager | none
       bootstrap_dir: .secrets
       url: https://secrets.example.com   # only used by self-hosted Infisical
     task_management:
