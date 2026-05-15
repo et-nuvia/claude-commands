@@ -36,20 +36,20 @@ setup() {
 }
 
 @test "dispatcher: aws-secrets-manager alias maps to aws-sm" {
-  # Only succeeds if aws CLI installed; otherwise the adapter file's
-  # top-level guard returns 1. Assert that the dispatcher resolves the
-  # alias even when load fails for environmental reasons.
-  SM_ADAPTER_OVERRIDE=aws-secrets-manager run bash -c \
-    'source scripts/lib/secrets-api.sh; load_sm_adapter 2>&1 || true; sm_adapter_name 2>/dev/null'
-  # Either succeeds with "aws-sm" or fails with a recognizable error
-  if [ "$status" -eq 0 ] && [ -n "$output" ]; then
-    [[ "$output" == *"aws-sm"* ]]
-  else
-    # CLI missing path — verify the resolver picked the right filename
-    SM_ADAPTER_OVERRIDE=aws-secrets-manager run bash -c \
-      'source scripts/lib/secrets-api.sh; load_sm_adapter 2>&1 || true'
-    [[ "$output" == *"aws-sm"* ]] || [[ "$output" == *"aws CLI"* ]]
-  fi
+  # Whether the aws CLI is installed or not, the dispatcher should
+  # resolve the alias to the canonical name 'aws-sm'.
+  # - If aws CLI is installed: load succeeds, sm_adapter_name = "aws-sm"
+  # - If aws CLI is missing:   load fails, but stderr mentions "aws-sm" path
+  SM_ADAPTER_OVERRIDE=aws-secrets-manager run bash -c '
+    source scripts/lib/secrets-api.sh
+    if load_sm_adapter 2>/tmp/sm_alias_stderr; then
+      sm_adapter_name
+    else
+      cat /tmp/sm_alias_stderr
+    fi
+    rm -f /tmp/sm_alias_stderr
+  '
+  [[ "$output" == *"aws-sm"* ]]
 }
 
 @test "every adapter file implements every contract function" {

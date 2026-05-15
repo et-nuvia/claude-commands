@@ -52,7 +52,24 @@ addressing (Infisical paths, AWS secret name segments).
 | Function | Args | Returns |
 |---|---|---|
 | `sm_set` | `<env> <path> <key> <value>` | empty on success |
-| `sm_set_json` | `<env> <path> <json>` | empty on success; replaces ALL keys at path |
+| `sm_set_json` | `<env> <path> <json>` | empty on success; **see semantics note below** |
+
+**`sm_set_json` semantics differ by adapter** because the underlying
+APIs differ:
+
+| Adapter | Behavior |
+|---|---|
+| `aws-sm` | **Replaces** the entire blob. Keys present in the secret but absent from the JSON are deleted. |
+| `infisical` | **Merges** — sets each key in the JSON via the Infisical CLI. Keys present in the secret but absent from the JSON are **preserved** (the CLI has no native replace-all). |
+| `none` | No-op (returns exit 3). |
+
+If you need guaranteed replace-all semantics across all backends, do
+the diff yourself: `sm_get_json` first, compute keys-to-delete, delete
+them via backend-specific means (currently not part of the contract),
+then `sm_set_json`. In practice, the rotation scripts that use
+`sm_set_json` write the complete intended state anyway, so the
+distinction doesn't bite — but write defensively if you don't control
+all callers.
 
 ### Versions
 
@@ -60,6 +77,17 @@ addressing (Infisical paths, AWS secret name segments).
 |---|---|---|
 | `sm_versions` | `<env> <path> <key>` | JSON array `[{version, created_at, is_current}]` |
 | `sm_restore` | `<env> <path> <key> <version>` | empty on success |
+
+**Version granularity differs by adapter:**
+
+| Adapter | Granularity |
+|---|---|
+| `aws-sm` | Versions are **per-blob** (the entire secret value). The `<key>` arg is accepted but ignored — restoring a version restores all keys at once. |
+| `infisical` | Version history is not exposed by the CLI. `sm_versions` returns `[]` with a stderr warning; `sm_restore` returns exit 3 with manual UI instructions. |
+| `none` | Returns `[]` / exit 3. |
+
+The `<key>` arg is reserved in the contract for future backends that
+support per-key version history.
 
 ### Rotation
 

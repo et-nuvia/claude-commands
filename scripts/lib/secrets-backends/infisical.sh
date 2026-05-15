@@ -157,5 +157,15 @@ sm_health() {
     echo "sm_health(infisical): CLI not authenticated (run: infisical login)" >&2
     return 1
   fi
+  # Try a project-scoped operation if SM_HEALTH_ENV is set, so callers
+  # can verify not just auth but actual access. Defaults to skipping
+  # this stronger check since it requires knowing a valid env name.
+  if [[ -n "${SM_HEALTH_ENV:-}" ]]; then
+    if ! infisical secrets --env "${SM_HEALTH_ENV}" --path / --plain \
+         "${_INFISICAL_DOMAIN_ARGS[@]}" >/dev/null 2>&1; then
+      echo "sm_health(infisical): authenticated but cannot read env=${SM_HEALTH_ENV}" >&2
+      return 1
+    fi
+  fi
   return 0
 }

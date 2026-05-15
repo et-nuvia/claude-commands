@@ -68,6 +68,13 @@ _aws_call() {
 
 # Fetch the full secret JSON for an env+path. Used internally by sm_get
 # and sm_get_json.
+#
+# Exit code semantics from the perspective of a caller:
+#   0 = success, blob on stdout
+#   1 = configuration error (missing _AWS_APP_NAME, network/auth)
+#   2 = secret not found (the resource doesn't exist at that path)
+# Callers that need to distinguish "not set up yet" (1) from "no data
+# yet" (2) should branch on the exit code.
 _aws_get_secret_blob() {
   local env="$1" path="$2"
   local name
@@ -123,6 +130,14 @@ sm_set() {
 
   # Read-modify-write: AWS SM is one blob per secret, so updating one
   # key means merging into the existing JSON.
+  #
+  # WARNING: NOT safe for concurrent callers. Two processes calling
+  # sm_set against the same path simultaneously will both fetch the
+  # original blob, both compute a merged result containing only their
+  # own key, and the second put-secret-value will silently clobber the
+  # first. Safe today because all callers (rotation scripts) are
+  # single-actor. If you add concurrent callers, switch to the AWS SDK
+  # and pass ClientRequestToken / use a conditional update.
   blob=$(_aws_get_secret_blob "$env" "$path" 2>/dev/null)
   if [[ -z "$blob" ]]; then
     blob="{}"
