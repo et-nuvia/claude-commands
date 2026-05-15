@@ -22,11 +22,16 @@ git_pipeline_status "$pipeline_id"
 
 ## Contract
 
-Every adapter MUST implement every function below, even if as a stub
-that returns `1` with an `unsupported` message. All functions return JSON
-on stdout (or empty), human-readable errors on stderr, and a meaningful
-exit code (0=success, 1=error, 2=not found, 3=unsupported on this
-backend).
+Every adapter MUST implement every function below. All functions return
+JSON on stdout (or empty), human-readable errors on stderr, and one of
+the following exit codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Error (network, auth, validation, unexpected state) |
+| `2` | Not found (the requested resource doesn't exist) |
+| `3` | **Reserved.** Future contract additions that aren't yet implemented on every adapter should return `3` so callers can detect "this platform doesn't support that yet." Today, every function is implemented on every adapter — no function returns `3`. |
 
 ### Issues / work items
 

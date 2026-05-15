@@ -37,13 +37,22 @@ setup() {
   [ "$output" = "gitlab" ]
 }
 
+@test "dispatcher: load_git_adapter accepts github override" {
+  GIT_ADAPTER_OVERRIDE=github run bash -c \
+    'source scripts/lib/git-api.sh; load_git_adapter && git_adapter_name && declare -F git_health'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github"* ]]
+  [[ "$output" == *"git_health"* ]]
+}
+
 @test "every adapter file implements every contract function" {
+  # Accepts both `foo()` and `function foo {` / `function foo()` syntaxes
   local missing=""
   for adapter in "$ADAPTERS_DIR"/*.sh; do
     local name
     name=$(basename "$adapter" .sh)
     for fn in "${CONTRACT_FUNCTIONS[@]}"; do
-      if ! grep -qE "^${fn}\(\)" "$adapter"; then
+      if ! grep -qE "^(${fn}\(\)|function ${fn}( |\(|\{))" "$adapter"; then
         missing="${missing}${name}:${fn} "
       fi
     done
