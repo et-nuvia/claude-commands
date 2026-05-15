@@ -24,6 +24,26 @@ from pathlib import Path
 from typing import Any
 
 
+def _profile_get_env(yaml_path: str) -> str:
+    """Read a value from the active profile's current environment block.
+
+    Shells out to lib/load-profile.sh because the profile schema and
+    resolution rules live there. Returns "" on any failure — callers
+    should treat absence as "fall back to generic public defaults".
+    """
+    lib = Path(__file__).parent / "lib" / "load-profile.sh"
+    if not lib.exists():
+        return ""
+    try:
+        result = subprocess.run(
+            ["bash", "-c", f'source "{lib}" && profile_env_get "{yaml_path}"'],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
 # ── Detection helpers ─────────────────────────────────────────────────────────
 
 def detected(value: Any, source: str, confidence: str = "high") -> dict:
@@ -464,14 +484,25 @@ def detect_git(root: Path) -> dict:
     if not remote:
         return result
 
-    # Parse platform and instance
+    # Parse platform and instance. Public hosts first (github.com,
+    # gitlab.com), then check whether the remote matches the user's
+    # self-hosted git instance from their profile.
+    self_hosted = _profile_get_env(".git.instance")
+    if self_hosted in ("github.com", "gitlab.com", ""):
+        self_hosted = ""
+
     if "github.com" in remote:
         result["platform"] = detected("github", "git-remote")
         result["instance"] = detected("github.com", "git-remote")
-    elif "git.turnersrus.com" in remote or "gitlab" in remote:
+    elif self_hosted and self_hosted in remote:
+        # Self-hosted instance from profile — assume gitlab unless the
+        # profile explicitly says otherwise
+        platform = _profile_get_env(".git.platform") or "gitlab"
+        result["platform"] = detected(platform, "git-remote")
+        result["instance"] = detected(self_hosted, "git-remote")
+    elif "gitlab" in remote:
         result["platform"] = detected("gitlab", "git-remote")
-        instance = "git.turnersrus.com" if "turnersrus" in remote else "gitlab.com"
-        result["instance"] = detected(instance, "git-remote")
+        result["instance"] = detected("gitlab.com", "git-remote")
     else:
         # Extract domain from URL
         m = re.search(r"[@/]([^/:@]+)[:/]", remote)

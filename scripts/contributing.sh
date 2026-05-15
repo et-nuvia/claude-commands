@@ -17,6 +17,8 @@ map_status_to_action() {
     esac
 }
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/load-profile.sh"
 
 # Section flags
 RUN_FULL=false
@@ -115,8 +117,17 @@ detect_project_type() {
   # Check if this is a fork
   if git remote | grep -q upstream; then
     echo "fork"
-  # Check if it's a personal project (no CONTRIBUTING.md, likely personal remote)
-  elif [[ ! -f "CONTRIBUTING.md" ]] && [[ "$remote_url" =~ (turnersrus|personal) ]]; then
+  # Check if it's a personal project (no CONTRIBUTING.md, and the remote
+  # matches the user's self-hosted git instance from their profile, or
+  # is literally labeled "personal" in the URL)
+  elif [[ ! -f "CONTRIBUTING.md" ]] && {
+    [[ "$remote_url" =~ personal ]] ||
+    { personal_host=$(profile_env_get .git.instance 2>/dev/null); \
+      [[ -n "$personal_host" ]] && \
+      [[ "$personal_host" != "github.com" ]] && \
+      [[ "$personal_host" != "gitlab.com" ]] && \
+      [[ "$remote_url" == *"$personal_host"* ]]; };
+  }; then
     echo "personal"
   # Has CONTRIBUTING.md = likely open source
   elif [[ -f "CONTRIBUTING.md" ]]; then
