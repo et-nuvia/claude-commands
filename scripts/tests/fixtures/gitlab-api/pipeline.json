@@ -8,7 +8,7 @@
   "source": "push",
   "created_at": "2026-02-14T09:22:00.000Z",
   "updated_at": "2026-02-14T09:30:00.000Z",
-  "web_url": "https://git.turnersrus.com/docker/mcps/-/pipelines/12345",
+  "web_url": "https://git.example.com/docker/mcps/-/pipelines/12345",
   "duration": 480,
   "finished_at": "2026-02-14T09:30:00.000Z"
 }

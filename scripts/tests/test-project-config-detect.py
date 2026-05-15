@@ -433,10 +433,14 @@ class TestDetectGit:
         assert r["platform"]["value"] == "github"
         assert r["repo"]["value"] == "myorg/my-repo"
 
-    def test_gitlab_turnersrus_url(self, tmp_project):
-        r = self._run_with_remote(tmp_project, "git@git.turnersrus.com:eric/my-project.git")
+    def test_gitlab_self_hosted_via_profile(self, tmp_project):
+        # When the remote host matches profile .git.instance and is not
+        # a public provider, detection should return that host. With no
+        # CLAUDE_PROFILE set, load-profile falls back to default.yaml.example
+        # whose home env has git.example.com.
+        r = self._run_with_remote(tmp_project, "git@git.example.com:eric/my-project.git")
         assert r["platform"]["value"] == "gitlab"
-        assert r["instance"]["value"] == "git.turnersrus.com"
+        assert r["instance"]["value"] == "git.example.com"
         assert r["repo"]["value"] == "eric/my-project"
 
     def test_gitlab_com_url(self, tmp_project):
@@ -732,7 +736,7 @@ class TestDetectIntegration:
     def test_full_python_project_structure(self, python_project):
         r = run_detect(
             python_project,
-            git_remote="git@git.turnersrus.com:eric/my-api.git",
+            git_remote="git@git.example.com:eric/my-api.git",
             branches="main\ndev\nfeature/auth",
             uname="Linux",
         )

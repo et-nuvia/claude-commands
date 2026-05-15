@@ -50,7 +50,7 @@ teardown() {
 }
 
 @test "task-capture: detects GitLab issue URL" {
-    run "$SCRIPTS_DIR/task-capture.sh" --json --detect --input "https://git.turnersrus.com/group/project/-/issues/42" 2>/dev/null
+    run "$SCRIPTS_DIR/task-capture.sh" --json --detect --input "https://git.example.com/group/project/-/issues/42" 2>/dev/null
     assert_json_field "$output" ".status" "success"
     assert_json_field "$output" ".source" "gitlab_url"
 }

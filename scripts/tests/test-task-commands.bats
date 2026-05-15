@@ -73,7 +73,7 @@ teardown() {
 
 @test "task-capture: detect GitLab issue returns success with source=gitlab_url" {
     cd "$TEST_DIR"
-    result=$("$SCRIPTS_DIR/task-capture.sh" --json --detect --input "https://git.turnersrus.com/group/project/-/issues/42" 2>&1) || true
+    result=$("$SCRIPTS_DIR/task-capture.sh" --json --detect --input "https://git.example.com/group/project/-/issues/42" 2>&1) || true
     [ "$(echo "$result" | jq -r '.status')" = "success" ]
     [ "$(echo "$result" | jq -r '.source')" = "gitlab_url" ]
 }

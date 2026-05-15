@@ -23,7 +23,7 @@ teardown() {
     [ "$status" -eq 0 ]
     assert_valid_json "$output"
     assert_json_field "$output" ".platform" "gitlab"
-    assert_json_field "$output" ".instance" "git.turnersrus.com"
+    assert_json_field "$output" ".instance" "git.example.com"
     assert_json_field "$output" ".repo" "docker/mcps"
 }
 
@@ -40,7 +40,7 @@ teardown() {
 @test "git-detect: gitlab api_url is correct" {
     setup_mock_project "complete-gitlab"
     run "$SCRIPTS_DIR/git-detect.sh"
-    assert_json_field "$output" ".api_url" "https://git.turnersrus.com/api/v4"
+    assert_json_field "$output" ".api_url" "https://git.example.com/api/v4"
 }
 
 @test "git-detect: github api_url is correct" {
@@ -87,7 +87,7 @@ teardown() {
 @test "git-detect: --field instance returns instance value" {
     setup_mock_project "complete-gitlab"
     run "$SCRIPTS_DIR/git-detect.sh" --field instance
-    [ "$output" = "git.turnersrus.com" ]
+    [ "$output" = "git.example.com" ]
 }
 
 @test "git-detect: --field repo returns repo value" {
@@ -99,7 +99,7 @@ teardown() {
 @test "git-detect: --field api_url returns api_url" {
     setup_mock_project "complete-gitlab"
     run "$SCRIPTS_DIR/git-detect.sh" --field api_url
-    [ "$output" = "https://git.turnersrus.com/api/v4" ]
+    [ "$output" = "https://git.example.com/api/v4" ]
 }
 
 @test "git-detect: --field project_path returns encoded path" {

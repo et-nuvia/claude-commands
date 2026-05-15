@@ -32,7 +32,7 @@ YAML
     cat > test.yaml <<'YAML'
 git:
   platform: gitlab
-  instance: git.turnersrus.com
+  instance: git.example.com
 YAML
     result=$(yaml_get '.git.platform' test.yaml)
     [ "$result" = "gitlab" ]
