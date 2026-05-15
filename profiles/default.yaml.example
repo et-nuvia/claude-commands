@@ -40,7 +40,7 @@ environments:
       bootstrap_dir: .secrets
       url: https://secrets.example.com   # only used by self-hosted Infisical
     task_management:
-      backend: gitlab            # asana | gitlab | github | none
+      backend: gitlab            # asana | gitlab | gitlab-tasks | github | github-tasks | none
     deploy:
       targets: [unraid, proxmox, gcp]
 
