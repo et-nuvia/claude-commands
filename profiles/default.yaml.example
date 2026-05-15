@@ -1,0 +1,79 @@
+# claude-commands local profile
+#
+# Copy this to active.yaml (gitignored) and fill in your values.
+# Scripts read this via scripts/lib/load-profile.sh to get
+# environment-specific defaults that should NOT be hardcoded in code.
+#
+# Layering: profile defaults → active.yaml → PROJECT.yaml (per project) →
+# command flags. Later layers override earlier ones.
+
+# ----------------------------------------------------------------------
+# Identity — used in commit messages, PR descriptions, doc headers.
+# ----------------------------------------------------------------------
+identity:
+  name: "Your Name"
+  email: "you@example.com"
+
+# ----------------------------------------------------------------------
+# Environments — define one or more, then set active_environment.
+#
+# An "environment" is a coherent bundle of: git platform, CI platform,
+# container registry, secrets backend, and task backend. The dual
+# work/home setup is just two environments. You can have more.
+# ----------------------------------------------------------------------
+active_environment: home
+
+environments:
+  home:
+    description: "Personal / WSL"
+    git:
+      platform: gitlab           # github | gitlab
+      instance: git.example.com
+      token_file: ~/.gitlab-token
+    ci:
+      platform: gitlab-ci        # github-actions | gitlab-ci
+    registry:
+      host: docker.example.com
+      auth: infisical            # iam | infisical | docker-hub
+    secrets:
+      backend: infisical         # infisical | aws-secrets-manager
+      bootstrap_dir: .secrets
+    task_management:
+      backend: gitlab            # asana | gitlab | github | none
+    deploy:
+      targets: [unraid, proxmox, gcp]
+
+  work:
+    description: "Work / macOS"
+    git:
+      platform: github
+      instance: github.com
+    ci:
+      platform: github-actions
+    registry:
+      host: 000000000000.dkr.ecr.us-east-1.amazonaws.com
+      auth: iam
+    secrets:
+      backend: aws-secrets-manager
+    task_management:
+      backend: asana
+      asana:
+        workspace_id: ""
+        default_project: "Engineering"
+    deploy:
+      targets: [aws]
+
+# ----------------------------------------------------------------------
+# Paths — override only if your layout differs from defaults.
+# ----------------------------------------------------------------------
+paths:
+  projects_root: ~/projects
+  wiki_root: ~/projects/wiki
+
+# ----------------------------------------------------------------------
+# Defaults for scripts that prompt — set to skip the prompt.
+# ----------------------------------------------------------------------
+defaults:
+  task_doc_format: v4            # v3 | v4
+  commit_signoff: false
+  use_worktrees: true

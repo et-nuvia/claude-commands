@@ -1,0 +1,30 @@
+# Personal profile values (company domains, registries, tokens, paths)
+profiles/*.yaml
+!profiles/*.example.yaml
+!profiles/default.yaml
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Python build artifacts (from scripts/)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local-only overrides
+commands-local/
+scripts-local/
+*.local.sh
+*.local.md
+
+# Secrets — should never be in here, but belt and suspenders
+*.token
+.credentials*
+.secrets/
