@@ -45,25 +45,25 @@ _gitlab_tasks_call() {
     gitlab_api "$method" "$endpoint" "$@"
 }
 
-# Map a GitLab issue into the normalized task schema. State comes from
-# labels for hold/in-progress; from state field for open/closed.
-_gitlab_normalize_task() {
-  jq -c '{
-    id: .iid,
-    title: .title,
-    status: (
-      if .state == "closed" then "closed"
-      elif ((.labels // []) | any(. == "on-hold")) then "on_hold"
-      elif ((.labels // []) | any(. == "in-progress")) then "in_progress"
-      else "open" end
-    ),
-    assignee: (.assignee.username // null),
-    created_at: .created_at,
-    updated_at: .updated_at,
-    url: .web_url,
-    raw: .
-  }'
-}
+# jq snippet that maps one GitLab issue into the normalized task schema.
+# Embed via string-paste into a larger jq expression — used both for
+# single-task (task_get) and array-of-tasks (task_list, task_search)
+# without a subshell while-read loop.
+_GITLAB_NORMALIZE_JQ='{
+  id: .iid,
+  title: .title,
+  status: (
+    if .state == "closed" then "closed"
+    elif ((.labels // []) | any(. == "on-hold")) then "on_hold"
+    elif ((.labels // []) | any(. == "in-progress")) then "in_progress"
+    else "open" end
+  ),
+  assignee: (.assignee.username // null),
+  created_at: .created_at,
+  updated_at: .updated_at,
+  url: .web_url,
+  raw: .
+}'
 
 # ----------------------------------------------------------------------
 # Read
@@ -73,7 +73,7 @@ task_get() {
   local id="${1:?id required}"
   local proj
   proj=$(_gitlab_tasks_project_id) || return 1
-  _gitlab_tasks_call GET "/projects/${proj}/issues/${id}" | _gitlab_normalize_task
+  _gitlab_tasks_call GET "/projects/${proj}/issues/${id}" | jq -c "$_GITLAB_NORMALIZE_JQ"
 }
 
 task_list() {
@@ -102,9 +102,7 @@ task_list() {
   local proj
   proj=$(_gitlab_tasks_project_id) || return 1
   _gitlab_tasks_call GET "/projects/${proj}/issues?state=${state}${assignee_filter}&per_page=100" \
-    | jq -c '.[]' \
-    | while read -r issue; do echo "$issue" | _gitlab_normalize_task; done \
-    | jq -sc .
+    | jq -c "[.[] | $_GITLAB_NORMALIZE_JQ]"
 }
 
 task_search() {
@@ -113,9 +111,7 @@ task_search() {
   proj=$(_gitlab_tasks_project_id) || return 1
   encoded=$(jq -nr --arg q "$query" '$q | @uri')
   _gitlab_tasks_call GET "/projects/${proj}/issues?search=${encoded}&per_page=100" \
-    | jq -c '.[]' \
-    | while read -r issue; do echo "$issue" | _gitlab_normalize_task; done \
-    | jq -sc .
+    | jq -c "[.[] | $_GITLAB_NORMALIZE_JQ]"
 }
 
 task_url() {
@@ -148,11 +144,17 @@ task_create() {
   local title="${1:?title required}" body="${2:-}" section="${3:-}"
   local proj
   proj=$(_gitlab_tasks_project_id) || return 1
-  # GitLab doesn't have "sections" — translate to milestone if numeric, else label
+  # GitLab doesn't have Asana-style sections. The 'section' arg is
+  # interpreted as a label by default. To target a milestone instead,
+  # pass an explicit 'milestone:<id-or-name>' prefix. The previous
+  # auto-detect-numeric heuristic silently misclassified values like
+  # 'v1.0' (a milestone name) as labels — explicit prefix is safer.
   local extra_args=()
   if [[ -n "$section" ]]; then
-    if [[ "$section" =~ ^[0-9]+$ ]]; then
-      extra_args+=(--data-urlencode "milestone_id=${section}")
+    if [[ "$section" == milestone:* ]]; then
+      extra_args+=(--data-urlencode "milestone_id=${section#milestone:}")
+    elif [[ "$section" == label:* ]]; then
+      extra_args+=(--data-urlencode "labels=${section#label:}")
     else
       extra_args+=(--data-urlencode "labels=${section}")
     fi
@@ -200,16 +202,20 @@ task_hold() {
 
 task_resume() {
   local id="${1:?id required}" comment="${2:-}"
-  local proj
+  local proj state_rc=1
   proj=$(_gitlab_tasks_project_id) || return 1
   _gitlab_tasks_call PUT "/projects/${proj}/issues/${id}" \
     --data-urlencode "remove_labels=on-hold" \
-    --data-urlencode "state_event=reopen" >/dev/null || true
+    --data-urlencode "state_event=reopen" >/dev/null && state_rc=0
   if [[ -n "$comment" ]]; then
-    task_comment "$id" "▶️ Resumed: ${comment}"
+    task_comment "$id" "▶️ Resumed: ${comment}" || return $?
   else
-    task_comment "$id" "▶️ Resumed"
+    task_comment "$id" "▶️ Resumed" || return $?
   fi
+  if [[ "$state_rc" -ne 0 ]]; then
+    echo "task_resume(gitlab-tasks): state update failed — task may already be in the desired state" >&2
+  fi
+  return 0
 }
 
 task_comment() {

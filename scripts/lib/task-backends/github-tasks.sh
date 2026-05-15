@@ -43,24 +43,22 @@ _gh_tasks_get() {
   return "$rc"
 }
 
-# Map a gh-json issue into the normalized task schema.
-_github_normalize_task() {
-  jq -c '{
-    id: .number,
-    title: .title,
-    status: (
-      if (.state | ascii_downcase) == "closed" then "closed"
-      elif (((.labels // []) | map(.name)) | any(. == "on-hold")) then "on_hold"
-      elif (((.labels // []) | map(.name)) | any(. == "in-progress")) then "in_progress"
-      else "open" end
-    ),
-    assignee: (.assignees[0].login // null),
-    created_at: .createdAt,
-    updated_at: .updatedAt,
-    url: .url,
-    raw: .
-  }'
-}
+# jq snippet that maps one gh-json issue into the normalized task schema.
+_GITHUB_NORMALIZE_JQ='{
+  id: .number,
+  title: .title,
+  status: (
+    if (.state | ascii_downcase) == "closed" then "closed"
+    elif (((.labels // []) | map(.name)) | any(. == "on-hold")) then "on_hold"
+    elif (((.labels // []) | map(.name)) | any(. == "in-progress")) then "in_progress"
+    else "open" end
+  ),
+  assignee: (.assignees[0].login // null),
+  created_at: .createdAt,
+  updated_at: .updatedAt,
+  url: .url,
+  raw: .
+}'
 
 _GH_ISSUE_FIELDS='number,title,state,assignees,labels,url,createdAt,updatedAt,body'
 
@@ -70,7 +68,7 @@ _GH_ISSUE_FIELDS='number,title,state,assignees,labels,url,createdAt,updatedAt,bo
 
 task_get() {
   local id="${1:?id required}"
-  _gh_tasks_get issue view "$id" --json "$_GH_ISSUE_FIELDS" | _github_normalize_task
+  _gh_tasks_get issue view "$id" --json "$_GH_ISSUE_FIELDS" | jq -c "$_GITHUB_NORMALIZE_JQ"
 }
 
 task_list() {
@@ -84,9 +82,7 @@ task_list() {
   done
   _gh_tasks issue list --state "$state" "${assignee_arg[@]}" --limit 100 \
        --json "$_GH_ISSUE_FIELDS" \
-    | jq -c '.[]' \
-    | while read -r issue; do echo "$issue" | _github_normalize_task; done \
-    | jq -sc .
+    | jq -c "[.[] | $_GITHUB_NORMALIZE_JQ]"
 }
 
 # Resolve owner/repo in form "owner/repo". Tries PROJECT.yaml first,
@@ -115,9 +111,7 @@ task_search() {
   fi
   _gh_tasks search issues "$query" --limit 100 \
        --json "$_GH_ISSUE_FIELDS,repository" \
-    | jq -c '.[]' \
-    | while read -r issue; do echo "$issue" | _github_normalize_task; done \
-    | jq -sc .
+    | jq -c "[.[] | $_GITHUB_NORMALIZE_JQ]"
 }
 
 task_url() {
@@ -180,13 +174,23 @@ task_hold() {
 
 task_resume() {
   local id="${1:?id required}" comment="${2:-}"
-  _gh_tasks issue reopen "$id" >/dev/null 2>&1 || true
-  _gh_tasks issue edit "$id" --remove-label "on-hold" >/dev/null 2>&1 || true
+  # Best-effort: try to reopen and remove hold label. Both individually
+  # may legitimately fail (task wasn't closed; no hold label). But at
+  # least ONE must succeed plus the comment, otherwise something is
+  # actually wrong (auth/network) and we should signal.
+  local reopen_rc=1 unlabel_rc=1
+  _gh_tasks issue reopen "$id" >/dev/null 2>&1 && reopen_rc=0
+  _gh_tasks issue edit "$id" --remove-label "on-hold" >/dev/null 2>&1 && unlabel_rc=0
   if [[ -n "$comment" ]]; then
-    task_comment "$id" "▶️ Resumed: ${comment}"
+    task_comment "$id" "▶️ Resumed: ${comment}" || return $?
   else
-    task_comment "$id" "▶️ Resumed"
+    task_comment "$id" "▶️ Resumed" || return $?
   fi
+  # Comment succeeded above; if BOTH state ops also failed, surface a warning.
+  if [[ "$reopen_rc" -ne 0 && "$unlabel_rc" -ne 0 ]]; then
+    echo "task_resume(github-tasks): neither reopen nor label removal succeeded — task may already be in the desired state" >&2
+  fi
+  return 0
 }
 
 task_comment() {

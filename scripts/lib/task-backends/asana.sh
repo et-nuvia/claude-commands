@@ -75,25 +75,22 @@ _asana_call() {
   fi
 }
 
-# Map an Asana task into the normalized contract schema.
-_asana_normalize_task() {
-  jq -c '{
-    id: .gid,
-    title: .name,
-    status: (
-      if .completed == true then "closed"
-      # On-hold convention: Asana custom field or section name containing "hold"
-      elif (.memberships // []) | any(.section.name? // "" | ascii_downcase | contains("hold")) then "on_hold"
-      elif (.memberships // []) | any(.section.name? // "" | ascii_downcase | contains("in progress")) then "in_progress"
-      else "open" end
-    ),
-    assignee: (.assignee.name // null),
-    created_at: .created_at,
-    updated_at: .modified_at,
-    url: .permalink_url,
-    raw: .
-  }'
-}
+# jq snippet that maps one Asana task into the normalized task schema.
+_ASANA_NORMALIZE_JQ='{
+  id: .gid,
+  title: .name,
+  status: (
+    if .completed == true then "closed"
+    elif (.memberships // []) | any(.section.name? // "" | ascii_downcase | contains("hold")) then "on_hold"
+    elif (.memberships // []) | any(.section.name? // "" | ascii_downcase | contains("in progress")) then "in_progress"
+    else "open" end
+  ),
+  assignee: (.assignee.name // null),
+  created_at: .created_at,
+  updated_at: .modified_at,
+  url: .permalink_url,
+  raw: .
+}'
 
 # ----------------------------------------------------------------------
 # Read
@@ -102,7 +99,7 @@ _asana_normalize_task() {
 task_get() {
   local id="${1:?id required}"
   _asana_call GET "/tasks/${id}?opt_fields=gid,name,completed,assignee.name,memberships.section.name,created_at,modified_at,permalink_url" \
-    | jq -c '.data' | _asana_normalize_task
+    | jq -c ".data | $_ASANA_NORMALIZE_JQ"
 }
 
 task_list() {
@@ -133,9 +130,7 @@ task_list() {
   esac
 
   _asana_call GET "/tasks?${qs}" \
-    | jq -c '.data[]' \
-    | while read -r task; do echo "$task" | _asana_normalize_task; done \
-    | jq -sc .
+    | jq -c "[.data[] | $_ASANA_NORMALIZE_JQ]"
 }
 
 task_search() {
@@ -150,9 +145,7 @@ task_search() {
   local encoded
   encoded=$(jq -nr --arg q "$query" '$q | @uri')
   _asana_call GET "/workspaces/${ws}/tasks/search?text=${encoded}&opt_fields=gid,name,completed,assignee.name,memberships.section.name,created_at,modified_at,permalink_url" \
-    | jq -c '.data[]' \
-    | while read -r task; do echo "$task" | _asana_normalize_task; done \
-    | jq -sc .
+    | jq -c "[.data[] | $_ASANA_NORMALIZE_JQ]"
 }
 
 task_url() {
@@ -257,14 +250,18 @@ task_hold() {
 
 task_resume() {
   local id="${1:?id required}" comment="${2:-}"
-  # Reopen if completed, OR remove from hold section. Both are best-effort.
+  local uncomplete_rc=1
   _asana_call PUT "/tasks/${id}" -H "Content-Type: application/json" \
-    -d '{"data":{"completed":false}}' >/dev/null || true
+    -d '{"data":{"completed":false}}' >/dev/null && uncomplete_rc=0
   if [[ -n "$comment" ]]; then
-    task_comment "$id" "▶️ Resumed: ${comment}"
+    task_comment "$id" "▶️ Resumed: ${comment}" || return $?
   else
-    task_comment "$id" "▶️ Resumed"
+    task_comment "$id" "▶️ Resumed" || return $?
   fi
+  if [[ "$uncomplete_rc" -ne 0 ]]; then
+    echo "task_resume(asana): uncomplete failed — task may already be incomplete" >&2
+  fi
+  return 0
 }
 
 task_comment() {
