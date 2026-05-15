@@ -2,11 +2,10 @@
 # Appended by scripts/task-start.sh (and friends) on first run in a project.
 # These files are written by command lifecycle scripts and don't belong in
 # version control — they regenerate from the underlying task documents.
+#
+# Note: docs/active/ and docs/completed/ are NOT ignored — they hold the
+# actual task documents (TSK, FND, FIX, RCA, etc.) which are valuable
+# troubleshooting context and need to be shared between developers.
 DOCUMENT-INDEX.md
 SEQUENCE-TRACKER.md
-
-# Task working dirs — the individual task documents (TSK, FND, FIX, etc.)
-# ARE committed; the active/completed bookkeeping symlinks are not.
-docs/active/
-docs/completed/
 # --- end claude-commands ---

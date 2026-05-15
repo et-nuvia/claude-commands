@@ -12,10 +12,12 @@ Per-project contracts and scaffolds:
   RSK, AUD, VRF, IMP, RSC, LRN, SUM, FRV, REV, RFA, DSN, …)
 - **`project-gitignore-snippet.txt`** — block auto-appended to a consuming
   project's `.gitignore` on first task-lifecycle run, so auto-generated
-  tracking files (`DOCUMENT-INDEX.md`, `SEQUENCE-TRACKER.md`,
-  `docs/active/`, `docs/completed/`) don't get committed. Task-start and
-  related scripts are responsible for the append (idempotent via the
-  `# --- claude-commands:` sentinel).
+  tracking files (`DOCUMENT-INDEX.md`, `SEQUENCE-TRACKER.md`) don't get
+  committed. Task-start and related scripts are responsible for the
+  append (idempotent via the `# --- claude-commands:` sentinel). The
+  actual task documents under `docs/active/` and `docs/completed/` are
+  intentionally committed — they're troubleshooting context shared
+  between developers.
 - **`python-project/`**, **`nextjs-project/`**, **`dockerfiles/`**,
   **`makefiles/`**, **`pipelines/`**, **`architecture/`**,
   **`release-notes/`** — scaffolds stamped out by `/scaffold`,

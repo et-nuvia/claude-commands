@@ -33,7 +33,10 @@ scripts-local/
 # lifecycle scripts and are noisy / conflict-prone in shared repos. They
 # belong in each consuming project's .gitignore too — see
 # templates/project-gitignore-snippet.txt for the canonical list.
+#
+# NOTE: docs/active/ and docs/completed/ are intentionally NOT ignored —
+# they hold the actual task documents (TSK, FND, FIX, RCA, etc.) which
+# are valuable troubleshooting context and need to be shared between
+# developers.
 DOCUMENT-INDEX.md
 SEQUENCE-TRACKER.md
-docs/active/
-docs/completed/
