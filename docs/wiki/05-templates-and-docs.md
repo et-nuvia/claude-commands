@@ -10,6 +10,12 @@ Per-project contracts and scaffolds:
   task lifecycle bookkeeping
 - **`task-*.md`** — V4 task document types (TSK, FND, FIX, RCA, DEP, CRV,
   RSK, AUD, VRF, IMP, RSC, LRN, SUM, FRV, REV, RFA, DSN, …)
+- **`project-gitignore-snippet.txt`** — block auto-appended to a consuming
+  project's `.gitignore` on first task-lifecycle run, so auto-generated
+  tracking files (`DOCUMENT-INDEX.md`, `SEQUENCE-TRACKER.md`,
+  `docs/active/`, `docs/completed/`) don't get committed. Task-start and
+  related scripts are responsible for the append (idempotent via the
+  `# --- claude-commands:` sentinel).
 - **`python-project/`**, **`nextjs-project/`**, **`dockerfiles/`**,
   **`makefiles/`**, **`pipelines/`**, **`architecture/`**,
   **`release-notes/`** — scaffolds stamped out by `/scaffold`,

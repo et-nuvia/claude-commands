@@ -28,3 +28,12 @@ scripts-local/
 *.token
 .credentials*
 .secrets/
+
+# Auto-generated per-project tracking files. These are written by task
+# lifecycle scripts and are noisy / conflict-prone in shared repos. They
+# belong in each consuming project's .gitignore too — see
+# templates/project-gitignore-snippet.txt for the canonical list.
+DOCUMENT-INDEX.md
+SEQUENCE-TRACKER.md
+docs/active/
+docs/completed/
