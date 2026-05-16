@@ -78,14 +78,23 @@ while IFS=$'\t' read -r orig flat; do
 done < "${map_file}.sorted"
 
 # Copy + transform each tracked file.
+#
+# Two transforms happen here:
+#   1. Wrap leading YAML frontmatter (`---` ... `---` at the top of the
+#      file) in a ```yaml fenced block. GitHub Wiki doesn't strip
+#      frontmatter, and without a fence each line collapses into one
+#      paragraph because Markdown treats single newlines as soft breaks.
+#   2. Rewrite cross-page links (sed_script from above).
 while IFS=$'\t' read -r orig flat; do
     src_file="$src/$orig"
     dest_file="$dest/$flat"
-    if [[ -s "$sed_script" ]]; then
-        sed -E -f "$sed_script" "$src_file" > "$dest_file"
-    else
-        cp "$src_file" "$dest_file"
-    fi
+    awk '
+        NR == 1 && $0 == "---" { in_fm = 1; print "```yaml"; next }
+        in_fm && $0 == "---"   { in_fm = 0; print "```"; next }
+        { print }
+    ' "$src_file" \
+        | if [[ -s "$sed_script" ]]; then sed -E -f "$sed_script"; else cat; fi \
+        > "$dest_file"
 done < "$map_file"
 
 count="$(wc -l < "$map_file" | tr -d ' ')"
