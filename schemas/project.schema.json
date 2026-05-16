@@ -1,0 +1,1696 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude.ai/schemas/project.schema.json",
+  "title": "PROJECT.yaml",
+  "description": "Claude Code project configuration schema. Defines project identity, tech stack, testing, deployment, secrets, and integrations.",
+  "type": "object",
+  "required": ["name", "testing", "secrets"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project name used in container naming, CI job names, and secret paths"
+    },
+    "description": {
+      "type": "string",
+      "description": "Brief project description for documentation"
+    },
+    "version_file": {
+      "type": "string",
+      "description": "Legacy version file path (VERSION, package.json, pyproject.toml). Omit to use git tags (recommended)"
+    },
+    "version_source": {
+      "type": "string",
+      "enum": ["git-tags", "file"],
+      "description": "How version is determined. git-tags (recommended): derived from conventional commits. file: read from version_file"
+    },
+    "languages": {
+      "type": "array",
+      "description": "Programming languages used in the project",
+      "items": {
+        "$ref": "#/$defs/language"
+      }
+    },
+    "components": {
+      "type": "array",
+      "description": "Project components for monorepos or multi-service projects",
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    },
+    "testing": {
+      "$ref": "#/$defs/testing"
+    },
+    "docker": {
+      "$ref": "#/$defs/docker"
+    },
+    "git": {
+      "$ref": "#/$defs/gitConfig"
+    },
+    "ci": {
+      "$ref": "#/$defs/ciConfig"
+    },
+    "secrets": {
+      "$ref": "#/$defs/secrets"
+    },
+    "databases": {
+      "type": "array",
+      "description": "Database configurations",
+      "items": {
+        "$ref": "#/$defs/database"
+      }
+    },
+    "deployment": {
+      "$ref": "#/$defs/deployment"
+    },
+    "smoke_tests": {
+      "$ref": "#/$defs/smokeTests"
+    },
+    "task_management": {
+      "$ref": "#/$defs/taskManagement"
+    },
+    "notifications": {
+      "$ref": "#/$defs/notifications"
+    },
+    "infrastructure": {
+      "$ref": "#/$defs/infrastructure"
+    },
+    "quality": {
+      "$ref": "#/$defs/quality"
+    },
+    "commands": {
+      "$ref": "#/$defs/commands"
+    },
+    "docs_dir": {
+      "type": "string",
+      "description": "Project documentation directory path relative to project root. Defaults to 'docs' if not set. Used by task management, doc utilities, and all scripts that create/read documentation.",
+      "default": "docs",
+      "examples": ["docs", "documentation", "doc"]
+    },
+    "schema_sync": {
+      "$ref": "#/$defs/schemaSync"
+    }
+  },
+
+  "allOf": [
+    { "$ref": "#/$defs/conditionals/deploymentScript" },
+    { "$ref": "#/$defs/conditionals/deploymentSsh" },
+    { "$ref": "#/$defs/conditionals/deploymentSsm" },
+    { "$ref": "#/$defs/conditionals/taskManagementAsana" },
+    { "$ref": "#/$defs/conditionals/taskManagementGitlab" },
+    { "$ref": "#/$defs/conditionals/taskManagementTaskforge" },
+    { "$ref": "#/$defs/conditionals/infrastructureEnabled" }
+  ],
+
+  "$defs": {
+    "language": {
+      "type": "object",
+      "description": "A programming language used in the project",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Language name (e.g., python, typescript, javascript, go, rust)"
+        },
+        "version": {
+          "type": "string",
+          "description": "Language version (e.g., 3.14, 5.0, ES2022)"
+        },
+        "root": {
+          "type": "string",
+          "description": "Root directory for this language's code (e.g., src, backend, frontend)"
+        }
+      }
+    },
+
+    "component": {
+      "type": "object",
+      "description": "A project component (service, module, or sub-project)",
+      "required": ["name", "path", "language"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Component name"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path relative to project root"
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Primary language of this component"
+        },
+        "framework": {
+          "type": "string",
+          "description": "Framework used (e.g., fastapi, nextjs, nestjs, mcp)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Brief description of this component"
+        },
+        "health_check_path": {
+          "type": "string",
+          "description": "Health check endpoint path (e.g., /api/v1/health)"
+        },
+        "version_path": {
+          "type": "string",
+          "description": "Version endpoint path (e.g., /api/v1/version)"
+        },
+        "internal_port": {
+          "type": "integer",
+          "description": "Internal port the service listens on"
+        },
+        "test_target": {
+          "type": "string",
+          "description": "Make target for pre-merge testing (e.g., test-backend-unit). If unset, falls back to test-{name}"
+        },
+        "lint_target": {
+          "type": "string",
+          "description": "Make target for pre-merge linting (e.g., lint-backend). If unset, falls back to lint-{name}"
+        }
+      }
+    },
+
+    "testing": {
+      "type": "object",
+      "description": "Testing configuration",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Primary test command (e.g., pytest, npm test, make test)"
+        },
+        "coverage_command": {
+          "type": "string",
+          "description": "Coverage report command (e.g., pytest --cov, npm run test:coverage)"
+        },
+        "min_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Minimum coverage percentage (default: 80)"
+        },
+        "e2e_command": {
+          "type": "string",
+          "description": "End-to-end test command (e.g., playwright test, cypress run)"
+        },
+        "e2e_timeout": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "E2E test timeout in seconds"
+        },
+        "server_command": {
+          "type": "string",
+          "description": "Server-side test command"
+        },
+        "server_unit_command": {
+          "type": "string",
+          "description": "Server-side unit test command"
+        },
+        "server_e2e_command": {
+          "type": "string",
+          "description": "Server-side E2E test command"
+        }
+      }
+    },
+
+    "docker": {
+      "type": "object",
+      "description": "Docker configuration",
+      "additionalProperties": false,
+      "properties": {
+        "compose_file": {
+          "type": "string",
+          "description": "Path to docker-compose.yml"
+        },
+        "base_image": {
+          "type": "string",
+          "description": "Base image for Dockerfile (used by /dockerfile-build)"
+        },
+        "ecr_namespace": {
+          "type": "string",
+          "description": "ECR namespace prefix for image repos (e.g., 'nuvia' -> nuvia/project/service)"
+        },
+        "services": {
+          "type": "array",
+          "description": "Expected Docker service names for health checks",
+          "items": {
+            "type": "string"
+          }
+        },
+        "registry": {
+          "$ref": "#/$defs/dockerRegistry",
+          "description": "Flat registry config (use this OR environments, not both)"
+        },
+        "environments": {
+          "type": "object",
+          "description": "Per-environment Docker config (use this OR flat registry, not both)",
+          "additionalProperties": false,
+          "properties": {
+            "development": {
+              "$ref": "#/$defs/dockerEnvironment"
+            },
+            "staging": {
+              "$ref": "#/$defs/dockerEnvironment"
+            },
+            "production": {
+              "$ref": "#/$defs/dockerEnvironment"
+            }
+          }
+        }
+      }
+    },
+
+    "dockerRegistry": {
+      "type": "object",
+      "description": "Docker registry configuration",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Registry type (e.g., ecr, dockerhub, private)"
+        },
+        "region": {
+          "type": "string",
+          "description": "AWS region for ECR registries"
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository name/path"
+        }
+      }
+    },
+
+    "dockerEnvironment": {
+      "type": "object",
+      "description": "Per-environment Docker overrides",
+      "additionalProperties": false,
+      "properties": {
+        "registry": {
+          "type": "string",
+          "description": "Registry URL for this environment"
+        },
+        "profile": {
+          "type": "string",
+          "description": "Docker Compose profile for this environment"
+        },
+        "compose_profiles": {
+          "type": "array",
+          "description": "Docker Compose profiles to activate",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "gitConfig": {
+      "type": "object",
+      "description": "Git repository configuration",
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": ["github", "gitlab"],
+          "description": "Git hosting platform"
+        },
+        "instance": {
+          "type": "string",
+          "description": "Git host URL (e.g., github.com, git.turnersrus.com)"
+        },
+        "repo": {
+          "type": "string",
+          "description": "Repository path (owner/repo or group/project)"
+        },
+        "default": {
+          "type": "string",
+          "description": "Default branch name"
+        }
+      }
+    },
+
+    "ciConfig": {
+      "type": "object",
+      "description": "CI/CD configuration",
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": ["github", "gitlab", ""],
+          "description": "CI/CD platform (auto-detected from git remote if empty)"
+        },
+        "branches": {
+          "type": "object",
+          "description": "Branch-to-environment mapping",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "secrets": {
+      "type": "object",
+      "description": "Secrets management configuration",
+      "required": ["backend"],
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["aws", "infisical"],
+          "description": "Secrets backend (aws for macOS/work, infisical for Linux/home)"
+        },
+        "required": {
+          "type": "array",
+          "description": "Secret bucket names this project uses",
+          "items": {
+            "type": "string"
+          }
+        },
+        "refresh": {
+          "$ref": "#/$defs/secretsRefresh"
+        }
+      }
+    },
+
+    "secretsRefresh": {
+      "type": "object",
+      "description": "Automatic secret refresh configuration",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable automatic secret refresh"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How often to check for updated secrets (default: 300)"
+        },
+        "strategies": {
+          "type": "object",
+          "description": "Framework-specific refresh strategies",
+          "additionalProperties": {
+            "$ref": "#/$defs/secretsRefreshStrategy"
+          }
+        }
+      }
+    },
+
+    "secretsRefreshStrategy": {
+      "type": "object",
+      "description": "Framework-specific secret refresh strategy",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["inline", "file"],
+          "description": "Refresh type: inline (memory) or file (env file rewrite)"
+        },
+        "cache_driver": {
+          "type": "string",
+          "description": "Cache driver for inline refresh (e.g., redis, file, database)"
+        },
+        "template_dir": {
+          "type": "string",
+          "description": "Directory containing .env templates for file-based refresh"
+        },
+        "target_files": {
+          "type": "array",
+          "description": "Target .env files to write for file-based refresh",
+          "items": {
+            "type": "string"
+          }
+        },
+        "restart_command": {
+          "type": "string",
+          "description": "Command to restart the service after file refresh"
+        },
+        "rebuild_command": {
+          "type": "string",
+          "description": "Command to rebuild after file refresh"
+        }
+      }
+    },
+
+    "database": {
+      "type": "object",
+      "description": "Database configuration",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Database identifier (e.g., primary, cache, queue)"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["postgresql", "mysql", "mongodb", "redis", "minio", "sqlite"],
+          "description": "Database type"
+        },
+        "engine_version": {
+          "type": "string",
+          "description": "Engine version string (documentation; e.g., '8.0.42')"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "Purpose description (e.g., main, cache, queue, storage)"
+        },
+        "file": {
+          "type": "string",
+          "description": "File path for SQLite databases"
+        },
+        "users": {
+          "type": "object",
+          "description": "Database user configurations (two-user security model)",
+          "additionalProperties": false,
+          "properties": {
+            "migration": {
+              "$ref": "#/$defs/databaseUser",
+              "description": "DDL user for CREATE/DROP/ALTER operations"
+            },
+            "app": {
+              "$ref": "#/$defs/databaseUser",
+              "description": "DML user for SELECT/INSERT/UPDATE/DELETE operations"
+            }
+          }
+        },
+        "migrations": {
+          "$ref": "#/$defs/databaseMigrations"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "sqlite" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["name", "type", "file"],
+            "properties": {
+              "users": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "migrations": {
+                "type": "object",
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["migrations"]
+          },
+          "then": {
+            "properties": {
+              "migrations": {
+                "required": ["enabled"]
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "databaseUser": {
+      "type": "object",
+      "description": "Database user credentials reference",
+      "additionalProperties": false,
+      "properties": {
+        "secret_bucket": {
+          "type": "string",
+          "description": "Secret bucket name containing credentials"
+        },
+        "secret_keys": {
+          "type": "object",
+          "description": "Key names within the JSON secret (NOT actual values)",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "databaseMigrations": {
+      "type": "object",
+      "description": "Database migration configuration. The per-DB runtime details (tool, path, command) are encoded as conventions in the project (e.g., typeorm.config.<db-name>.prod.js) — this schema only tracks the on/off flag.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether migrations are enabled for this database"
+        }
+      }
+    },
+
+    "deployment": {
+      "type": "object",
+      "description": "Deployment configuration",
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["script", "ssh", "ssm", "pipeline", ""],
+          "description": "Deployment method: pipeline (CI/CD), script (local), ssh (direct), ssm (AWS Systems Manager)"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["blue-green", "staging-production", "prod-only", "none"],
+          "description": "Deployment strategy. blue-green: deploy to inactive color and swap. staging-production: promote through staging first. prod-only: deploy directly to production. none: no deployment configured"
+        },
+        "active": {
+          "type": "string",
+          "enum": ["blue", "green"],
+          "description": "Currently active color for blue-green deployments. Deployments target the inactive color"
+        },
+        "region": {
+          "type": "string",
+          "description": "Default AWS region for deployment operations (default: us-west-1)"
+        },
+        "health_check_path": {
+          "type": "string",
+          "description": "Health endpoint path (default: /health)"
+        },
+        "version_path": {
+          "type": "string",
+          "description": "Version endpoint path (default: /api/version)"
+        },
+        "cloudflare": {
+          "type": "object",
+          "description": "Cloudflare DNS settings (used by dns-cutover.sh for blue/green DNS switching)",
+          "additionalProperties": false,
+          "required": ["zone_id"],
+          "properties": {
+            "zone_id": {
+              "type": "string",
+              "description": "Cloudflare zone ID for the domain"
+            },
+            "token_file": {
+              "type": "string",
+              "description": "Path to file containing Cloudflare API token (default: ~/.cloudflare)"
+            }
+          }
+        },
+        "scripts": {
+          "$ref": "#/$defs/deploymentScripts"
+        },
+        "ip_access": {
+          "type": "string",
+          "enum": ["private", "public"],
+          "description": "Whether agents use private or public IPs to reach instances (private = inside VPC)"
+        },
+        "development": {
+          "$ref": "#/$defs/deploymentEnvironment",
+          "description": "Development environment deployment config"
+        },
+        "staging": {
+          "$ref": "#/$defs/deploymentEnvironment"
+        },
+        "production": {
+          "$ref": "#/$defs/deploymentEnvironment"
+        },
+        "work": {
+          "$ref": "#/$defs/deploymentNested",
+          "description": "Work environment deployment (nested pattern)"
+        },
+        "home": {
+          "$ref": "#/$defs/deploymentNested",
+          "description": "Home environment deployment (nested pattern)"
+        }
+      }
+    },
+
+    "deploymentScripts": {
+      "type": "object",
+      "description": "Deployment script paths",
+      "additionalProperties": false,
+      "properties": {
+        "build": {
+          "type": "string",
+          "description": "Build script path"
+        },
+        "staging": {
+          "type": "string",
+          "description": "Staging deployment script path"
+        },
+        "production": {
+          "type": "string",
+          "description": "Production deployment script path"
+        },
+        "smoke_test": {
+          "type": "string",
+          "description": "Post-deploy smoke test script path"
+        }
+      }
+    },
+
+    "deploymentEnvironment": {
+      "type": "object",
+      "description": "Per-environment deployment configuration",
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["script", "ssh", "ssm", "pipeline", ""],
+          "description": "Per-environment method override"
+        },
+        "url": {
+          "type": "string",
+          "description": "Base URL for health checks and E2E tests"
+        },
+        "public_url": {
+          "type": "string",
+          "description": "Public-facing URL for domain accessibility checks"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Primary domain for this environment (non-blue-green single-instance deployments)"
+        },
+        "roving_domain": {
+          "type": "string",
+          "description": "Floating domain that points to the active instance in blue-green deployments"
+        },
+        "private_ip": {
+          "type": "string",
+          "description": "Private IP for non-blue-green single-instance deployments"
+        },
+        "public_ip": {
+          "type": "string",
+          "description": "Public IP for non-blue-green single-instance deployments"
+        },
+        "host": {
+          "type": "string",
+          "description": "SSH hostname (for method=ssh)"
+        },
+        "user": {
+          "type": "string",
+          "description": "SSH username (for method=ssh)"
+        },
+        "path": {
+          "type": "string",
+          "description": "Deployment directory on target"
+        },
+        "instance_id": {
+          "type": "string",
+          "description": "EC2 instance ID (for method=ssm)"
+        },
+        "region": {
+          "type": "string",
+          "description": "AWS region (for method=ssm)"
+        },
+        "script": {
+          "type": "string",
+          "description": "Deploy script path (for method=script)"
+        },
+        "target": {
+          "type": "string",
+          "description": "Generic target identifier"
+        },
+        "nginx_ssl_domain": {
+          "type": "string",
+          "description": "SSL certificate domain for nginx configuration"
+        },
+        "nginx_server_name": {
+          "type": "string",
+          "description": "Space-separated server names for nginx server_name directive"
+        },
+        "firebase_project": {
+          "type": "string",
+          "description": "Firebase project ID for this environment"
+        },
+        "containers": {
+          "type": "array",
+          "description": "Container names expected in this environment",
+          "items": { "type": "string" }
+        },
+        "blue": {
+          "$ref": "#/$defs/blueGreenInstance",
+          "description": "Blue instance configuration for blue-green deployments"
+        },
+        "green": {
+          "$ref": "#/$defs/blueGreenInstance",
+          "description": "Green instance configuration for blue-green deployments"
+        }
+      }
+    },
+
+    "blueGreenInstance": {
+      "type": "object",
+      "description": "Instance configuration for one side of a blue-green deployment",
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "type": "string",
+          "description": "EC2 instance ID (e.g., i-0abc123def456)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable instance name (e.g., medclear-staging-blue)"
+        },
+        "private_ip": {
+          "type": "string",
+          "description": "Private IP address within VPC"
+        },
+        "public_ip": {
+          "type": "string",
+          "description": "Public IP address for external access"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Direct domain for this specific instance"
+        },
+        "url": {
+          "type": "string",
+          "description": "Direct URL for this instance (for health checks before swap)"
+        }
+      },
+      "required": ["instance_id"]
+    },
+
+    "deploymentNested": {
+      "type": "object",
+      "description": "Nested deployment config (work/home pattern)",
+      "additionalProperties": false,
+      "properties": {
+        "staging": {
+          "$ref": "#/$defs/deploymentNestedEnvironment"
+        },
+        "production": {
+          "$ref": "#/$defs/deploymentNestedEnvironment"
+        }
+      }
+    },
+
+    "deploymentNestedEnvironment": {
+      "type": "object",
+      "description": "Nested per-environment deployment configuration",
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["script", "ssh", "ssm", "pipeline", "cloud-run", ""],
+          "description": "Deployment method for this environment"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target identifier (instance ID, service name, etc.)"
+        },
+        "region": {
+          "type": "string",
+          "description": "Cloud region"
+        },
+        "host": {
+          "type": "string",
+          "description": "SSH hostname"
+        },
+        "user": {
+          "type": "string",
+          "description": "SSH username"
+        },
+        "path": {
+          "type": "string",
+          "description": "Deployment directory path"
+        },
+        "url": {
+          "type": "string",
+          "description": "Base URL for health checks"
+        }
+      }
+    },
+
+    "smokeTests": {
+      "type": "object",
+      "description": "Smoke test configuration for post-deployment validation",
+      "additionalProperties": false,
+      "properties": {
+        "public_endpoints": {
+          "type": "array",
+          "description": "Endpoints that must be accessible from public IPs (legacy shape)",
+          "items": { "$ref": "#/$defs/smokeTestEndpoint" }
+        },
+        "private_endpoints": {
+          "type": "array",
+          "description": "Endpoints restricted to private IPs only (legacy shape)",
+          "items": { "$ref": "#/$defs/smokeTestEndpoint" }
+        },
+        "containers": {
+          "type": "array",
+          "description": "Docker container names that must report healthy",
+          "items": { "type": "string" }
+        },
+        "endpoints": {
+          "type": "array",
+          "description": "Health/API endpoints checked via docker exec (--server mode)",
+          "items": { "$ref": "#/$defs/dockerExecEndpoint" }
+        },
+        "external_endpoints": {
+          "type": "array",
+          "description": "Endpoints checked from CI via domain (--full mode)",
+          "items": { "$ref": "#/$defs/externalEndpoint" }
+        },
+        "browser_tests": {
+          "type": "object",
+          "description": "Browser smoke tests (Playwright). Pipeline reads mode and runs accordingly.",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["disabled", "smoke", "list", "all"],
+              "description": "disabled: skip all. smoke: run frontend/e2e/smoke/. list: run only specs listed below. all: run frontend/e2e/."
+            },
+            "specs": {
+              "type": "array",
+              "description": "Spec paths to run (used only when mode: list)",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "version": {
+          "type": "object",
+          "description": "Version verification configuration",
+          "additionalProperties": false,
+          "properties": {
+            "check_path": {
+              "type": "string",
+              "description": "Endpoint path that returns the version in its JSON response"
+            },
+            "field": {
+              "type": "string",
+              "description": "JSON field name containing the version string"
+            }
+          }
+        }
+      }
+    },
+
+    "dockerExecEndpoint": {
+      "type": "object",
+      "description": "Endpoint checked from inside the Docker network via docker exec",
+      "required": ["name", "container", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "container": { "type": "string", "description": "Docker container to exec into" },
+        "url": { "type": "string", "description": "URL to fetch from inside the container (typically 127.0.0.1:port)" },
+        "type": { "type": "string", "enum": ["json", "html"] },
+        "runtime": { "type": "string", "enum": ["node", "python"], "description": "Runtime used to execute the curl-equivalent inside the container" },
+        "expect": { "$ref": "#/$defs/smokeExpect" },
+        "severity": { "type": "string", "enum": ["error", "warning"], "description": "warning: failure logged but doesn't fail the smoke test" }
+      }
+    },
+
+    "externalEndpoint": {
+      "type": "object",
+      "description": "Endpoint checked externally (from CI) via domain",
+      "required": ["name", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string", "description": "Path appended to the deployment domain" },
+        "type": { "type": "string", "enum": ["json", "html"] },
+        "expect": { "$ref": "#/$defs/smokeExpect" }
+      }
+    },
+
+    "smokeExpect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status_code": { "type": "integer", "description": "Expected HTTP status code" },
+        "fields": { "type": "object", "description": "JSON fields and expected values (supports dot.notation paths)", "additionalProperties": true },
+        "contains": { "type": "string", "description": "Substring expected in response body (HTML mode)" }
+      }
+    },
+
+    "smokeTestEndpoint": {
+      "type": "object",
+      "description": "A smoke test endpoint",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Endpoint path to test"
+        },
+        "expect": {
+          "type": "string",
+          "description": "Expected response type (html, status:200, json, etc.)"
+        }
+      }
+    },
+
+    "taskManagement": {
+      "type": "object",
+      "description": "Task management configuration",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["asana", "gitlab", "taskforge"],
+          "description": "Task management backend (asana, gitlab, or taskforge)"
+        },
+        "asana": {
+          "$ref": "#/$defs/asanaConfig"
+        },
+        "gitlab": {
+          "$ref": "#/$defs/gitlabTaskConfig"
+        },
+        "taskforge": {
+          "$ref": "#/$defs/taskforgeConfig"
+        }
+      }
+    },
+
+    "taskforgeConfig": {
+      "type": "object",
+      "description": "TaskForge self-hosted task management configuration",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "TaskForge project UUID for task operations"
+        },
+        "api_key_file": {
+          "type": "string",
+          "description": "Path to file containing the API key (default: ~/.task-forge-key)"
+        },
+        "container": {
+          "type": "string",
+          "description": "Docker container name for exec commands (default: task-forge-api-1)"
+        }
+      }
+    },
+
+    "asanaConfig": {
+      "type": "object",
+      "description": "Asana task management configuration",
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "description": "Asana workspace GID"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Asana project GID"
+        },
+        "project": {
+          "type": "string",
+          "description": "Asana project name (for display/validation)"
+        },
+        "section_id": {
+          "type": "string",
+          "description": "Default section GID for new tasks"
+        },
+        "section": {
+          "type": "string",
+          "description": "Default section name"
+        },
+        "default_assignee": {
+          "type": "string",
+          "description": "Default assignee (e.g., me)"
+        },
+        "sync_on_operations": {
+          "type": "array",
+          "description": "Operations that trigger Asana sync",
+          "items": {
+            "type": "string"
+          }
+        },
+        "custom_fields": {
+          "type": "object",
+          "description": "Custom field definitions for task management",
+          "additionalProperties": {
+            "$ref": "#/$defs/asanaCustomField"
+          }
+        }
+      }
+    },
+
+    "asanaCustomField": {
+      "type": "object",
+      "description": "Asana custom field definition",
+      "additionalProperties": false,
+      "properties": {
+        "gid": {
+          "type": "string",
+          "description": "Custom field GID"
+        },
+        "name": {
+          "type": "string",
+          "description": "Custom field name"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["text", "enum", "number", "date", "multi_enum"],
+          "description": "Custom field type"
+        },
+        "options": {
+          "type": "object",
+          "description": "Enum option name-to-GID mapping",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "gitlabTaskConfig": {
+      "type": "object",
+      "description": "GitLab task management configuration",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "GitLab project ID or owner/repo path"
+        },
+        "default_labels": {
+          "type": "array",
+          "description": "Default labels for new issues",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_assignee": {
+          "type": "string",
+          "description": "Default assignee (e.g., @me)"
+        }
+      }
+    },
+
+    "notifications": {
+      "type": "object",
+      "description": "Notification configuration — supports CI/CD webhook format (provider/on_success/on_failure/channel) or app-level format (enabled/events/channels)",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["slack", "discord", "teams", "generic"],
+          "description": "CI/CD webhook notification provider (determines payload format)"
+        },
+        "on_success": {
+          "type": "boolean",
+          "description": "Notify on successful deployments"
+        },
+        "on_failure": {
+          "type": "boolean",
+          "description": "Notify on failed deployments"
+        },
+        "channel": {
+          "type": "string",
+          "description": "Channel/room for notifications (documentation — routing configured in webhook)"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether app-level notifications are enabled"
+        },
+        "events": {
+          "type": "object",
+          "description": "Events to notify on, with channel list per event",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "channels": {
+          "$ref": "#/$defs/notificationChannels"
+        }
+      }
+    },
+
+    "notificationChannels": {
+      "type": "object",
+      "description": "Notification channel configurations",
+      "additionalProperties": false,
+      "properties": {
+        "slack": {
+          "$ref": "#/$defs/notificationChannelSlack"
+        },
+        "cliq": {
+          "$ref": "#/$defs/notificationChannelCliq"
+        },
+        "email": {
+          "$ref": "#/$defs/notificationChannelEmail"
+        }
+      }
+    },
+
+    "notificationChannelSlack": {
+      "type": "object",
+      "description": "Slack notification channel",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether Slack notifications are enabled"
+        },
+        "secret_bucket": {
+          "type": "string",
+          "description": "Secret bucket containing webhook URL"
+        },
+        "secret_key": {
+          "type": "string",
+          "description": "Key name for webhook URL in secret"
+        },
+        "secret_keys": {
+          "type": "object",
+          "description": "Key names for channel secrets",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "default_channel": {
+          "type": "string",
+          "description": "Default Slack channel (e.g., #deployments)"
+        }
+      }
+    },
+
+    "notificationChannelCliq": {
+      "type": "object",
+      "description": "Zoho Cliq notification channel",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether Cliq notifications are enabled"
+        },
+        "secret_bucket": {
+          "type": "string",
+          "description": "Secret bucket containing webhook URL"
+        },
+        "secret_key": {
+          "type": "string",
+          "description": "Key name for webhook URL in secret"
+        },
+        "secret_keys": {
+          "type": "object",
+          "description": "Key names for channel secrets",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "notificationChannelEmail": {
+      "type": "object",
+      "description": "Email notification channel",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether email notifications are enabled"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["aws_ses", "resend", "mailgun", "sendgrid", ""],
+          "description": "Email provider"
+        },
+        "from_address": {
+          "type": "string",
+          "description": "Sender email address"
+        },
+        "to_addresses": {
+          "type": "array",
+          "description": "Recipient email addresses",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secret_bucket": {
+          "type": "string",
+          "description": "Secret bucket containing email credentials"
+        },
+        "secret_key": {
+          "type": "string",
+          "description": "Key name for email API key/credentials"
+        },
+        "secret_keys": {
+          "type": "object",
+          "description": "Key names for email secrets",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "infrastructure": {
+      "type": "object",
+      "description": "Infrastructure configuration (separate repos, symlinks, IaC tools)",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether this project has infrastructure configuration"
+        },
+        "repo": {
+          "$ref": "#/$defs/infrastructureRepo"
+        },
+        "link": {
+          "$ref": "#/$defs/infrastructureLink"
+        },
+        "tools": {
+          "type": "array",
+          "description": "Infrastructure tools (terraform, ansible, etc.)",
+          "items": {
+            "$ref": "#/$defs/infrastructureTool"
+          }
+        },
+        "environments": {
+          "type": "object",
+          "description": "Per-environment infrastructure overrides",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "validation": {
+          "type": "object",
+          "description": "Validation flags for infrastructure checks",
+          "additionalProperties": false,
+          "properties": {
+            "check_link": {
+              "type": "boolean",
+              "description": "Verify symlink points to correct location"
+            },
+            "check_repo": {
+              "type": "boolean",
+              "description": "Verify infrastructure repo is accessible"
+            },
+            "check_tools": {
+              "type": "boolean",
+              "description": "Verify terraform/ansible are installed"
+            }
+          }
+        }
+      }
+    },
+
+    "infrastructureRepo": {
+      "type": "object",
+      "description": "Infrastructure repository configuration",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["git", "local", ""],
+          "description": "Repository type"
+        },
+        "url": {
+          "type": "string",
+          "description": "Git URL or absolute path"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch to use"
+        }
+      }
+    },
+
+    "infrastructureLink": {
+      "type": "object",
+      "description": "Infrastructure symlink configuration",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Symlink name in project root (default: infrastructure)"
+        },
+        "source": {
+          "type": "string",
+          "description": "Path within infra repo to link"
+        }
+      }
+    },
+
+    "infrastructureTool": {
+      "type": "object",
+      "description": "Infrastructure tool configuration",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Tool name (terraform, ansible, etc.)"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether this tool is active"
+        },
+        "version": {
+          "type": "string",
+          "description": "Tool version"
+        },
+        "backend": {
+          "type": "string",
+          "description": "State backend (s3, gcs, azurerm, local)"
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to tool configuration within infra repo"
+        },
+        "workspace_strategy": {
+          "type": "string",
+          "description": "Workspace strategy (per-environment, per-customer, single)"
+        },
+        "workspaces": {
+          "type": "object",
+          "description": "Workspace mapping per environment",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "var_files": {
+          "type": "object",
+          "description": "Variable files per environment",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "inventory_strategy": {
+          "type": "string",
+          "description": "Inventory strategy (static, dynamic, per-environment)"
+        },
+        "inventories": {
+          "type": "object",
+          "description": "Inventory files per environment",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "playbooks": {
+          "type": "object",
+          "description": "Playbook paths",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "quality": {
+      "type": "object",
+      "description": "Code quality tool configuration",
+      "additionalProperties": false,
+      "properties": {
+        "lint_command": {
+          "type": "string",
+          "description": "Lint command (e.g., ruff check, eslint)"
+        },
+        "format_command": {
+          "type": "string",
+          "description": "Format command (e.g., ruff format, prettier --write)"
+        },
+        "typecheck_command": {
+          "type": "string",
+          "description": "Type check command (e.g., pyright, tsc --noEmit)"
+        }
+      }
+    },
+
+    "commands": {
+      "type": "object",
+      "description": "Custom command overrides",
+      "additionalProperties": false,
+      "properties": {
+        "build": {
+          "type": "string",
+          "description": "Override default build command"
+        },
+        "start": {
+          "type": "string",
+          "description": "Override default start command"
+        },
+        "clean": {
+          "type": "string",
+          "description": "Override default clean command"
+        }
+      }
+    },
+
+    "schemaSync": {
+      "type": "object",
+      "description": "Schema sync to Open Metadata configuration. Automatically syncs database schema changes to Open Metadata during production deploys with AI-generated field descriptions.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable schema sync. If false or missing, schema sync is skipped entirely.",
+          "default": false
+        },
+        "open_metadata": {
+          "type": "object",
+          "description": "Open Metadata instance configuration",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Open Metadata instance URL (e.g., https://catalog.example.com). Token comes from OPEN_METADATA_TOKEN secret, not PROJECT.yaml."
+            }
+          },
+          "required": ["url"]
+        },
+        "exclude_tables": {
+          "type": "array",
+          "description": "Tables to exclude from schema capture (framework internals like migrations, typeorm_metadata)",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "ai": {
+          "type": "object",
+          "description": "AI description generation configuration. Context is injected into the prompt to help the model generate accurate, domain-relevant descriptions.",
+          "additionalProperties": false,
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Project domain for AI context (e.g., healthcare, e-commerce, internal operations)"
+            },
+            "context": {
+              "type": "string",
+              "description": "Project-specific context injected into the AI description prompt. Describe what the application does, who uses it, and what kind of data the databases contain."
+            }
+          }
+        }
+      },
+      "required": ["enabled", "open_metadata"]
+    },
+
+    "conditionals": {
+      "deploymentScript": {
+        "if": {
+          "properties": {
+            "deployment": {
+              "type": "object",
+              "properties": { "method": { "const": "script" } },
+              "required": ["method"]
+            }
+          },
+          "required": ["deployment"]
+        },
+        "then": {
+          "properties": {
+            "deployment": {
+              "properties": {
+                "staging": {
+                  "required": ["script"]
+                },
+                "production": {
+                  "required": ["script"]
+                }
+              },
+              "required": ["staging", "production"]
+            }
+          }
+        }
+      },
+
+      "deploymentSsh": {
+        "if": {
+          "properties": {
+            "deployment": {
+              "type": "object",
+              "properties": { "method": { "const": "ssh" } },
+              "required": ["method"]
+            }
+          },
+          "required": ["deployment"]
+        },
+        "then": {
+          "properties": {
+            "deployment": {
+              "properties": {
+                "staging": {
+                  "required": ["host", "user"]
+                },
+                "production": {
+                  "required": ["host", "user"]
+                }
+              },
+              "required": ["staging", "production"]
+            }
+          }
+        }
+      },
+
+      "deploymentSsm": {
+        "if": {
+          "properties": {
+            "deployment": {
+              "type": "object",
+              "properties": { "method": { "const": "ssm" } },
+              "required": ["method"]
+            }
+          },
+          "required": ["deployment"]
+        },
+        "then": {
+          "properties": {
+            "deployment": {
+              "properties": {
+                "staging": {
+                  "required": ["instance_id", "region"]
+                },
+                "production": {
+                  "required": ["instance_id", "region"]
+                }
+              },
+              "required": ["staging", "production"]
+            }
+          }
+        }
+      },
+
+      "taskManagementAsana": {
+        "if": {
+          "properties": {
+            "task_management": {
+              "type": "object",
+              "properties": {
+                "backend": { "const": "asana" }
+              },
+              "required": ["backend"]
+            }
+          },
+          "required": ["task_management"]
+        },
+        "then": {
+          "properties": {
+            "task_management": {
+              "properties": {
+                "asana": {
+                  "required": ["workspace_id"]
+                }
+              },
+              "required": ["asana"]
+            }
+          }
+        }
+      },
+
+      "taskManagementGitlab": {
+        "if": {
+          "properties": {
+            "task_management": {
+              "type": "object",
+              "properties": {
+                "backend": { "const": "gitlab" }
+              },
+              "required": ["backend"]
+            }
+          },
+          "required": ["task_management"]
+        },
+        "then": {
+          "properties": {
+            "task_management": {
+              "properties": {
+                "gitlab": {
+                  "required": ["project_id"]
+                }
+              },
+              "required": ["gitlab"]
+            }
+          }
+        }
+      },
+
+      "taskManagementTaskforge": {
+        "if": {
+          "properties": {
+            "task_management": {
+              "type": "object",
+              "properties": {
+                "backend": { "const": "taskforge" }
+              },
+              "required": ["backend"]
+            }
+          },
+          "required": ["task_management"]
+        },
+        "then": {
+          "properties": {
+            "task_management": {
+              "properties": {
+                "taskforge": {
+                  "required": ["project_id"]
+                }
+              },
+              "required": ["taskforge"]
+            }
+          }
+        }
+      },
+
+      "infrastructureEnabled": {
+        "if": {
+          "properties": {
+            "infrastructure": {
+              "type": "object",
+              "properties": {
+                "enabled": { "const": true }
+              },
+              "required": ["enabled"]
+            }
+          },
+          "required": ["infrastructure"]
+        },
+        "then": {
+          "properties": {
+            "infrastructure": {
+              "properties": {
+                "link": {
+                  "required": ["target"]
+                },
+                "repo": {
+                  "required": ["type"]
+                }
+              },
+              "required": ["link", "repo"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

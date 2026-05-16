@@ -29,6 +29,12 @@ scripts-local/
 .credentials*
 .secrets/
 
+# Per-machine session/runtime state from track-command.sh. The tracking/
+# directory has its own .gitignore for the daily JSON files inside it;
+# the session file lives at the parent (~/.claude/.tracking-session)
+# which equates to the repo root when CLAUDE_HOME points at the repo.
+.tracking-session
+
 # Auto-generated per-project tracking files. These are written by task
 # lifecycle scripts and are noisy / conflict-prone in shared repos. They
 # belong in each consuming project's .gitignore too — see

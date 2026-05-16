@@ -10,7 +10,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
 DRY_RUN=0
 
-LINKS=(commands scripts skills templates docs profiles)
+LINKS=(commands scripts skills templates docs profiles schemas tracking)
 
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 

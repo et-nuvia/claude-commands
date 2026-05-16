@@ -1,0 +1,6 @@
+# Per-machine tracking data — never committed.
+# track-command.sh writes daily JSON files here (and a .tracking-session
+# file at the parent ~/.claude/ level). The directory itself is tracked
+# so install.sh has a symlink target; only this .gitignore is committed.
+*
+!.gitignore
