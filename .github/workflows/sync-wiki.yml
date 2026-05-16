@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/wiki/**'
+      - 'scripts/flatten-wiki.sh'
       - '.github/workflows/sync-wiki.yml'
   workflow_dispatch:
 
@@ -22,11 +23,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Push docs/wiki to GitHub Wiki
+      - name: Flatten docs/wiki for GitHub Wiki
+        run: scripts/flatten-wiki.sh docs/wiki .wiki-build
+
+      - name: Push to GitHub Wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
         with:
-          path: docs/wiki
+          path: .wiki-build
           token: ${{ secrets.GITHUB_TOKEN }}
           repo: ${{ github.repository }}
-          ignore: |
-            commands/_TEMPLATE.md
