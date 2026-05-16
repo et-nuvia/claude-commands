@@ -1,0 +1,6 @@
+# Per-machine runtime logs — never committed.
+# tdd-log.sh and related hook scripts append daily JSON / log lines here.
+# The directory itself is tracked so install.sh has a symlink target;
+# only this .gitignore is committed.
+*
+!.gitignore

@@ -11,8 +11,12 @@
 
 set -euo pipefail
 
-readonly TRACKING_DIR="${HOME}/.claude/tracking"
-readonly SESSION_FILE="${HOME}/.claude/.tracking-session"
+# Honor CLAUDE_HOME for non-default install locations. Same pattern as
+# track-command.sh; see that file for the rationale on not using readonly.
+CLAUDE_HOME="${CLAUDE_HOME:-${HOME}/.claude}"
+TRACKING_DIR="${CLAUDE_HOME}/tracking"
+SESSION_FILE="${CLAUDE_HOME}/.tracking-session"
+SUBAGENT_SESSION_DIR="${CLAUDE_HOME}/.subagent-sessions"
 
 mkdir -p "${TRACKING_DIR}"
 
@@ -69,7 +73,6 @@ TRACKING_FILE="${TRACKING_DIR}/${TODAY}.json"
 if [[ "${HOOK_EVENT}" == "SubagentStart" ]]; then
 
   # Save start time for duration calculation at stop
-  SUBAGENT_SESSION_DIR="${HOME}/.claude/.subagent-sessions"
   mkdir -p "${SUBAGENT_SESSION_DIR}"
   echo "${TIMESTAMP}" > "${SUBAGENT_SESSION_DIR}/${AGENT_ID}"
 
@@ -100,7 +103,7 @@ elif [[ "${HOOK_EVENT}" == "SubagentStop" ]]; then
   TRANSCRIPT_PATH=$(echo "${HOOK_INPUT}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('agent_transcript_path',''))" 2>/dev/null || echo "")
 
   # Calculate duration from saved start time
-  SUBAGENT_SESSION_FILE="${HOME}/.claude/.subagent-sessions/${AGENT_ID}"
+  SUBAGENT_SESSION_FILE="${SUBAGENT_SESSION_DIR}/${AGENT_ID}"
   START_TIME=""
   if [[ -f "${SUBAGENT_SESSION_FILE}" ]]; then
     START_TIME="$(cat "${SUBAGENT_SESSION_FILE}")"

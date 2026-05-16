@@ -19,13 +19,20 @@
 # Designed to be sourced. No `set -e` here on purpose — caller controls
 # its own error handling.
 
-# Override target via env for tests (TDD_LOG_FILE) or production default
-TDD_LOG_FILE_DEFAULT="${HOME}/.claude/logs/tdd-hook.log"
+# Override target via env for tests (TDD_LOG_FILE) or production default.
+# Honors CLAUDE_HOME for non-default install locations.
+TDD_LOG_FILE_DEFAULT="${CLAUDE_HOME:-${HOME}/.claude}/logs/tdd-hook.log"
 TDD_LOG_MAX_BYTES="${TDD_LOG_MAX_BYTES:-10485760}"  # 10 MB
 
-# Resolve the active log file path (lets tests redirect via env)
+# Resolve the active log file path (lets tests redirect via env).
+# Also ensures the parent dir exists — on a fresh install or a custom
+# CLAUDE_HOME, the logs/ dir won't exist yet and the >> write would
+# silently fail. Fail-silent mkdir matches the rest of the file.
 _tdd_log_path() {
-    echo "${TDD_LOG_FILE:-$TDD_LOG_FILE_DEFAULT}"
+    local p="${TDD_LOG_FILE:-$TDD_LOG_FILE_DEFAULT}"
+    local d="${p%/*}"
+    [[ -n "$d" && ! -d "$d" ]] && mkdir -p "$d" 2>/dev/null || true
+    echo "$p"
 }
 
 # Portable byte-size of a regular file. Echoes 0 if the file is missing

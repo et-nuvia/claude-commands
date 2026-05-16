@@ -1,0 +1,6 @@
+# Per-machine subagent session state — never committed.
+# track-subagent.sh writes one file per spawned subagent here.
+# The directory itself is tracked so install.sh has a symlink target;
+# only this .gitignore is committed.
+*
+!.gitignore
