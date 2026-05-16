@@ -84,6 +84,30 @@ When `next_action` is `llm_generate_document`, write RSK document to `document_p
 ~/.claude/scripts/deploy-risk.sh --document --environment production
 ```
 
+## Task-Integrated Mode (V4 RSK document)
+
+When run as part of a task (V4 doc system), pass `--task-id <ID>` so the
+risk analysis lands as an RSK-type document under `docs/active/` with
+proper V4 naming. To create a fresh task ID at the same time, use `--new`.
+
+```bash
+# Existing task — append the RSK doc to its sequence
+~/.claude/scripts/deploy-risk.sh --full --environment staging --task-id A3F2B9
+
+# Standalone risk doc but use V4 naming and assign a new task ID
+~/.claude/scripts/deploy-risk.sh --full --environment staging --new
+```
+
+In V4 mode, the script calls `new-doc.sh` under the hood to resolve the
+filepath and return a template the LLM should populate. The
+`next_action` returned is `write_document` (the LLM writes to the
+resolved `document_path`), rather than `llm_generate_document`.
+
+Without `--task-id` or `--new` (the standalone default), the script
+writes to `docs/deployment-risks/YYYY-MM-DD-<env>-<version>.md` — this
+is what `deploy-to-stage.sh` and `deploy-to-prod.sh` invoke, so don't
+change their flags.
+
 ## Debug
 
 ```bash

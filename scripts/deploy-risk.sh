@@ -49,6 +49,9 @@ VERSION=""
 RISK_SCORE=0
 DEPLOYMENT=""
 TIMESTAMP=""
+TASK_ID=""          # When set, document section integrates with V4 task system
+NEW_TASK=false      # When true (and TASK_ID empty), new-doc.sh creates a fresh task ID
+DOC_PATH=""         # Resolved document path (set by section_document)
 
 #------------------------------------------------------------------------------
 # Parse Arguments
@@ -64,8 +67,10 @@ while [[ $# -gt 0 ]]; do
         --analyze) SECTION="analyze"; shift ;;
         --score) SECTION="score"; shift ;;
         --document) SECTION="document"; shift ;;
-        --environment) ENVIRONMENT="$2"; shift 2 ;;
+        --environment|--env) ENVIRONMENT="$2"; shift 2 ;;
         --version) VERSION="$2"; shift 2 ;;
+        --task-id|--id) TASK_ID="$2"; shift 2 ;;
+        --new) NEW_TASK=true; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -273,22 +278,69 @@ EOF
 section_document() {
     log "${BLUE}=== Generating Risk Document ===${NC}"
 
-    # Document generation is LLM-driven
-    # Script just ensures output directory exists
+    # Document generation is LLM-driven. This section resolves where the
+    # document should be written and emits the path for the LLM.
+    #
+    # Two modes:
+    #   1. V4 task integration (--task-id or --new): uses new-doc.sh to
+    #      generate an RSK-type document under docs/active/ following the
+    #      V4 naming convention. The LLM gets a template back to populate.
+    #   2. Standalone (default): writes to docs/deployment-risks/ with a
+    #      flat date-env-version name. Used by deploy-to-stage.sh /
+    #      deploy-to-prod.sh which don't have a task context.
 
-    local risk_dir="docs/deployment-risks"
-    if [[ ! -d "$risk_dir" ]]; then
-        mkdir -p "$risk_dir" || exit_with_json "error" "Failed to create $risk_dir"
+    local doc_path=""
+    local doc_template=""
+
+    if [[ -n "$TASK_ID" ]] || [[ "$NEW_TASK" == "true" ]]; then
+        # V4 task integration — try to derive a description from the
+        # primary task doc or current branch name
+        local raw_title=""
+        if [[ -n "$TASK_ID" ]]; then
+            # shellcheck disable=SC1091
+            source "${SCRIPT_DIR}/doc-utils.sh" 2>/dev/null || true
+            if command -v find_primary &>/dev/null; then
+                local primary_doc
+                primary_doc=$(find_primary "$TASK_ID" 2>/dev/null || echo "")
+                if [[ -n "$primary_doc" ]]; then
+                    raw_title=$(basename "$primary_doc" .md | sed -E 's/^[A-F0-9]{6}-[0-9]{10}-[A-Z]{3}-//')
+                fi
+            fi
+        fi
+        if [[ -z "$raw_title" ]]; then
+            raw_title=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed 's|.*/||; s|^[0-9]*-||')
+        fi
+        local description
+        description=$(echo "$raw_title" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/^-//;s/-$//' | cut -c1-40)
+        description="${description}-${ENVIRONMENT}"
+
+        local doc_json=""
+        if [[ -n "$TASK_ID" ]]; then
+            doc_json=$("${SCRIPT_DIR}/new-doc.sh" --type RSK --description "${description}" --id "${TASK_ID}" --status "active" --json 2>/dev/null) || true
+        else
+            doc_json=$("${SCRIPT_DIR}/new-doc.sh" --type RSK --description "${description}" --new --status "active" --json 2>/dev/null) || true
+        fi
+        doc_path=$(echo "$doc_json" | jq -r '.filepath // empty')
+        doc_template=$(echo "$doc_json" | jq -r '.template // empty')
+        # Pick up assigned task ID if --new was used
+        if [[ -z "$TASK_ID" ]]; then
+            TASK_ID=$(echo "$doc_json" | jq -r '.task_id // empty')
+        fi
+    else
+        # Standalone mode — preserved for deploy-to-stage / deploy-to-prod callers
+        local risk_dir="docs/deployment-risks"
+        if [[ ! -d "$risk_dir" ]]; then
+            mkdir -p "$risk_dir" || exit_with_json "error" "Failed to create $risk_dir"
+        fi
+        doc_path="$risk_dir/$(date +%Y-%m-%d)-${ENVIRONMENT:-unknown}-${VERSION:-unknown}.md"
     fi
-
-    local doc_name="$(date +%Y-%m-%d)-${ENVIRONMENT:-unknown}-${VERSION:-unknown}.md"
-    local doc_path="$risk_dir/$doc_name"
+    DOC_PATH="$doc_path"
 
     local details="Document should be created at: $doc_path
 
 LLM must generate document with:
 - Executive Summary
-- Risk Breakdown Table
+- Risk Breakdown Table (10 categories with scores)
 - Detailed Risk Analysis
 - Mitigation Options (2+ per risk)
 - Deployment Readiness Assessment
@@ -297,13 +349,18 @@ LLM must generate document with:
 - Recommendation"
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
+        # Pick the action label that matches the mode so callers can route
+        local next_action="llm_generate_document"
+        [[ -n "$TASK_ID" ]] && next_action="write_document"
         cat <<EOF
 {
   "status": "ready_for_llm",
-  "next_action": "llm_generate_document",
+  "next_action": "$next_action",
   "message": "Ready for LLM to generate risk document",
   "section": "document",
   "document_path": "$doc_path",
+  "task_id": "$TASK_ID",
+  "template": $(echo "${doc_template:-}" | jq -Rs .),
   "details": $(echo "$details" | jq -Rs .)
 }
 EOF
