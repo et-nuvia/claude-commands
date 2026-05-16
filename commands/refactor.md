@@ -52,6 +52,51 @@ Read `next_action` from the JSON result and act accordingly:
 
 `--analyze`, `--plan`, `--execute`, `--validate`, `--status`
 
+## Feature-Scoped Mode
+
+When refactoring a specific feature (not a free-form scope), follow these
+extra safeguards. Trigger this mode when `$ARGUMENTS` is a feature path or
+when the user asks for a "feature refactor."
+
+### Required setup
+
+1. **Dedicated feature branch.** Never refactor directly on the main branch.
+   If the user isn't on one, create `refactor/<feature-name>` and switch to it.
+2. **E2E test baseline.** Identify or create comprehensive end-to-end tests
+   covering the feature's contract:
+   - **UI**: Playwright tests
+   - **Backend**: Newman (Postman) tests
+   Run them and confirm they pass *before* touching any production code.
+   These become the gold standard for behavioral regression detection.
+3. **Project knowledge.** If `docs/architecture/PROJECT-KNOWLEDGE.md` exists,
+   read it before planning — it maps service dependencies and integration
+   flows that are critical for safe refactoring (e.g., service A depends on
+   service B; status changes trigger outbound webhooks).
+
+### Four pillars of feature assessment
+
+Evaluate the feature across these axes during the `analyze`/`plan` stages:
+
+| Pillar | What to look for |
+|---|---|
+| **Optimization** | Redundancy, inefficiency, repeated computation |
+| **Stability** | Error handling, input validation, type safety, observability gaps |
+| **Scalability** | Bottlenecks, tight coupling, sync code that could be async |
+| **Simplicity** | Excess complexity, missing abstractions, leaky internals |
+
+### Analysis output
+
+Write the analysis to `docs/features/active/[YYMMDDHHMM]-RFA-[feature-name].md`
+(Refactor Analysis document). Use the template at
+`~/.claude/templates/feature/feature-refactor.md` if it exists.
+
+### Follow-up actions after analysis
+
+After the RFA doc is written, offer the user:
+- Convert specific refactor steps into tasks via `/feature-to-task`
+- Run a performance baseline via `/feature-performance`
+- Begin the refactor on this branch, starting with the baseline tests still passing
+
 ## Debug
 
 ```bash

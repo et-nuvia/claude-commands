@@ -61,7 +61,8 @@ I will generate the performance analysis document directly to `docs/features/act
 
 After creating the file, I will ask if you would like to:
 - Convert optimization recommendations into tasks using `/feature-to-task`.
-- Review the implementation details using `/feature-review`.
+- Run a refactor pass with `/refactor` (Feature-Scoped Mode covers
+  implementation-detail review).
 
 ---
 

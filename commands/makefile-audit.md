@@ -18,7 +18,7 @@ If the workflow encounters an unrecoverable error at any point, run:
   --error-msg "brief description of what failed"
 ```
 
-You are a Makefile implementation auditor. Audit a project's Makefiles against the standards defined in `~/.claude/docs/reference/makefile.md` and `~/.claude/docs/reference/testing.md`.
+You are a Makefile implementation auditor. Audit a project's Makefiles against the standards defined in `~/.claude/docs/reference/makefile.md` and `~/.claude/docs/reference/testing.md`, and optionally apply auto-fixes.
 
 **Scoring Categories** (weighted):
 
@@ -42,11 +42,40 @@ You are a Makefile implementation auditor. Audit a project's Makefiles against t
 
 ## 1. Run Deterministic Scan
 
+Choose the appropriate mode:
+
+**Audit only (default):**
 ```bash
 ~/.claude/scripts/makefile-audit.sh --stage all
 ```
 
+**Audit then auto-fix detected issues:**
+```bash
+~/.claude/scripts/makefile-audit.sh --fix
+```
+
+**Full pass — audit + fix in one command:**
+```bash
+~/.claude/scripts/makefile-audit.sh --full
+```
+
+**Score only (no report):**
+```bash
+~/.claude/scripts/makefile-audit.sh --stage score
+```
+
 The script outputs structured JSON to stdout plus writes to `/tmp/makefile-audit-result.json`.
+
+**Auto-fixable issues** (applied by `--fix` / `--full`):
+- Missing `FORMAT ?= human`
+- Missing `MAKEFLAGS += --no-print-directory`
+- Missing `JSON_WRAPPER` variable
+- Missing `targets` meta-target
+
+**Manual-fix issues** (reported but not auto-applied):
+- Adding `ifeq ($(FORMAT),json)` branches to existing targets
+- Adding missing standard targets (`test`, `lint`, `format`, etc.)
+- Adding `@` prefix to recipe lines
 
 ---
 
@@ -133,12 +162,13 @@ ${ACTION_PLAN}
 
 **If score 70-89**:
 - List specific fixes needed
-- Offer to implement fixes now
+- Offer to auto-fix now: `~/.claude/scripts/makefile-audit.sh --fix`
 - "Run `/makefile-audit` again after fixes to verify"
 
 **If score 50-69**:
 - Show prioritized fix plan
-- Offer to fix critical issues first
+- Run auto-fixes first: `~/.claude/scripts/makefile-audit.sh --fix`
+- For remaining manual issues, provide exact Makefile code to add
 - "Consider `/makefile-init` if Makefiles need significant rework"
 
 **If score < 50**:
@@ -149,8 +179,9 @@ ${ACTION_PLAN}
 
 ## Important Notes
 
-- **Non-destructive**: Only reads files, makes no changes
-- **Repeatable**: Safe to run multiple times
+- **Audit-only by default**: `--stage all` reads files and makes no changes
+- **Fix mode**: `--fix` / `--full` modifies Makefile(s) in-place — auto-fixes only
+- **Repeatable**: Safe to run multiple times; fixes are idempotent
 - **PROJECT.yaml required**: Script reads component list from PROJECT.yaml
 - **Quick mode**: Use `--quick` on the script to skip seeding checks
 - **Reference**: `~/.claude/docs/reference/makefile.md` and `~/.claude/docs/reference/testing.md`

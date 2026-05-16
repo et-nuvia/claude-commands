@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# makefile-audit.sh - Deterministic Makefile implementation audit
-# Usage: ./makefile-audit.sh --stage <stage> [--quick]
+# makefile-audit.sh - Deterministic Makefile implementation audit with optional auto-fix
+# Usage: ./makefile-audit.sh --stage <stage> [--quick] [--fix] [--full]
 # Stages: scan, score, report, all (default)
+# Flags:  --fix   Apply auto-fixable improvements after audit
+#         --full  Run full audit (--stage all) then apply fixes
 #
 # Audits project Makefiles against the standards in:
 #   ~/.claude/docs/reference/makefile.md
@@ -21,6 +23,8 @@ source "${LIB_DIR}/project-config.sh"
 # Configuration
 STAGE="all"
 QUICK_MODE=false
+FIX_MODE=false
+FULL_MODE=false
 OUTPUT_FILE="/tmp/makefile-audit-result.json"
 
 # Parse arguments
@@ -29,13 +33,21 @@ while [[ $# -gt 0 ]]; do
     --stage)    STAGE="$2"; shift 2 ;;
     --quick)    QUICK_MODE=true; shift ;;
     --output)   OUTPUT_FILE="$2"; shift 2 ;;
+    --fix)      FIX_MODE=true; shift ;;
+    --full)     FULL_MODE=true; shift ;;
     *)
       print_error "Unknown argument: $1"
-      echo "Usage: makefile-audit.sh --stage <scan|score|report|all> [--quick] [--output FILE]" >&2
+      echo "Usage: makefile-audit.sh --stage <scan|score|report|all> [--quick] [--fix] [--full] [--output FILE]" >&2
       exit 2
       ;;
   esac
 done
+
+# --full implies audit (stage all) + fix
+if [[ "$FULL_MODE" == "true" ]]; then
+  STAGE="all"
+  FIX_MODE=true
+fi
 
 # Require PROJECT.yaml
 require_project_config
@@ -638,6 +650,140 @@ EOF
 }
 
 #============================================================================
+# Stage: Fix - Apply auto-fixable improvements to discovered Makefiles
+#
+# Auto-fixable issues (ported from makefile-optimize.sh):
+#   - Missing FORMAT ?= human
+#   - Missing MAKEFLAGS += --no-print-directory
+#   - Missing JSON_WRAPPER variable
+#   - Missing targets meta-target
+#
+# Non-auto-fixable (manual, as documented in makefile-optimize.sh):
+#   - Adding ifeq ($(FORMAT),json) branches to existing targets
+#   - Adding missing standard targets (test, lint, format, etc.)
+#   - Adding @ prefix to recipe lines
+#============================================================================
+
+fix_stage() {
+  print_info "Stage: Applying auto-fixes..."
+
+  if [[ ${#MAKEFILES_FOUND[@]} -eq 0 ]]; then
+    print_error "No Makefiles found — run scan first or ensure Makefiles exist"
+    return 1
+  fi
+
+  local fixes_applied=0
+  local fixed_files=()
+
+  for makefile in "${MAKEFILES_FOUND[@]}"; do
+    local modified=false
+
+    # Fix: Add FORMAT ?= human (and companion vars) if missing.
+    # When inserting, we add FORMAT, MAKEFLAGS, and JSON_WRAPPER together as a
+    # cohesive block rather than individually, to avoid partial states.
+    if ! grep -q 'FORMAT ?= human' "$makefile"; then
+      local temp_file
+      temp_file=$(mktemp)
+      if grep -q '^\.PHONY:' "$makefile"; then
+        # Insert the block after the first .PHONY line
+        awk '/^\.PHONY:/{print; print ""; print "# LLM-optimized output support"; print "FORMAT ?= human"; print "MAKEFLAGS += --no-print-directory"; print "JSON_WRAPPER ?= $(HOME)/.claude/scripts/lib/make-json-wrapper.sh"; next}1' "$makefile" > "$temp_file"
+      else
+        {
+          printf '# LLM-optimized output support\n'
+          printf 'FORMAT ?= human\n'
+          printf 'MAKEFLAGS += --no-print-directory\n'
+          printf 'JSON_WRAPPER ?= $(HOME)/.claude/scripts/lib/make-json-wrapper.sh\n'
+          printf '\n'
+          cat "$makefile"
+        } > "$temp_file"
+      fi
+      mv "$temp_file" "$makefile"
+      modified=true
+      fixes_applied=$((fixes_applied + 3))
+      print_success "Fixed: Added FORMAT/MAKEFLAGS/JSON_WRAPPER to ${makefile}"
+    else
+      # FORMAT already exists — patch MAKEFLAGS and JSON_WRAPPER individually if absent
+
+      if ! grep -q 'MAKEFLAGS.*--no-print-directory' "$makefile"; then
+        # macOS sed requires empty string for in-place without backup
+        sed -i'' '/FORMAT ?= human/a\'$'\nMAKEFLAGS += --no-print-directory' "$makefile"
+        modified=true
+        fixes_applied=$((fixes_applied + 1))
+        print_success "Fixed: Added MAKEFLAGS to ${makefile}"
+      fi
+
+      if ! grep -q 'JSON_WRAPPER' "$makefile"; then
+        sed -i'' '/MAKEFLAGS.*--no-print-directory/a\'$'\nJSON_WRAPPER ?= $(HOME)/.claude/scripts/lib/make-json-wrapper.sh' "$makefile"
+        modified=true
+        fixes_applied=$((fixes_applied + 1))
+        print_success "Fixed: Added JSON_WRAPPER to ${makefile}"
+      fi
+    fi
+
+    # Fix: Add targets meta-target if missing.
+    # The targets target emits a JSON list of available targets in FORMAT=json mode
+    # and falls back to `make help` in human mode.
+    if ! grep -qE '^targets:' "$makefile"; then
+      local component_name
+      component_name=$(basename "$(dirname "$(realpath "$makefile")")")
+      [[ "$makefile" == "Makefile" ]] && component_name="root"
+      # Use printf to avoid heredoc tab-stripping issues with Makefile recipe indentation
+      printf '\ntargets: ## List all available targets\nifeq ($(FORMAT),json)\n\t@echo '"'"'{"status":"success","target":"targets","component":"%s","targets":[]}'"'"'\nelse\n\t@$(MAKE) help\nendif\n' "$component_name" >> "$makefile"
+      modified=true
+      fixes_applied=$((fixes_applied + 1))
+      print_success "Fixed: Added targets meta-target to ${makefile}"
+    fi
+
+    [[ "$modified" == "true" ]] && fixed_files+=("$makefile")
+  done
+
+  print_info ""
+  print_info "Auto-fix complete: ${fixes_applied} fix(es) applied to ${#fixed_files[@]} file(s)"
+
+  # Build fixed files JSON array
+  local fixed_json="["
+  local first=true
+  for f in "${fixed_files[@]}"; do
+    if [[ "$first" == "true" ]]; then first=false; else fixed_json="${fixed_json},"; fi
+    fixed_json="${fixed_json}\"${f}\""
+  done
+  fixed_json="${fixed_json}]"
+
+  # Emit a concise JSON summary for fix-only mode; in full mode the caller
+  # already has the audit report and only needs to know what was patched.
+  local fix_result
+  fix_result=$(cat <<EOF
+{
+  "fix_stage": {
+    "fixes_applied": ${fixes_applied},
+    "files_modified": ${fixed_json}
+  }
+}
+EOF
+)
+
+  # Merge fix summary into the existing audit result file if it exists, otherwise emit standalone
+  if [[ -f "$OUTPUT_FILE" ]]; then
+    local merged
+    merged=$(python3 -c "
+import sys, json
+audit = json.load(open('$OUTPUT_FILE'))
+fix = json.load(sys.stdin)
+audit.update(fix)
+print(json.dumps(audit, indent=2))
+" <<< "$fix_result" 2>/dev/null || true)
+    if [[ -n "$merged" ]]; then
+      echo "$merged" > "$OUTPUT_FILE"
+      print_info "Fix summary merged into: $OUTPUT_FILE"
+    fi
+  else
+    echo "$fix_result" > "$OUTPUT_FILE"
+    echo "$fix_result"
+    print_info "Fix summary written to: $OUTPUT_FILE"
+  fi
+}
+
+#============================================================================
 # Main
 #============================================================================
 
@@ -666,6 +812,11 @@ main() {
       exit 2
       ;;
   esac
+
+  # Apply fixes after audit if requested
+  if [[ "$FIX_MODE" == "true" ]]; then
+    fix_stage
+  fi
 }
 
 main
