@@ -69,9 +69,12 @@ awk -F'\t' '{ print length($1) "\t" $0 }' "$map_file" \
 while IFS=$'\t' read -r orig flat; do
     # Escape ERE metacharacters in the path we're searching for.
     orig_esc="$(printf '%s\n' "$orig" | sed -e 's/[][\/.^$*+?(){}|]/\\&/g')"
+    # Wiki page links must drop the `.md` extension — GitHub serves
+    # `name.md` as a raw file but renders `name` as the wiki page.
+    flat_page="${flat%.md}"
     # Match `](orig)` or `](orig#anchor)` and rewrite, preserving the
     # anchor. ERE is portable across GNU and BSD sed.
-    printf 's|\\]\\(%s(#[^)]*)?\\)|](%s\\1)|g\n' "$orig_esc" "$flat" >> "$sed_script"
+    printf 's|\\]\\(%s(#[^)]*)?\\)|](%s\\1)|g\n' "$orig_esc" "$flat_page" >> "$sed_script"
 done < "${map_file}.sorted"
 
 # Copy + transform each tracked file.
