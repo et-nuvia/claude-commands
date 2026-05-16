@@ -8,9 +8,23 @@
 
 set -euo pipefail
 
-readonly TRACKING_DIR="${HOME}/.claude/tracking"
-readonly SESSION_FILE="${HOME}/.claude/.tracking-session"
-readonly SETTINGS_FILE="${HOME}/.claude/settings.json"
+# Honor CLAUDE_HOME for non-default install locations (e.g. when the
+# repo is checked out somewhere other than ~/.claude, or when running
+# from a sandboxed CI environment). Defaults to ~/.claude.
+#
+# Not declared readonly: SESSION_FILE in particular gets re-passed as
+# an env-var prefix to the Python heredoc below, which fails on a
+# readonly var. Treat these as constants by convention, not by syntax.
+CLAUDE_HOME="${CLAUDE_HOME:-${HOME}/.claude}"
+TRACKING_DIR="${CLAUDE_HOME}/tracking"
+SESSION_FILE="${CLAUDE_HOME}/.tracking-session"
+SETTINGS_FILE="${CLAUDE_HOME}/settings.json"
+
+# Conversation ID — exposed by Claude Code as CLAUDE_CODE_SESSION_ID and
+# matches the transcript filename under ~/.claude/projects/<encoded>/.
+# Distinct from the per-command session_id (8-char random, pairs
+# start/complete events). Empty when running outside Claude Code.
+CONVERSATION_ID="${CLAUDE_CODE_SESSION_ID:-}"
 
 # ─── Argument Parsing ─────────────────────────────────────────────────────────
 
@@ -120,33 +134,39 @@ if [[ "${EVENT_TYPE}" == "start" ]]; then
 
   # Persist session for the matching complete/error call
   COMMAND_NAME="${COMMAND_NAME}" SESSION_ID="${SESSION_ID}" EVENT_ID="${EVENT_ID}" \
-  TIMESTAMP="${TIMESTAMP}" PROJECT="${PROJECT}" python3 - <<'PYEOF'
+  TIMESTAMP="${TIMESTAMP}" PROJECT="${PROJECT}" SESSION_FILE="${SESSION_FILE}" \
+  CONVERSATION_ID="${CONVERSATION_ID}" \
+  python3 - <<'PYEOF'
 import json, os
 data = {
-    "session_id": os.environ["SESSION_ID"],
-    "event_id":   os.environ["EVENT_ID"],
-    "start_time": os.environ["TIMESTAMP"],
-    "command":    os.environ["COMMAND_NAME"],
-    "project":    os.environ["PROJECT"],
+    "session_id":      os.environ["SESSION_ID"],
+    "conversation_id": os.environ.get("CONVERSATION_ID") or None,
+    "event_id":        os.environ["EVENT_ID"],
+    "start_time":      os.environ["TIMESTAMP"],
+    "command":         os.environ["COMMAND_NAME"],
+    "project":         os.environ["PROJECT"],
 }
-with open(os.path.expanduser("~/.claude/.tracking-session"), "w") as f:
+with open(os.environ["SESSION_FILE"], "w") as f:
     json.dump(data, f)
 PYEOF
 
+  mkdir -p "${TRACKING_DIR}"
   TRACKING_FILE="${TRACKING_DIR}/${TODAY}.json"
 
   ENTRY_JSON=$(COMMAND_NAME="${COMMAND_NAME}" SESSION_ID="${SESSION_ID}" \
   EVENT_ID="${EVENT_ID}" TIMESTAMP="${TIMESTAMP}" PROJECT="${PROJECT}" FOLDER="${FOLDER}" \
+  CONVERSATION_ID="${CONVERSATION_ID}" \
   python3 - <<'PYEOF'
 import json, os
 entry = {
-    "event_id":   os.environ["EVENT_ID"],
-    "session_id": os.environ["SESSION_ID"],
-    "command":    os.environ["COMMAND_NAME"],
-    "project":    os.environ["PROJECT"],
-    "folder":     os.environ["FOLDER"],
-    "status":     "started",
-    "timestamp":  os.environ["TIMESTAMP"],
+    "event_id":        os.environ["EVENT_ID"],
+    "session_id":      os.environ["SESSION_ID"],
+    "conversation_id": os.environ.get("CONVERSATION_ID") or None,
+    "command":         os.environ["COMMAND_NAME"],
+    "project":         os.environ["PROJECT"],
+    "folder":          os.environ["FOLDER"],
+    "status":          "started",
+    "timestamp":       os.environ["TIMESTAMP"],
 }
 print(json.dumps(entry))
 PYEOF
@@ -170,11 +190,15 @@ elif [[ "${EVENT_TYPE}" == "complete" || "${EVENT_TYPE}" == "error" ]]; then
   SELECTED_MODEL="$(get_selected_model)"
   SESSION_DATA="$(cat "${SESSION_FILE}")"
 
-  # Parse session fields
-  SESSION_ID=$(   echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['session_id'])")
-  START_TIME=$(   echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['start_time'])")
-  SESSION_CMD=$(  echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['command'])")
-  SESSION_PROJ=$( echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['project'])")
+  # Parse session fields. conversation_id falls back to the current env
+  # value if the session file was written by an older version that
+  # didn't record it.
+  SESSION_ID=$(    echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['session_id'])")
+  START_TIME=$(    echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['start_time'])")
+  SESSION_CMD=$(   echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['command'])")
+  SESSION_PROJ=$(  echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin)['project'])")
+  SESSION_CONV=$(  echo "${SESSION_DATA}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('conversation_id') or '')")
+  [[ -z "${SESSION_CONV}" ]] && SESSION_CONV="${CONVERSATION_ID}"
 
   DURATION=$(START_TIME="${START_TIME}" TIMESTAMP="${TIMESTAMP}" python3 - <<'PYEOF'
 import os, re
@@ -192,10 +216,12 @@ print(int(abs(diff.total_seconds())))
 PYEOF
 )
 
+  mkdir -p "${TRACKING_DIR}"
   TRACKING_FILE="${TRACKING_DIR}/${TODAY}.json"
 
   ENTRY_JSON=$(SESSION_ID="${SESSION_ID}" SESSION_CMD="${SESSION_CMD}" \
-  SESSION_PROJ="${SESSION_PROJ}" TIMESTAMP="${TIMESTAMP}" FOLDER="${FOLDER}" \
+  SESSION_PROJ="${SESSION_PROJ}" SESSION_CONV="${SESSION_CONV}" \
+  TIMESTAMP="${TIMESTAMP}" FOLDER="${FOLDER}" \
   EVENT_TYPE="${EVENT_TYPE}" MODEL="${MODEL}" SELECTED_MODEL="${SELECTED_MODEL}" \
   DURATION="${DURATION}" COMPLEXITY="${COMPLEXITY}" TOKENS="${TOKENS}" \
   COST="${COST}" ERROR_MSG="${ERROR_MSG}" python3 - <<'PYEOF'
@@ -203,14 +229,15 @@ import json, os
 
 e = os.environ
 entry = {
-    "session_id":     e["SESSION_ID"],
-    "command":        e["SESSION_CMD"],
-    "project":        e["SESSION_PROJ"],
-    "folder":         e["FOLDER"],
-    "status":         e["EVENT_TYPE"] + "d",
-    "timestamp":      e["TIMESTAMP"],
-    "model":          e["MODEL"] or None,
-    "selected_model": e["SELECTED_MODEL"],
+    "session_id":      e["SESSION_ID"],
+    "conversation_id": e.get("SESSION_CONV") or None,
+    "command":         e["SESSION_CMD"],
+    "project":         e["SESSION_PROJ"],
+    "folder":          e["FOLDER"],
+    "status":          e["EVENT_TYPE"] + "d",
+    "timestamp":       e["TIMESTAMP"],
+    "model":           e["MODEL"] or None,
+    "selected_model":  e["SELECTED_MODEL"],
     "duration_seconds": int(e["DURATION"] or 0),
 }
 

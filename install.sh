@@ -5,9 +5,11 @@
 # real directories by backing them up to ~/.claude/<name>.backup-<timestamp>.
 #
 # Usage:
-#   ./install.sh              # install / re-link
-#   ./install.sh --dry-run    # show what would happen
-#   ./install.sh --uninstall  # remove symlinks (calls uninstall.sh)
+#   ./install.sh                   # install / re-link
+#   ./install.sh --dry-run         # show what would happen
+#   ./install.sh --uninstall       # remove symlinks (calls uninstall.sh)
+#   ./install.sh --target <dir>    # install into <dir> instead of ~/.claude
+#                                  # (also settable via CLAUDE_HOME env var)
 
 set -euo pipefail
 
@@ -26,21 +28,30 @@ LINKS=(
   "templates"
   "docs"
   "profiles"
+  "schemas"
+  "tracking"
 )
 
 log()  { printf '[install] %s\n' "$*"; }
 warn() { printf '[install] WARN: %s\n' "$*" >&2; }
 die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --dry-run)   DRY_RUN=1 ;;
     --uninstall) exec "${REPO_DIR}/uninstall.sh" ;;
+    --target)
+      [[ $# -ge 2 ]] || die "--target requires a directory argument"
+      CLAUDE_DIR="$2"; shift ;;
+    --target=*)  CLAUDE_DIR="${1#--target=}" ;;
     -h|--help)
-      sed -n '2,12p' "$0"; exit 0 ;;
-    *) die "unknown arg: $arg" ;;
+      sed -n '2,14p' "$0"; exit 0 ;;
+    *) die "unknown arg: $1" ;;
   esac
+  shift
 done
+
+CLAUDE_DIR="${CLAUDE_DIR/#\~/$HOME}"
 
 run() {
   if [[ "$DRY_RUN" == "1" ]]; then
