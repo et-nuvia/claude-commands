@@ -30,6 +30,9 @@ LINKS=(
   "profiles"
   "schemas"
   "tracking"
+  "hooks"
+  ".subagent-sessions"
+  "logs"
 )
 
 log()  { printf '[install] %s\n' "$*"; }
