@@ -1,7 +1,9 @@
 # Command Catalog
 
-Every slash command has a dedicated wiki page under [`commands/`](commands/).
-Each page follows the same structure (see [`_TEMPLATE.md`](commands/_TEMPLATE.md)):
+Every slash command has a dedicated wiki page under
+[`docs/wiki/commands/`](https://github.com/et-nuvia/claude-commands/tree/main/docs/wiki/commands).
+Each page follows the same structure (see
+[`_TEMPLATE.md`](https://github.com/et-nuvia/claude-commands/blob/main/docs/wiki/commands/_TEMPLATE.md)):
 YAML frontmatter → lede → optional config callout → When to use it · Usage ·
 Arguments · Dependencies · Backing script · How it works · Example workflows ·
 Notes & gotchas.
