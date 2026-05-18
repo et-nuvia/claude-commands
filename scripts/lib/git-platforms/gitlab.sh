@@ -227,14 +227,33 @@ git_pr_list() {
 }
 
 # git_pr_get <id>
+# Fetches MR, changes (per-file diffs), and commits. Addresses gaps
+# surfaced in PR #53 review:
+#   - commits must be populated so downstream consumers can reason
+#     about change history (GitHub gets these via `gh pr view --json
+#     commits`; GitLab needs a separate /commits endpoint call).
+#   - additions/deletions are computed from the unified diff because
+#     the GitLab API doesn't expose them on the MR object; changes_count
+#     counts files, not lines.
 git_pr_get() {
   local id="${1:?id required}"
-  local proj raw changes
+  local proj raw changes commits additions deletions
   proj=$(_gitlab_project_id) || return 1
   raw=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}") || return $?
-  # changes endpoint gives per-file diffs and counts
   changes=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/changes" 2>/dev/null || echo "{}")
-  jq -c --argjson changes "$changes" '{
+  commits=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/commits" 2>/dev/null || echo "[]")
+
+  # Count +/- lines from the per-file diffs. Skip the file-header
+  # lines (+++ / ---) so they aren't miscounted as content.
+  additions=$(jq -r '[.changes[]?.diff // ""] | join("\n")' <<<"$changes" \
+              | grep -cE '^\+[^+]' 2>/dev/null || echo 0)
+  deletions=$(jq -r '[.changes[]?.diff // ""] | join("\n")' <<<"$changes" \
+              | grep -cE '^-[^-]' 2>/dev/null || echo 0)
+
+  jq -c --argjson changes "$changes" \
+        --argjson commits "$commits" \
+        --argjson additions "$additions" \
+        --argjson deletions "$deletions" '{
     id: .iid,
     title: .title,
     state: (.state | sub("^opened$"; "open")),
@@ -244,11 +263,11 @@ git_pr_get() {
     author: .author.username,
     is_draft: (.draft // .work_in_progress // false),
     body: .description,
-    additions: ($changes.changes_count // null),
-    deletions: null,
+    additions: $additions,
+    deletions: $deletions,
     files_changed: (($changes.changes // []) | length),
     created_at: .created_at,
-    raw: (. + {changes: $changes})
+    raw: (. + {changes: $changes, commits: $commits})
   }' <<<"$raw"
 }
 
@@ -273,17 +292,21 @@ git_pr_diff() {
 
 # git_pr_checkout <id>
 # Fetch the MR head and switch the working tree to it. Uses the
-# Git refs that GitLab exposes for MRs (refs/merge-requests/<iid>/head).
+# Git refs that GitLab exposes for MRs (refs/merge-requests/<iid>/head),
+# falling back to the source branch. Hard-fails if neither fetch
+# resolves so callers see a useful error rather than a downstream
+# 'pathspec did not match' from git checkout.
 git_pr_checkout() {
   local id="${1:?id required}"
   local proj target_branch
   proj=$(_gitlab_project_id) || return 1
-  # Resolve the source_branch so we have a human-friendly local name
   target_branch=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}" \
                   | jq -r '.source_branch') || return $?
-  git fetch origin "merge-requests/${id}/head:${target_branch}" 2>/dev/null \
-    || git fetch origin "${target_branch}:${target_branch}" 2>/dev/null \
-    || true
+  if ! git fetch origin "merge-requests/${id}/head:${target_branch}" 2>/dev/null \
+     && ! git fetch origin "${target_branch}:${target_branch}" 2>/dev/null; then
+    echo "git_pr_checkout: failed to fetch MR #${id} head ref or branch '${target_branch}'" >&2
+    return 1
+  fi
   git checkout "$target_branch"
 }
 

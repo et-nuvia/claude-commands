@@ -148,8 +148,23 @@ section_list() {
 
     local prs_json=""
 
-    load_git_adapter || exit_with_json "error" "Failed to load git adapter"
-    prs_json=$(git_pr_list --state open 2>&1 || echo "[]")
+    load_git_adapter || exit_with_json "error" "Failed to load git adapter" "Set .git.platform in PROJECT.yaml or the active profile"
+
+    # Probe auth/network up front so the user gets a platform-specific
+    # actionable hint rather than a generic empty-list result.
+    if ! git_health 2>/dev/null; then
+        local hint=""
+        case "$PLATFORM" in
+            github) hint="Run: gh auth login" ;;
+            gitlab) hint="Create a personal access token and save it to ~/.gitlab-token" ;;
+            *)      hint="Check adapter prerequisites for platform '$PLATFORM'" ;;
+        esac
+        exit_with_json "error" "Git platform auth/health check failed" "$hint"
+    fi
+
+    if ! prs_json=$(git_pr_list --state open 2>&1); then
+        exit_with_json "error" "Failed to list PRs" "$prs_json"
+    fi
 
     if [[ "$SECTION" == "list" ]]; then
         local json=$(cat <<EOF
