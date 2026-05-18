@@ -57,6 +57,7 @@ map_status_to_action() {
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/lib/load-profile.sh"
+source "${SCRIPT_DIR}/lib/task-api.sh"
 source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
 
@@ -554,62 +555,48 @@ Branch preserved for resumption when response received." >/dev/null 2>&1; then
 section_sync() {
     log "${BLUE}Syncing External Systems${NC}"
 
-    # Extract issue numbers from task document
+    # Load task adapter (no-op if already loaded; exits gracefully if none configured)
+    load_task_adapter 2>/dev/null || true
+
+    # Extract issue numbers from task document (used only for logging; adapter uses TASK_ID)
     ISSUE_NUMBER=$(sed -n 's/.*GitHub.*Issue.*#\([0-9]\+\).*/\1/p' "$TASK_DOC" 2>/dev/null | head -1 || echo "")
     ISSUE_ID=$(sed -n 's/.*GitLab.*Issue.*#\([0-9]\+\).*/\1/p' "$TASK_DOC" 2>/dev/null | head -1 || echo "")
 
-    # GitHub Issue
-    if [[ -n "$ISSUE_NUMBER" ]]; then
-        local comment="⏸️ Task put on hold
+    # Determine the task ID to use with the adapter: prefer explicit backend IDs
+    # extracted from the document; fall back to TASK_ID (our V4 hex ID).
+    local adapter_task_id="${ISSUE_NUMBER:-${ISSUE_ID:-$TASK_ID}}"
 
-**Reason**: ${HOLD_REASON}
-**Waiting on**: ${WAITING_ON}
-**Expected response**: ${EXPECTED_DATE}
-**Needed**: ${NEEDED_INFO}
+    # Use adapter to put task on hold and add a comment (works for any backend)
+    if declare -f task_hold &>/dev/null && [[ -n "$adapter_task_id" ]]; then
+        local hold_comment="Task put on hold.
+
+Reason: ${HOLD_REASON}
+Waiting on: ${WAITING_ON}
+Expected response: ${EXPECTED_DATE}
+Needed: ${NEEDED_INFO}
 
 Branch ${CURRENT_BRANCH} preserved. Will resume when response received."
 
-        gh issue comment "$ISSUE_NUMBER" --body "$comment" 2>/dev/null || true
-        gh issue edit "$ISSUE_NUMBER" --add-label "on-hold" 2>/dev/null || true
+        task_hold "$adapter_task_id" "$HOLD_REASON" "$WAITING_ON" 2>/dev/null || true
+        task_comment "$adapter_task_id" "$hold_comment" 2>/dev/null || true
 
-        log "${GREEN}✓${NC} GitHub issue #$ISSUE_NUMBER marked as on-hold"
+        log "${GREEN}✓${NC} External task #${adapter_task_id} marked as on-hold via adapter"
         EXTERNAL_UPDATED=true
+    else
+        log "${BLUE}ℹ${NC} No task adapter available — skipping external sync"
     fi
 
-    # GitLab Issue
-    if [[ -n "$ISSUE_ID" ]]; then
-        local gitlab_token=$(cat ~/.gitlab-token 2>/dev/null || echo "")
-        local project_id=$(yaml_get '.task_management.gitlab.project_id' PROJECT.yaml)
-        local gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
-        local gitlab_base="https://${gitlab_host}/api/v4/projects/${project_id}"
-
-        if [[ -n "$gitlab_token" ]] && [[ -n "$project_id" ]] && [[ -n "$gitlab_host" ]]; then
-            # Post comment
-            curl -s -X POST \
-                --header "PRIVATE-TOKEN: ${gitlab_token}" \
-                --data "body=⏸️ Task on hold: ${HOLD_REASON}. Waiting on: ${WAITING_ON}. Expected: ${EXPECTED_DATE}" \
-                "${gitlab_base}/issues/${ISSUE_ID}/notes" >/dev/null 2>&1 || true
-
-            # Add label
-            curl -s -X PUT \
-                --header "PRIVATE-TOKEN: ${gitlab_token}" \
-                --data "add_labels=on-hold" \
-                "${gitlab_base}/issues/${ISSUE_ID}" >/dev/null 2>&1 || true
-
-            log "${GREEN}✓${NC} GitLab issue #$ISSUE_ID marked as on-hold"
-            EXTERNAL_UPDATED=true
-        fi
-    fi
-
-    # Check for Asana integration
-    local backend=$(yaml_get '.task_management.backend' PROJECT.yaml)
-    local sync_on_hold=$(yaml_get '.task_management.asana.sync_on_operations[] | select(. == "hold")' PROJECT.yaml)
+    # Check for Asana integration requiring additional LLM-driven sync
+    local backend
+    backend=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || true)
+    local sync_on_hold
+    sync_on_hold=$(yaml_get '.task_management.asana.sync_on_operations[] | select(. == "hold")' PROJECT.yaml 2>/dev/null || true)
 
     if [[ "$backend" == "asana" ]] && [[ -n "$sync_on_hold" ]]; then
         SHOULD_SYNC_ASANA=true
-        log "${GREEN}✓${NC} Asana sync enabled (will be handled by LLM with MCP)"
+        log "${GREEN}✓${NC} Asana sync enabled (adapter handles REST; LLM may add extra MCP steps)"
     else
-        log "${BLUE}ℹ${NC} Asana sync disabled (not configured in PROJECT.yaml)"
+        log "${BLUE}ℹ${NC} Asana sync via LLM not required"
     fi
 
     if [[ "$SECTION" == "sync" ]]; then
@@ -734,7 +721,7 @@ main() {
                     "\"should_sync_asana\": true," \
                     "\"asana_gid\": \"$ASANA_GID\"," \
                     "\"external_updated\": $EXTERNAL_UPDATED," \
-                    "\"next_steps\": [\"LLM: mcp__asana__update_custom_field to 'Hold'\", \"LLM: mcp__asana__add_comment with hold summary\", \"Run: task-hold.sh --json --merge\"]"
+                    "\"next_steps\": [\"Verify adapter sync succeeded (external_updated flag)\", \"Apply any additional Asana custom-field updates if required\", \"Run: task-hold.sh --json --merge\"]"
             fi
 
             # No Asana sync needed → proceed directly to merge
