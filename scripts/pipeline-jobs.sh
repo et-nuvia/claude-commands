@@ -3,8 +3,15 @@ set -euo pipefail
 
 # List pipeline jobs (cross-platform: GitLab/GitHub)
 # Usage: pipeline-jobs.sh [--pipeline-id <id>]
+#
+# Migrated to use scripts/lib/git-api.sh. The previous per-platform
+# list_gitlab_jobs / list_github_jobs functions were collapsed onto
+# git_pipeline_list (for "latest" resolution) and git_pipeline_status
+# (for the jobs array on a given pipeline).
 
-source ~/.claude/scripts/git-detect.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 PIPELINE_ID=""
 
@@ -18,54 +25,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-list_gitlab_jobs() {
-    local pipeline_id=$1
-    local token=$(cat "$GIT_TOKEN_FILE")
+if ! load_git_adapter; then
+  echo "Error: failed to load git platform adapter" >&2
+  exit 1
+fi
 
-    if [[ -z "$pipeline_id" ]]; then
-        pipeline_id=$(curl -s --header "PRIVATE-TOKEN: ${token}" \
-            "${GIT_API_URL}/projects/${GIT_PROJECT_PATH}/pipelines?per_page=1" \
-            | jq -r '.[0].id')
-        echo "Using latest pipeline: #${pipeline_id}"
-    fi
+if [[ -z "$PIPELINE_ID" ]]; then
+  PIPELINE_ID=$(git_pipeline_list --limit 1 | jq -r '.[0].id // empty')
+  if [[ -z "$PIPELINE_ID" ]]; then
+    echo "Error: no recent pipelines found" >&2
+    exit 1
+  fi
+  echo "Using latest pipeline: #${PIPELINE_ID}"
+fi
 
-    echo "Jobs for pipeline #${pipeline_id}:"
-    echo ""
+echo "Jobs for pipeline #${PIPELINE_ID}:"
+echo ""
 
-    local response=$(curl -s --header "PRIVATE-TOKEN: ${token}" \
-        "${GIT_API_URL}/projects/${GIT_PROJECT_PATH}/pipelines/${pipeline_id}/jobs")
-
-    if ! echo "$response" | jq -e '.' >/dev/null 2>&1; then
-        echo "Error: Invalid JSON response from API"
-        echo "$response" | head -5
-        return 1
-    fi
-
-    echo "$response" | jq -r '.[] | "Job: \(.name) (ID: \(.id))\n  Stage: \(.stage)\n  Status: \(.status)\n  Duration: \(if .duration then "\(.duration)s" else "N/A" end)\n  URL: \(.web_url)\n"'
-}
-
-list_github_jobs() {
-    local run_id=$1
-
-    if [[ -z "$run_id" ]]; then
-        run_id=$(gh run list --repo "$GIT_PROJECT_PATH" --limit 1 --json databaseId | jq -r '.[0].databaseId')
-        echo "Using latest workflow: #${run_id}"
-    fi
-
-    echo "Jobs for workflow #${run_id}:"
-    echo ""
-
-    gh run view "$run_id" --repo "$GIT_PROJECT_PATH" --json jobs \
-        | jq -r '.jobs[] | "Job: \(.name) (ID: \(.databaseId))\n  Status: \(.conclusion // .status)\n  Duration: \(.completedAt - .startedAt | if . then "\(./1000)s" else "N/A" end)\n"'
-}
-
-case "$GIT_PLATFORM" in
-    gitlab)
-        [[ -f "$GIT_TOKEN_FILE" ]] || { echo "Error: Token file not found: $GIT_TOKEN_FILE"; exit 1; }
-        list_gitlab_jobs "$PIPELINE_ID"
-        ;;
-    github)
-        command -v gh &>/dev/null || { echo "Error: gh CLI not installed"; exit 1; }
-        list_github_jobs "$PIPELINE_ID"
-        ;;
-esac
+git_pipeline_status "$PIPELINE_ID" \
+  | jq -r '.jobs[]? | "Job: \(.name) (ID: \(.id))\n  Status: \(.conclusion // .status)\n  URL: \(.url // "")\n"'

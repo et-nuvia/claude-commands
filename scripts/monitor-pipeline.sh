@@ -7,36 +7,20 @@
 # When --head-sha is provided, only runs matching that commit SHA are considered.
 # This prevents matching stale runs from previous pushes and catches the case where
 # no new run appears (e.g., because the push didn't actually land).
+#
+# Migrated to use scripts/lib/git-api.sh. The two per-platform monitor
+# functions were replaced with a single loop that polls
+# git_pipeline_list (filtered by ref + sha) and git_pipeline_status
+# via the platform adapter. Platform-specific URL construction and
+# pipeline-id lookups are no longer required in this script.
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/lib/load-profile.sh"
-
-# Detect CI platform if not provided
-detect_ci_platform() {
-  # Tier 1: Git remote URL parsing
-  local remote_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
-  if [[ "$remote_url" =~ github\.com ]]; then
-    echo "github"
-    return 0
-  elif [[ "$remote_url" =~ gitlab || "$remote_url" =~ git\. ]]; then
-    echo "gitlab"
-    return 0
-  fi
-
-  # Tier 2: Check for CLI tools
-  if command -v gh >/dev/null 2>&1; then
-    echo "github"
-    return 0
-  elif command -v gitlab >/dev/null 2>&1 || command -v glab >/dev/null 2>&1; then
-    echo "gitlab"
-    return 0
-  fi
-
-  # Tier 3: Default to github (most common)
-  echo "github"
-}
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 CI_PLATFORM=""
 BRANCH="staging"
@@ -56,10 +40,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Auto-detect platform if not provided
-if [[ -z "$CI_PLATFORM" ]]; then
-  CI_PLATFORM=$(detect_ci_platform)
-  echo "⚠️  CI platform not specified, detected: $CI_PLATFORM" >&2
+# --platform is retained for backward compat. The adapter resolves
+# the platform itself; if --platform was passed, honor it as an
+# override.
+if [[ -n "$CI_PLATFORM" ]]; then
+  export GIT_ADAPTER_OVERRIDE="$CI_PLATFORM"
+fi
+
+if ! load_git_adapter; then
+  echo "❌ failed to load git platform adapter" >&2
+  exit 1
 fi
 
 POLL_INTERVAL=10
@@ -67,114 +57,37 @@ ELAPSED=0
 STATUS="unknown"
 URL=""
 FAILED_STAGES=""
+PIPELINE_ID=""
 
-monitor_github() {
-  if [[ -n "$HEAD_SHA" ]]; then
-    echo "Waiting for GitHub Actions pipeline (branch=$BRANCH, sha=${HEAD_SHA:0:8})..." >&2
-  else
-    echo "Waiting for GitHub Actions pipeline (branch=$BRANCH)..." >&2
-  fi
-  sleep 5  # Give GitHub time to queue the run
+if [[ -n "$HEAD_SHA" ]]; then
+  echo "Waiting for pipeline (branch=$BRANCH, sha=${HEAD_SHA:0:8})..." >&2
+else
+  echo "Waiting for pipeline (branch=$BRANCH)..." >&2
+fi
+# Give the platform time to queue the run.
+sleep 5
 
+monitor_loop() {
   while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-    if [[ -n "$HEAD_SHA" ]]; then
-      # Only consider runs whose headSha matches the commit we're watching for.
-      # This prevents matching stale runs from prior pushes (which would return
-      # an immediate false-positive success) and forces a timeout if no new run
-      # ever appears (e.g., because the push didn't land on the remote).
-      RUN_ID=$(gh run list --branch "$BRANCH" --limit 20 \
-        --json databaseId,headSha \
-        --jq "[.[] | select(.headSha == \"$HEAD_SHA\")][0].databaseId" 2>/dev/null || echo "")
-      if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
+    local args=(--ref "$BRANCH" --limit 1)
+    [[ -n "$HEAD_SHA" ]] && args=(--ref "$BRANCH" --sha "$HEAD_SHA" --limit 1)
+    local list pipeline
+    list=$(git_pipeline_list "${args[@]}" 2>/dev/null || echo "[]")
+    pipeline=$(jq -c '.[0] // empty' <<<"$list")
+    if [[ -z "$pipeline" ]]; then
+      if [[ -n "$HEAD_SHA" ]]; then
         echo "⏳ No run yet for ${HEAD_SHA:0:8} on $BRANCH ($((ELAPSED / 60))m)" >&2
-        ELAPSED=$((ELAPSED + POLL_INTERVAL))
-        sleep $POLL_INTERVAL
-        continue
+      else
+        echo "⏳ No run yet on $BRANCH ($((ELAPSED / 60))m)" >&2
       fi
-    else
-      RUN_ID=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "")
-      if [[ -z "$RUN_ID" ]]; then
-        ELAPSED=$((ELAPSED + POLL_INTERVAL))
-        sleep $POLL_INTERVAL
-        continue
-      fi
+      ELAPSED=$((ELAPSED + POLL_INTERVAL))
+      sleep "$POLL_INTERVAL"
+      continue
     fi
 
-    STATUS=$(gh run view "$RUN_ID" --json conclusion -q '.conclusion' 2>/dev/null || echo "")
-    URL="https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$RUN_ID"
-
-    case "$STATUS" in
-      success)
-        echo "Pipeline succeeded" >&2
-        return 0
-        ;;
-      failure)
-        FAILED_STAGES=$(gh run view "$RUN_ID" --json jobs -q '.jobs[] | select(.conclusion=="failure") | .name' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-        return 1
-        ;;
-      cancelled)
-        echo "Pipeline was cancelled" >&2
-        return 1
-        ;;
-      *)
-        echo "⏳ Pipeline running... ($((ELAPSED / 60))m)" >&2
-        ELAPSED=$((ELAPSED + POLL_INTERVAL))
-        sleep $POLL_INTERVAL
-        ;;
-    esac
-  done
-
-  STATUS="timeout"
-  return 2
-}
-
-monitor_gitlab() {
-  GITLAB_TOKEN=$(cat ~/.gitlab-token 2>/dev/null || echo "")
-  if [[ -z "$GITLAB_TOKEN" ]]; then
-    echo "❌ GitLab token not found at ~/.gitlab-token" >&2
-    return 1
-  fi
-
-  GITLAB_INSTANCE=$(profile_env_get .git.instance 2>/dev/null)
-  if [[ -z "$GITLAB_INSTANCE" ]]; then
-    echo "❌ GitLab instance not configured (set environments.<env>.git.instance in profile)" >&2
-    return 1
-  fi
-  PROJECT_PATH=$(git config --get remote.origin.url | sed 's/.*:\(.*\)\.git/\1/')
-  PROJECT_ID=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-    "https://$GITLAB_INSTANCE/api/v4/projects?search=$PROJECT_PATH" | jq -r '.[0].id')
-
-  if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "null" ]]; then
-    echo "❌ Could not determine GitLab project ID" >&2
-    return 1
-  fi
-
-  if [[ -n "$HEAD_SHA" ]]; then
-    echo "Waiting for GitLab CI pipeline (ref=$BRANCH, sha=${HEAD_SHA:0:8})..." >&2
-  else
-    echo "Waiting for GitLab CI pipeline (ref=$BRANCH)..." >&2
-  fi
-  sleep 5
-
-  while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-    if [[ -n "$HEAD_SHA" ]]; then
-      # GitLab supports filtering pipelines by sha directly
-      PIPELINE_DATA=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-        "https://$GITLAB_INSTANCE/api/v4/projects/$PROJECT_ID/pipelines?ref=$BRANCH&sha=$HEAD_SHA&per_page=1" | jq '.[0]')
-      if [[ -z "$PIPELINE_DATA" || "$PIPELINE_DATA" == "null" ]]; then
-        echo "⏳ No pipeline yet for ${HEAD_SHA:0:8} on $BRANCH ($((ELAPSED / 60))m)" >&2
-        ELAPSED=$((ELAPSED + POLL_INTERVAL))
-        sleep $POLL_INTERVAL
-        continue
-      fi
-    else
-      PIPELINE_DATA=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-        "https://$GITLAB_INSTANCE/api/v4/projects/$PROJECT_ID/pipelines?ref=$BRANCH&per_page=1" | jq '.[0]')
-    fi
-
-    PIPELINE_ID=$(echo "$PIPELINE_DATA" | jq -r '.id')
-    STATUS=$(echo "$PIPELINE_DATA" | jq -r '.status')
-    URL=$(echo "$PIPELINE_DATA" | jq -r '.web_url')
+    PIPELINE_ID=$(jq -r '.id' <<<"$pipeline")
+    URL=$(jq -r '.url // ""' <<<"$pipeline")
+    STATUS=$(jq -r '.status' <<<"$pipeline")
 
     case "$STATUS" in
       success)
@@ -182,17 +95,20 @@ monitor_gitlab() {
         return 0
         ;;
       failed)
-        FAILED_STAGES=$(echo "$PIPELINE_DATA" | jq -r '.[]?.jobs[]? | select(.status=="failed") | .stage' 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')
+        local detail
+        detail=$(git_pipeline_status "$PIPELINE_ID" 2>/dev/null || echo "{}")
+        FAILED_STAGES=$(jq -r '.jobs[]? | select(.conclusion=="failure" or .status=="failed") | .name' <<<"$detail" \
+                        | tr '\n' ',' | sed 's/,$//')
         return 1
         ;;
-      canceled)
+      cancelled)
         echo "Pipeline was cancelled" >&2
         return 1
         ;;
       *)
         echo "⏳ Pipeline running... ($((ELAPSED / 60))m, status: $STATUS)" >&2
         ELAPSED=$((ELAPSED + POLL_INTERVAL))
-        sleep $POLL_INTERVAL
+        sleep "$POLL_INTERVAL"
         ;;
     esac
   done
@@ -201,17 +117,8 @@ monitor_gitlab() {
   return 2
 }
 
-# Run appropriate monitoring
-if [[ "$CI_PLATFORM" == "github" ]]; then
-  monitor_github
-  EXIT_CODE=$?
-elif [[ "$CI_PLATFORM" == "gitlab" ]]; then
-  monitor_gitlab
-  EXIT_CODE=$?
-else
-  echo "❌ Unknown CI platform: $CI_PLATFORM" >&2
-  exit 1
-fi
+monitor_loop
+EXIT_CODE=$?
 
 # Output JSON result
 cat <<EOF

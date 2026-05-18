@@ -3,35 +3,16 @@ set -euo pipefail
 
 # Check pipeline status (cross-platform: GitLab/GitHub)
 # Usage: pipeline-status.sh [--pipeline-id <id>]
+#
+# Migrated to use the git platform adapter shims (scripts/lib/git-api.sh).
+# The previous per-platform get_gitlab_pipeline / get_github_workflow
+# functions were collapsed into git_pipeline_list / git_pipeline_status
+# calls that return a normalized {id, status, conclusion, sha, ref,
+# url, created_at, raw} schema.
 
-source ~/.claude/scripts/git-detect.sh
-
-get_gitlab_pipeline() {
-    local pipeline_id=$1
-    local token=$(cat "$GIT_TOKEN_FILE")
-
-    if [[ -z "$pipeline_id" ]]; then
-        curl -s --header "PRIVATE-TOKEN: ${token}" \
-            "${GIT_API_URL}/projects/${GIT_PROJECT_PATH}/pipelines?per_page=1" \
-            | jq -r '.[] | "Pipeline #\(.id)\n  Status: \(.status)\n  Ref: \(.ref)\n  SHA: \(.sha[0:8])\n  Created: \(.created_at)\n  URL: \(.web_url)"'
-    else
-        curl -s --header "PRIVATE-TOKEN: ${token}" \
-            "${GIT_API_URL}/projects/${GIT_PROJECT_PATH}/pipelines/${pipeline_id}" \
-            | jq -r '"Pipeline #\(.id)\n  Status: \(.status)\n  Ref: \(.ref)\n  SHA: \(.sha[0:8])\n  Duration: \(if .duration then "\(.duration)s" else "running" end)\n  Created: \(.created_at)\n  URL: \(.web_url)"'
-    fi
-}
-
-get_github_workflow() {
-    local run_id=$1
-
-    if [[ -z "$run_id" ]]; then
-        gh run list --repo "$GIT_PROJECT_PATH" --limit 1 --json number,status,conclusion,headBranch,headSha,createdAt,url \
-            | jq -r '.[] | "Workflow #\(.number)\n  Status: \(.status)\n  Conclusion: \(.conclusion // "N/A")\n  Ref: \(.headBranch)\n  SHA: \(.headSha[0:8])\n  Created: \(.createdAt)\n  URL: \(.url)"'
-    else
-        gh run view "$run_id" --repo "$GIT_PROJECT_PATH" --json number,status,conclusion,headBranch,headSha,createdAt,url \
-            | jq -r '"Workflow #\(.number)\n  Status: \(.status)\n  Conclusion: \(.conclusion // "N/A")\n  Ref: \(.headBranch)\n  SHA: \(.headSha[0:8])\n  Created: \(.createdAt)\n  URL: \(.url)"'
-    fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 PIPELINE_ID=""
 
@@ -45,13 +26,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$GIT_PLATFORM" in
-    gitlab)
-        [[ -f "$GIT_TOKEN_FILE" ]] || { echo "Error: Token file not found: $GIT_TOKEN_FILE"; exit 1; }
-        get_gitlab_pipeline "$PIPELINE_ID"
-        ;;
-    github)
-        command -v gh &>/dev/null || { echo "Error: gh CLI not installed"; exit 1; }
-        get_github_workflow "$PIPELINE_ID"
-        ;;
-esac
+if ! load_git_adapter; then
+  echo "Error: failed to load git platform adapter" >&2
+  exit 1
+fi
+
+if [[ -z "$PIPELINE_ID" ]]; then
+  # Most recent pipeline. git_pipeline_list returns a JSON array.
+  data=$(git_pipeline_list --limit 1)
+  echo "$data" | jq -r '.[] |
+    "Pipeline #\(.id)\n  Status: \(.status)\n  Ref: \(.ref)\n  SHA: \(.sha[0:8])\n  Created: \(.created_at)\n  URL: \(.url)"'
+else
+  data=$(git_pipeline_status "$PIPELINE_ID")
+  echo "$data" | jq -r '
+    "Pipeline #\(.id)\n  Status: \(.status)\n  Conclusion: \(.conclusion // "N/A")\n  Ref: \(.raw.headBranch // .raw.ref // "")\n  SHA: \((.raw.headSha // .raw.sha // "")[0:8])\n  Created: \(.raw.createdAt // .raw.created_at // "")\n  URL: \(.raw.url // .raw.web_url // "")"'
+fi

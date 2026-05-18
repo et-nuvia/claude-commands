@@ -57,7 +57,9 @@ the following exit codes:
 |---|---|---|
 | `git_pipeline_list` | `[--ref <branch>] [--sha <sha>] [--limit N]` | JSON array `[{id, status, sha, ref, url, created_at}]` |
 | `git_pipeline_status` | `<id>` | JSON `{id, status, conclusion, jobs}` |
-| `git_pipeline_logs` | `<id> [job-name]` | log text on stdout |
+| `git_pipeline_logs` | `<id> [job-name]` | log text on stdout (whole-pipeline or one named job) |
+| `git_job_logs` | `<job_id> [--lines N]` | log text on stdout for a single job by native ID |
+| `git_pipeline_watch` | `<id> [--interval SECONDS]` | blocks until terminal state; exit 0 on success, non-zero otherwise |
 
 ### Health
 

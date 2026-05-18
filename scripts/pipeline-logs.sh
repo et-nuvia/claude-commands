@@ -3,8 +3,13 @@ set -euo pipefail
 
 # Get job logs (cross-platform: GitLab/GitHub)
 # Usage: pipeline-logs.sh --job-id <id> [--lines <n>]
+#
+# Migrated to use scripts/lib/git-api.sh. Direct gh / curl calls
+# replaced with git_job_logs from the platform adapter.
 
-source ~/.claude/scripts/git-detect.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 JOB_ID=""
 LINES=50
@@ -26,39 +31,12 @@ if [[ -z "$JOB_ID" ]]; then
   exit 2
 fi
 
-get_gitlab_logs() {
-    local job_id=$1
-    local lines=$2
-    local token=$(cat "$GIT_TOKEN_FILE")
+if ! load_git_adapter; then
+  echo "Error: failed to load git platform adapter" >&2
+  exit 1
+fi
 
-    echo "Last ${lines} lines of job #${job_id}:"
-    echo "========================================"
-    echo ""
-
-    curl -s --header "PRIVATE-TOKEN: ${token}" \
-        "${GIT_API_URL}/projects/${GIT_PROJECT_PATH}/jobs/${job_id}/trace" \
-        | tail -n "$lines"
-}
-
-get_github_logs() {
-    local job_id=$1
-    local lines=$2
-
-    echo "Last ${lines} lines of job #${job_id}:"
-    echo "========================================"
-    echo ""
-
-    gh run view --repo "$GIT_PROJECT_PATH" --job "$job_id" --log \
-        | tail -n "$lines"
-}
-
-case "$GIT_PLATFORM" in
-    gitlab)
-        [[ -f "$GIT_TOKEN_FILE" ]] || { echo "Error: Token file not found: $GIT_TOKEN_FILE"; exit 1; }
-        get_gitlab_logs "$JOB_ID" "$LINES"
-        ;;
-    github)
-        command -v gh &>/dev/null || { echo "Error: gh CLI not installed"; exit 1; }
-        get_github_logs "$JOB_ID" "$LINES"
-        ;;
-esac
+echo "Last ${LINES} lines of job #${JOB_ID}:"
+echo "========================================"
+echo ""
+git_job_logs "$JOB_ID" --lines "$LINES"
