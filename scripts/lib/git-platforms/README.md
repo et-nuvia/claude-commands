@@ -55,6 +55,10 @@ the following exit codes:
 
 | Function | Args | Returns |
 |---|---|---|
+| `git_pr_list` | `[--state open\|closed\|all] [--limit N]` | JSON array `[{id, title, state, url, head_ref, base_ref, author, is_draft, raw}]` |
+| `git_pr_get` | `<id>` | JSON `{id, title, state, url, head_ref, base_ref, author, body, additions, deletions, files_changed, created_at, raw}` |
+| `git_pr_diff` | `<id>` | unified diff on stdout |
+| `git_pr_checkout` | `<id>` | switches working tree to the PR head branch |
 | `git_pipeline_list` | `[--ref <branch>] [--sha <sha>] [--limit N]` | JSON array `[{id, status, sha, ref, url, created_at}]` |
 | `git_pipeline_status` | `<id>` | JSON `{id, status, conclusion, jobs}` |
 | `git_pipeline_logs` | `<id> [job-name]` | log text on stdout (whole-pipeline or one named job) |

@@ -193,6 +193,100 @@ git_pr_create() {
   jq -c '{id: .iid, url: .web_url}' <<<"$raw"
 }
 
+# git_pr_list [--state open|closed|all] [--limit N]
+git_pr_list() {
+  local state="opened" limit=30
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state)
+        case "$2" in
+          open)   state="opened" ;;
+          closed) state="closed" ;;
+          all)    state="all" ;;
+          *)      state="$2" ;;
+        esac
+        shift 2 ;;
+      --limit) limit="$2"; shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+  local proj raw
+  proj=$(_gitlab_project_id) || return 1
+  raw=$(_gitlab_call GET "/projects/${proj}/merge_requests?state=${state}&per_page=${limit}") || return $?
+  jq -c '[.[] | {
+    id: .iid,
+    title: .title,
+    state: (.state | sub("^opened$"; "open")),
+    url: .web_url,
+    head_ref: .source_branch,
+    base_ref: .target_branch,
+    author: .author.username,
+    is_draft: (.draft // .work_in_progress // false),
+    raw: .
+  }]' <<<"$raw"
+}
+
+# git_pr_get <id>
+git_pr_get() {
+  local id="${1:?id required}"
+  local proj raw changes
+  proj=$(_gitlab_project_id) || return 1
+  raw=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}") || return $?
+  # changes endpoint gives per-file diffs and counts
+  changes=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/changes" 2>/dev/null || echo "{}")
+  jq -c --argjson changes "$changes" '{
+    id: .iid,
+    title: .title,
+    state: (.state | sub("^opened$"; "open")),
+    url: .web_url,
+    head_ref: .source_branch,
+    base_ref: .target_branch,
+    author: .author.username,
+    is_draft: (.draft // .work_in_progress // false),
+    body: .description,
+    additions: ($changes.changes_count // null),
+    deletions: null,
+    files_changed: (($changes.changes // []) | length),
+    created_at: .created_at,
+    raw: (. + {changes: $changes})
+  }' <<<"$raw"
+}
+
+# git_pr_diff <id>
+# Fetch the unified diff for an MR by id. GitLab doesn't return a
+# single concatenated unified diff like gh pr diff — it returns
+# per-file change objects under .changes[].diff. Concatenate them
+# into a unified-diff-shaped stream so callers see the same format
+# regardless of backend.
+git_pr_diff() {
+  local id="${1:?id required}"
+  local proj changes
+  proj=$(_gitlab_project_id) || return 1
+  changes=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/changes") || return $?
+  jq -r '.changes[]? |
+    "diff --git a/\(.old_path) b/\(.new_path)\n" +
+    (if .deleted_file then "deleted file mode \(.b_mode // "100644")\n" else "" end) +
+    (if .new_file then "new file mode \(.b_mode // "100644")\n" else "" end) +
+    "--- a/\(.old_path)\n+++ b/\(.new_path)\n" + .diff
+  ' <<<"$changes"
+}
+
+# git_pr_checkout <id>
+# Fetch the MR head and switch the working tree to it. Uses the
+# Git refs that GitLab exposes for MRs (refs/merge-requests/<iid>/head).
+git_pr_checkout() {
+  local id="${1:?id required}"
+  local proj target_branch
+  proj=$(_gitlab_project_id) || return 1
+  # Resolve the source_branch so we have a human-friendly local name
+  target_branch=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}" \
+                  | jq -r '.source_branch') || return $?
+  git fetch origin "merge-requests/${id}/head:${target_branch}" 2>/dev/null \
+    || git fetch origin "${target_branch}:${target_branch}" 2>/dev/null \
+    || true
+  git checkout "$target_branch"
+}
+
 # ----------------------------------------------------------------------
 # Pipelines
 # ----------------------------------------------------------------------
