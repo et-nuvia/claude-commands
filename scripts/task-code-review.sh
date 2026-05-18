@@ -80,6 +80,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source shared libraries
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 source "${SCRIPT_DIR}/lib/git-utils.sh"
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 #------------------------------------------------------------------------------
 # Helpers
@@ -154,25 +155,21 @@ section_get_pr() {
     DEFAULT_BRANCH=$(detect_base_branch)
 
     if [[ -z "$PR_URL" ]] && [[ -n "$CURRENT_BRANCH" ]]; then
-        if command -v gh &>/dev/null && git remote -v 2>/dev/null | grep -q "github"; then
-            PLATFORM="github"
-            PR_TYPE="PR"
-            PR_URL=$(gh pr list --head "$CURRENT_BRANCH" --state all --json url --jq '.[0].url' 2>/dev/null || echo "")
-            if [[ -n "$PR_URL" ]]; then
-                PR_NUM=$(echo "$PR_URL" | sed -n 's|.*/pull/\([0-9]\+\).*|\1|p' || echo "")
-                DIFF_SOURCE="pr"
-                log "${GREEN}✓${NC} Found GitHub PR: $PR_URL"
-            fi
-        elif command -v glab &>/dev/null && git remote -v 2>/dev/null | grep -q "gitlab"; then
-            PLATFORM="gitlab"
-            PR_TYPE="MR"
-            local mr_url
-            mr_url=$(glab mr list --source-branch "$CURRENT_BRANCH" 2>/dev/null | head -1 | awk '{print $1}' || echo "")
-            if [[ -n "$mr_url" ]]; then
-                PR_URL="$mr_url"
-                PR_NUM=$(echo "$PR_URL" | sed -n 's|.*/-/merge_requests/\([0-9]\+\).*|\1|p' || echo "")
-                DIFF_SOURCE="mr"
-                log "${GREEN}✓${NC} Found GitLab MR: $PR_URL"
+        if load_git_adapter 2>/dev/null; then
+            local _adapter
+            _adapter=$(git_adapter_name)
+            local _pr_json
+            _pr_json=$(git_pr_find_for_branch "$CURRENT_BRANCH" 2>/dev/null || echo "")
+            if [[ -n "$_pr_json" ]]; then
+                PR_URL=$(echo "$_pr_json" | jq -r '.url // empty')
+                PR_NUM=$(echo "$_pr_json" | jq -r '.id // empty')
+                if [[ "$_adapter" == "github" ]]; then
+                    PLATFORM="github"; PR_TYPE="PR"; DIFF_SOURCE="pr"
+                    log "${GREEN}✓${NC} Found GitHub PR: $PR_URL"
+                else
+                    PLATFORM="gitlab"; PR_TYPE="MR"; DIFF_SOURCE="mr"
+                    log "${GREEN}✓${NC} Found GitLab MR: $PR_URL"
+                fi
             fi
         fi
     elif [[ -n "$PR_URL" ]]; then
@@ -208,26 +205,21 @@ section_gather_info() {
 
     DIFF_FILE=$(get_diff_path "$TASK_ID")
 
-    if [[ "$DIFF_SOURCE" == "pr" ]] && [[ -n "$PR_NUM" ]]; then
-        gh pr diff "$PR_NUM" > "$DIFF_FILE" 2>/dev/null || true
-        local pr_info
-        pr_info=$(gh pr view "$PR_NUM" --json files,additions,deletions,commits 2>/dev/null || echo "{}")
-        FILES_CHANGED=$(echo "$pr_info" | jq -r '.files | length' 2>/dev/null || echo "0")
-        ADDITIONS=$(echo "$pr_info" | jq -r '.additions' 2>/dev/null || echo "0")
-        DELETIONS=$(echo "$pr_info" | jq -r '.deletions' 2>/dev/null || echo "0")
-        FILE_LIST=$(echo "$pr_info" | jq -r '.files[].path' 2>/dev/null || echo "")
-        COMMIT_LOG=$(gh pr view "$PR_NUM" --json commits --jq '.commits[].messageHeadline' 2>/dev/null || echo "")
-        DIFF_STATS=$(git diff --stat "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
-
-    elif [[ "$DIFF_SOURCE" == "mr" ]] && [[ -n "$PR_NUM" ]]; then
-        glab mr diff "$PR_NUM" > "$DIFF_FILE" 2>/dev/null || \
-            git diff "origin/${DEFAULT_BRANCH}...HEAD" > "$DIFF_FILE" 2>/dev/null || true
-        FILE_LIST=$(git diff --name-only "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
-        COMMIT_LOG=$(git log --oneline "origin/${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo "")
-        DIFF_STATS=$(git diff --stat "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
+    if [[ "$DIFF_SOURCE" == "pr" || "$DIFF_SOURCE" == "mr" ]] && [[ -n "$PR_NUM" ]]; then
+        # Use git diff against the remote default branch — equivalent to platform diff
+        # when the branch is pushed and up to date. Avoids direct gh/glab calls.
+        git diff "origin/${DEFAULT_BRANCH}...HEAD" > "$DIFF_FILE" 2>/dev/null || \
+            git diff "${DEFAULT_BRANCH}...HEAD" > "$DIFF_FILE" 2>/dev/null || true
+        FILE_LIST=$(git diff --name-only "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || \
+            git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
+        COMMIT_LOG=$(git log --oneline "origin/${DEFAULT_BRANCH}..HEAD" 2>/dev/null || \
+            git log --oneline "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo "")
+        DIFF_STATS=$(git diff --stat "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || \
+            git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
         FILES_CHANGED=$(echo "$FILE_LIST" | grep -c '.' || echo "0")
         local numstat
-        numstat=$(git diff --numstat "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
+        numstat=$(git diff --numstat "origin/${DEFAULT_BRANCH}...HEAD" 2>/dev/null || \
+            git diff --numstat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null || echo "")
         ADDITIONS=$(echo "$numstat" | awk '{s+=$1} END {print s+0}')
         DELETIONS=$(echo "$numstat" | awk '{s+=$2} END {print s+0}')
 

@@ -33,6 +33,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/load-profile.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/yaml.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/task-api.sh"
 
 # Default mode
 OUTPUT_MODE="json"
@@ -362,17 +366,22 @@ section_create_doc() {
     fi
 }
 
-# Helper: Read task_management.backend from PROJECT.yaml
-read_task_backend() {
-    local project_yaml="PROJECT.yaml"
-    if [[ ! -f "$project_yaml" ]]; then
-        echo ""
-        return
+# Helper: Resolve the active task backend (mirrors task-api.sh dispatcher logic).
+_active_backend() {
+    local b=""
+    if [[ -n "${TASK_ADAPTER_OVERRIDE:-}" ]]; then
+        b="$TASK_ADAPTER_OVERRIDE"
+    elif [[ -f PROJECT.yaml ]]; then
+        b=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || true)
     fi
-    # Extract task_management.backend value (handles "backend: asana" or "backend: taskforge")
-    local backend
-    backend=$(sed -n '/^task_management:/,/^[^ ]/{ /^  backend:/s/.*: *//p }' "$project_yaml" | tr -d '[:space:]"'"'")
-    echo "$backend"
+    if [[ -z "$b" || "$b" == "null" ]]; then
+        b=$(profile_env_get .task_management.backend 2>/dev/null || true)
+    fi
+    case "$b" in
+        gitlab) echo "gitlab-tasks" ;;
+        github) echo "github-tasks" ;;
+        *)      echo "$b" ;;
+    esac
 }
 
 # Section: Sync to external system
@@ -393,13 +402,13 @@ section_sync_external() {
         return 1
     fi
 
-    # Auto-detect backend from PROJECT.yaml if not explicitly passed
+    # Auto-detect backend if not explicitly passed
     if [[ -z "$backend" ]]; then
-        backend=$(read_task_backend)
+        backend=$(_active_backend)
     fi
 
     # No backend configured at all
-    if [[ -z "$backend" ]]; then
+    if [[ -z "$backend" || "$backend" == "null" ]]; then
         if [[ "${OUTPUT_MODE}" == "json" ]]; then
             json_output "skipped" "sync-external" "No external backend configured" \
                 --arg details "No task_management.backend in PROJECT.yaml and no --backend flag"
@@ -410,26 +419,87 @@ section_sync_external() {
     fi
 
     # Backend is the app itself — no external sync needed
-    if [[ "$backend" == "taskforge" ]]; then
+    if [[ "$backend" == "taskforge" || "$backend" == "none" ]]; then
         if [[ "${OUTPUT_MODE}" == "json" ]]; then
-            json_output "skipped" "sync-external" "Backend is taskforge — no external sync needed" \
+            json_output "skipped" "sync-external" "Backend is $backend — no external sync needed" \
                 --arg backend "$backend" \
-                --arg details "Task is already tracked in TaskForge"
+                --arg details "Task is already tracked in $backend"
         else
-            echo -e "${GREEN}✓${NC}  Backend is taskforge — no external sync needed"
+            echo -e "${GREEN}✓${NC}  Backend is $backend — no external sync needed"
         fi
         return 0
     fi
 
-    # External backend (asana, gitlab) — LLM needs to call MCP
+    # Load the adapter and sync via task_* contract (no MCP / direct backend calls).
+    if ! load_task_adapter; then
+        if [[ "${OUTPUT_MODE}" == "json" ]]; then
+            json_output "error" "sync-external" "Failed to load task adapter for backend: $backend" \
+                --arg backend "$backend"
+        else
+            echo -e "${RED}Error: Failed to load task adapter for backend: $backend${NC}"
+        fi
+        return 1
+    fi
+
+    # Probe auth/connectivity before attempting write.
+    if ! task_health >/dev/null 2>&1; then
+        if [[ "${OUTPUT_MODE}" == "json" ]]; then
+            json_output "error" "sync-external" "Task backend health check failed" \
+                --arg backend "$backend" \
+                --arg details "Check credentials for backend '$backend'"
+        else
+            echo -e "${RED}Error: Task backend health check failed for $backend${NC}"
+        fi
+        return 1
+    fi
+
+    # Attempt to fetch the existing task by its backend-native ID.
+    # If found, the task already exists externally — nothing to create.
+    local existing
+    if existing=$(task_get "$task_id" 2>/dev/null); then
+        local ext_url
+        ext_url=$(echo "$existing" | jq -r '.url // empty')
+        if [[ "${OUTPUT_MODE}" == "json" ]]; then
+            json_output "success" "sync-external" "Task already exists in $backend" \
+                --arg backend "$backend" \
+                --arg task_id "$task_id" \
+                --arg url "$ext_url"
+        else
+            echo -e "${GREEN}✓${NC}  Task $task_id already exists in $backend"
+            [[ -n "$ext_url" ]] && echo "  URL: $ext_url"
+        fi
+        return 0
+    fi
+
+    # Task not found externally — create it via the adapter.
+    local title="${TASK_TITLE:-Task $task_id}"
+    local body="${TASK_DESCRIPTION:-}"
+    local create_result
+    if ! create_result=$(task_create "$title" "$body" 2>&1); then
+        if [[ "${OUTPUT_MODE}" == "json" ]]; then
+            json_output "error" "sync-external" "Failed to create task in $backend" \
+                --arg backend "$backend" \
+                --arg details "$create_result"
+        else
+            echo -e "${RED}Error: Failed to create task in $backend: $create_result${NC}"
+        fi
+        return 1
+    fi
+
+    local new_id new_url
+    new_id=$(echo "$create_result" | jq -r '.id // empty')
+    new_url=$(echo "$create_result" | jq -r '.url // empty')
+
     if [[ "${OUTPUT_MODE}" == "json" ]]; then
-        json_output "needs_llm" "sync-external" "External sync requires LLM" \
+        json_output "success" "sync-external" "Task created in $backend" \
             --arg backend "$backend" \
             --arg task_id "$task_id" \
-            --arg details "LLM should use MCP to create/update $backend task"
+            --arg external_id "$new_id" \
+            --arg url "$new_url"
     else
-        echo -e "${YELLOW}⚠${NC}  External sync requires LLM to call MCP"
-        echo "Backend: $backend"
+        echo -e "${GREEN}✓${NC}  Task created in $backend"
+        [[ -n "$new_id" ]] && echo "  External ID: $new_id"
+        [[ -n "$new_url" ]] && echo "  URL: $new_url"
     fi
 }
 

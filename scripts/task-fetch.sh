@@ -24,14 +24,23 @@ set -euo pipefail
 #   1. LLM calls: task-fetch.sh --json --full
 #   2. If error: Returns JSON with error details
 #   3. LLM can retry with --raw for more debugging info
+#
+# Migrated to use the task adapter shims (scripts/lib/task-api.sh).
+# Backend-specific fetch paths were collapsed into a single
+# task_list call; output shape is preserved for downstream consumers.
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source shared output framework
+# Source shared output framework and the task adapter dispatcher.
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/yaml.sh"
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/load-profile.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/task-api.sh"
 
 # Global variables
 OUTPUT_MODE="json"  # json or raw
@@ -48,6 +57,25 @@ TASK_COUNT=0
 # Section Functions
 #------------------------------------------------------------------------------
 
+# Resolve the active backend the same way task-api.sh does so error
+# messages and downstream output can name it.
+_active_backend() {
+    local b=""
+    if [[ -n "${TASK_ADAPTER_OVERRIDE:-}" ]]; then
+        b="$TASK_ADAPTER_OVERRIDE"
+    elif [[ -f PROJECT.yaml ]]; then
+        b=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || true)
+    fi
+    if [[ -z "$b" || "$b" == "null" ]]; then
+        b=$(profile_env_get .task_management.backend 2>/dev/null || true)
+    fi
+    case "$b" in
+        gitlab) echo "gitlab-tasks" ;;
+        github) echo "github-tasks" ;;
+        *)      echo "$b" ;;
+    esac
+}
+
 # Section 1: Validate prerequisites
 section_validate() {
     log "${BLUE}Validating Prerequisites${NC}"
@@ -63,81 +91,47 @@ section_validate() {
     fi
     log "${GREEN}✓${NC} PROJECT.yaml found"
 
-    # Detect environment and backend
+    # Detect environment for reporting; backend comes from the adapter.
     if [[ -x "${SCRIPT_DIR}/detect-environment.sh" ]]; then
         ENV_TYPE=$("${SCRIPT_DIR}/detect-environment.sh" environment)
-        DEFAULT_BACKEND=$("${SCRIPT_DIR}/detect-environment.sh" task-backend)
     else
         ENV_TYPE="unknown"
-        DEFAULT_BACKEND="asana"
     fi
 
-    # Read backend from PROJECT.yaml or use default
-    BACKEND=$(yaml_get '.task_management.backend' PROJECT.yaml)
-    if [[ "$BACKEND" == "null" ]] || [[ -z "$BACKEND" ]]; then
-        BACKEND="$DEFAULT_BACKEND"
+    if ! load_task_adapter; then
+        exit_with_json "error" "Failed to load task adapter" "Set .task_management.backend in PROJECT.yaml or the active profile"
     fi
+    BACKEND=$(_active_backend)
 
     log "${GREEN}✓${NC} Environment: $ENV_TYPE"
     log "${GREEN}✓${NC} Backend: $BACKEND"
 
-    # Validate backend-specific requirements
-    if [[ "$BACKEND" == "asana" ]]; then
-        if [[ ! -f "$HOME/.asana-token" ]]; then
-            local error_msg="Asana token not found at ~/.asana-token
-
-Create token:
-1. Go to Asana Settings → Apps → Developer Apps
-2. Create Personal Access Token
-3. Save: echo \"TOKEN\" > ~/.asana-token && chmod 600 ~/.asana-token"
-            if [[ "$SECTION" == "validate" ]] || [[ "$OUTPUT_MODE" == "json" ]]; then
-                exit_with_json "error" "Asana token not found" "$error_msg"
-            else
-                log "${RED}✗${NC} Asana token not found"
-                echo "$error_msg"
-                exit 1
-            fi
+    # Auth + connectivity probe via the adapter contract.
+    if ! task_health >/dev/null 2>&1; then
+        local hint=""
+        case "$BACKEND" in
+            asana)
+                hint="Verify ~/.asana-token exists and is valid."
+                ;;
+            gitlab-tasks)
+                hint="Verify ~/.gitlab-token exists and .task_management.gitlab.project_id is set in PROJECT.yaml."
+                ;;
+            github-tasks)
+                hint="Verify gh auth status and .git.repo in PROJECT.yaml."
+                ;;
+            *)
+                hint="Check adapter prerequisites for backend '$BACKEND'."
+                ;;
+        esac
+        if [[ "$SECTION" == "validate" ]] || [[ "$OUTPUT_MODE" == "json" ]]; then
+            exit_with_json "error" "Task backend health check failed" "$hint"
+        else
+            log "${RED}✗${NC} Task backend health check failed"
+            echo "$hint"
+            exit 1
         fi
-        log "${GREEN}✓${NC} Asana token found"
-    elif [[ "$BACKEND" == "gitlab" ]]; then
-        if [[ ! -f "$HOME/.gitlab-token" ]]; then
-            local error_msg="GitLab token not found at ~/.gitlab-token
-
-Create token:
-1. Go to GitLab Settings → Access Tokens
-2. Create Personal Access Token with api scope
-3. Save: echo \"TOKEN\" > ~/.gitlab-token && chmod 600 ~/.gitlab-token"
-            if [[ "$SECTION" == "validate" ]] || [[ "$OUTPUT_MODE" == "json" ]]; then
-                exit_with_json "error" "GitLab token not found" "$error_msg"
-            else
-                log "${RED}✗${NC} GitLab token not found"
-                echo "$error_msg"
-                exit 1
-            fi
-        fi
-        log "${GREEN}✓${NC} GitLab token found"
-
-        # Validate project ID for GitLab
-        local project_id=$(yaml_get '.task_management.gitlab.project_id' PROJECT.yaml)
-        if [[ "$project_id" == "null" ]] || [[ -z "$project_id" ]]; then
-            local error_msg="GitLab project_id not set in PROJECT.yaml
-
-Add to PROJECT.yaml:
-task_management:
-  gitlab:
-    project_id: \"owner/repo\""
-            if [[ "$SECTION" == "validate" ]] || [[ "$OUTPUT_MODE" == "json" ]]; then
-                exit_with_json "error" "GitLab project_id not configured" "$error_msg"
-            else
-                log "${RED}✗${NC} GitLab project_id not configured"
-                echo "$error_msg"
-                exit 1
-            fi
-        fi
-        log "${GREEN}✓${NC} GitLab project_id configured"
-    else
-        exit_with_json "error" "Unknown backend: $BACKEND" "Supported: asana, gitlab"
     fi
+    log "${GREEN}✓${NC} Task backend reachable"
 
     # If running only this section, return now
     if [[ "$SECTION" == "validate" ]]; then
@@ -148,162 +142,87 @@ task_management:
     log "${GREEN}✓${NC} Validation complete"
 }
 
-# Section 2: Fetch tasks from backend
+# Section 2: Fetch tasks from backend (via adapter)
 section_fetch() {
     log "${BLUE}Fetching Tasks from $BACKEND${NC}"
 
-    if [[ "$BACKEND" == "asana" ]]; then
-        fetch_asana_tasks
-    elif [[ "$BACKEND" == "gitlab" ]]; then
-        fetch_gitlab_tasks
-    else
-        exit_with_json "error" "Unknown backend: $BACKEND" "Supported: asana, gitlab"
+    # Normalized task list from the adapter. Each element matches the
+    # contract: {id, title, status, assignee, created_at, updated_at,
+    # url, raw}.
+    local normalized
+    if ! normalized=$(task_list --state "$STATUS" --assignee me 2>&1); then
+        exit_with_json "error" "Failed to list tasks" "$normalized"
     fi
 
-    # Count tasks
+    # Optional project/label filter. Adapter-specific data lives under
+    # .raw — Asana uses .raw.memberships[].project.name, GitLab uses
+    # .raw.labels[], GitHub uses .raw.labels[].name. Try all three.
+    if [[ -n "$PROJECT" ]]; then
+        normalized=$(echo "$normalized" | jq --arg p "$PROJECT" '[
+            .[] | select(
+                ((.raw.memberships // []) | map(.project.name) | index($p)) // null != null
+                or ((.raw.labels // []) | map(if type=="object" then .name else . end) | index($p)) // null != null
+            )
+        ]')
+    fi
+
+    # Map normalized schema → legacy output shape used by downstream
+    # consumers (format_output, enrich_tasks_with_local_ids, callers
+    # parsing .gid/.name/.due_on/.completed/.projects/.permalink_url).
+    TASKS=$(echo "$normalized" | jq '[
+        .[] | {
+            gid: .id,
+            name: .title,
+            due_on: (.raw.due_on // .raw.due_date // null),
+            completed: (.status == "closed"),
+            projects: (
+                (.raw.memberships // []) | map({name: .project.name})
+                + ((.raw.labels // []) | map(if type=="object" then {name: .name} else {name: .} end))
+            ),
+            permalink_url: .url
+        }
+    ]')
+
+    # Enrich each task with local V4 Task ID (6-char hex) when a TSK
+    # doc references the backend-native ID.
+    TASKS=$(enrich_tasks_with_local_ids "$TASKS")
+
     TASK_COUNT=$(echo "$TASKS" | jq 'length' 2>/dev/null || echo "0")
     log "${GREEN}✓${NC} Found $TASK_COUNT tasks"
 
-    # If running only this section, return now
     if [[ "$SECTION" == "fetch" ]]; then
         exit_with_json "success" "Tasks fetched successfully" "Retrieved $TASK_COUNT tasks" \
             '"backend": "'"$BACKEND"'",' '"task_count": '"$TASK_COUNT"',' '"tasks": '"$TASKS"
     fi
 }
 
-# Fetch tasks from Asana
-fetch_asana_tasks() {
-    log "Fetching from Asana API..."
-
-    local token=$(cat "$HOME/.asana-token")
-
-    # Get user ID
-    local user_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "https://app.asana.com/api/1.0/users/me" | \
-        jq -r '.data.gid' 2>/dev/null || echo "")
-
-    if [[ -z "$user_id" ]]; then
-        exit_with_json "error" "Failed to get Asana user ID" "Check token validity"
-    fi
-
-    # Asana requires workspace when filtering by assignee.
-    # Read workspace_id from PROJECT.yaml.
-    local workspace_id=$(yaml_get '.task_management.asana.workspace_id' PROJECT.yaml)
-    if [[ "$workspace_id" == "null" ]] || [[ -z "$workspace_id" ]]; then
-        exit_with_json "error" "Asana workspace_id not configured" "Add task_management.asana.workspace_id to PROJECT.yaml"
-    fi
-
-    # Build query parameters.
-    # Asana's /tasks endpoint returns only incomplete tasks when `completed_since=now`
-    # is provided. For "closed" or "all", omit it and filter client-side.
-    local extra_params=""
-    if [[ "$STATUS" == "open" ]]; then
-        extra_params="&completed_since=now"
-    fi
-
-    # Fetch tasks
-    local response=$(curl -s -H "Authorization: Bearer ${token}" \
-        "https://app.asana.com/api/1.0/tasks?assignee=${user_id}&workspace=${workspace_id}${extra_params}&opt_fields=name,due_on,completed,projects.name,permalink_url&limit=100")
-
-    # Surface Asana API errors instead of silently returning []
-    local api_error=$(echo "$response" | jq -r '.errors[0].message // empty' 2>/dev/null)
-    if [[ -n "$api_error" ]]; then
-        exit_with_json "error" "Asana API error" "$api_error"
-    fi
-
-    TASKS=$(echo "$response" | jq -c '.data // []' 2>/dev/null || echo "[]")
-
-    # Client-side filter for "closed" (API has no completed=true filter when using assignee+workspace)
-    if [[ "$STATUS" == "closed" ]]; then
-        TASKS=$(echo "$TASKS" | jq -c '[.[] | select(.completed == true)]')
-    fi
-
-    # Filter by project if specified
-    if [[ -n "$PROJECT" ]]; then
-        TASKS=$(echo "$TASKS" | jq --arg proj "$PROJECT" '[.[] | select(.projects[]?.name == $proj)]')
-    fi
-
-    # Enrich each task with local V4 Task ID (6-char hex) if a TSK doc exists.
-    # TSK docs record the Asana GID under External Tracking; filenames start with the 6-char hex.
-    TASKS=$(enrich_tasks_with_local_ids "$TASKS")
-
-    log "${GREEN}✓${NC} Asana tasks fetched"
-}
-
 # For each task in the input JSON array, look up its local 6-char hex Task ID
-# by scanning docs/ for a TSK file referencing the Asana GID. Adds a
+# by scanning docs/ for a TSK file referencing the backend-native ID. Adds a
 # "task_id" field (null if no local doc exists yet).
 enrich_tasks_with_local_ids() {
     local tasks_json="$1"
     local docs_dir="docs"
     [[ -d "$docs_dir" ]] || { echo "$tasks_json"; return; }
 
-    # Build a gid → task_id map by scanning TSK docs once.
-    # Filenames look like: <HEX6>-<YYMMDDHHMM>-TSK-<slug>.md
     local map_file
     map_file=$(mktemp)
     trap "rm -f '$map_file'" RETURN
 
-    # Find all TSK docs and extract the Asana GID referenced inside.
+    # Filenames look like: <HEX6>-<YYMMDDHHMM>-TSK-<slug>.md
+    # The doc references the backend-native ID under "task gid" / "issue id".
     while IFS= read -r -d '' file; do
-        local basename hex6 gid
+        local basename hex6 id
         basename=$(basename "$file")
         hex6="${basename:0:6}"
-        # Only accept valid 6-char uppercase hex prefixes
         [[ "$hex6" =~ ^[0-9A-F]{6}$ ]] || continue
-        # Extract the first Asana Task GID line from the doc
-        gid=$(grep -m1 -iE 'task gid' "$file" 2>/dev/null | grep -oE '[0-9]{10,}' | head -n1)
-        [[ -n "$gid" ]] && echo "$gid $hex6" >> "$map_file"
+        id=$(grep -m1 -iE 'task gid|issue id|task id' "$file" 2>/dev/null | grep -oE '[0-9]{2,}' | head -n1)
+        [[ -n "$id" ]] && echo "$id $hex6" >> "$map_file"
     done < <(find "$docs_dir" -type f -name "*-TSK-*.md" -print0 2>/dev/null)
 
-    # Inject task_id into each task
-    echo "$tasks_json" | jq -c --slurpfile _ignore <(echo '[]') '.' | \
-        jq -c --rawfile mapdata "$map_file" '
-            ([$mapdata | split("\n") | map(select(length > 0) | split(" ") | {key: .[0], value: .[1]}) | from_entries]) as $m
-            | map(. + {task_id: ($m[0][.gid] // null)})
-        '
-}
-
-# Fetch tasks from GitLab
-fetch_gitlab_tasks() {
-    log "Fetching from GitLab API..."
-
-    local token=$(cat "$HOME/.gitlab-token")
-    local project_id=$(yaml_get '.task_management.gitlab.project_id' PROJECT.yaml)
-    # Resolution: PROJECT.yaml override → profile .git.instance → empty (caller errors)
-    local profile_instance
-    profile_instance=$(profile_env_get .git.instance 2>/dev/null)
-    [[ -n "$profile_instance" && "$profile_instance" != http* ]] && profile_instance="https://${profile_instance}"
-    local gitlab_url=$(yaml_get_default '.task_management.gitlab.instance' "$profile_instance" PROJECT.yaml)
-
-    # Build query parameters
-    local state_param="opened"
-    if [[ "$STATUS" == "closed" ]]; then
-        state_param="closed"
-    elif [[ "$STATUS" == "all" ]]; then
-        state_param="all"
-    fi
-
-    # Fetch issues
-    local response=$(curl -s --header "PRIVATE-TOKEN: ${token}" \
-        "${gitlab_url}/api/v4/projects/${project_id}/issues?assignee_id=@me&state=${state_param}&scope=assigned_to_me")
-
-    # Filter by label if project specified
-    if [[ -n "$PROJECT" ]]; then
-        response=$(echo "$response" | jq --arg label "$PROJECT" '[.[] | select(.labels[]? == $label)]')
-    fi
-
-    # Convert to unified format
-    TASKS=$(echo "$response" | jq '[.[] | {
-        gid: (.iid | tostring),
-        name: .title,
-        due_on: .due_date,
-        completed: (.state == "closed"),
-        projects: [{name: (.labels[0] // "No Label")}],
-        permalink_url: .web_url
-    }]' 2>/dev/null || echo "[]")
-
-    log "${GREEN}✓${NC} GitLab issues fetched"
+    echo "$tasks_json" | jq -c --rawfile mapdata "$map_file" '
+        ([$mapdata | split("\n") | map(select(length > 0) | split(" ") | {key: .[0], value: .[1]}) | from_entries]) as $m
+        | map(. + {task_id: ($m[.gid] // null)})
+    '
 }
 
 # Format output based on FORMAT option
@@ -341,7 +260,6 @@ format_output() {
 #------------------------------------------------------------------------------
 
 main() {
-    # Parse flags
     while [[ $# -gt 0 ]]; do
         case $1 in
             --json) OUTPUT_MODE="json"; shift ;;
@@ -368,20 +286,18 @@ main() {
         esac
     done
 
-    # Execute sections based on flag
     case "$SECTION" in
         validate)
             section_validate
             ;;
         fetch)
-            section_validate  # Prerequisites first
+            section_validate
             section_fetch
             ;;
         full)
             section_validate
             section_fetch
 
-            # Full success - format and return results
             if [[ "$OUTPUT_MODE" == "json" ]]; then
                 local filters_json
                 filters_json=$(jq -n --arg s "$STATUS" --arg p "$PROJECT" --arg f "$FORMAT" \
@@ -393,12 +309,10 @@ main() {
                     '"tasks": '"$TASKS"',' \
                     '"filters": '"$filters_json"
             else
-                # Raw mode - output formatted tasks
                 format_output
             fi
             ;;
     esac
 }
 
-# Run main function
 main "$@"
