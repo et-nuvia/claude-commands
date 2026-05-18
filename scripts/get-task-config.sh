@@ -32,6 +32,21 @@ source "${SCRIPT_DIR}/lib/project-config.sh"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/load-profile.sh"
 
+# Resolve backend from PROJECT.yaml override, profile fallback, or
+# OS-based default — in that order. Used wherever the script used to
+# do `uname -s | grep -q Darwin && echo asana || echo gitlab`.
+_resolve_backend_default() {
+    local b
+    b=$(profile_env_get .task_management.backend 2>/dev/null || true)
+    if [[ -n "$b" && "$b" != "null" ]]; then
+        echo "$b"
+        return
+    fi
+    # Last-resort default keyed on OS, preserving prior behavior for
+    # callers without a configured profile.
+    uname -s | grep -q Darwin && echo "asana" || echo "gitlab"
+}
+
 # Colors for output
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -111,7 +126,7 @@ get_all_config() {
 
     # Auto-detect if missing
     if [[ "$backend" == "__MISSING__" ]] || [[ "$backend" == "__INVALID__" ]]; then
-        backend=$(uname -s | grep -q Darwin && echo "asana" || echo "gitlab")
+        backend=$(_resolve_backend_default)
     fi
 
     # Extract values
@@ -232,7 +247,7 @@ main() {
         backend)
             config=$(get_project_config task_backend=.task_management.backend)
             backend=$(echo "$config" | jq -r '.task_backend')
-            [[ "$backend" =~ ^__.*__$ ]] && backend=$(uname -s | grep -q Darwin && echo "asana" || echo "gitlab")
+            [[ "$backend" =~ ^__.*__$ ]] && backend=$(_resolve_backend_default)
             echo "$backend"
             ;;
 
@@ -278,7 +293,7 @@ main() {
             # Validate configuration for current backend
             config=$(get_project_config task_backend=.task_management.backend)
             backend=$(echo "$config" | jq -r '.task_backend')
-            [[ "$backend" =~ ^__.*__$ ]] && backend=$(uname -s | grep -q Darwin && echo "asana" || echo "gitlab")
+            [[ "$backend" =~ ^__.*__$ ]] && backend=$(_resolve_backend_default)
 
             echo "Validating ${backend} configuration..." >&2
 

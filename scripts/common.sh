@@ -7,6 +7,14 @@ _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -f yaml_get &>/dev/null; then
     source "${_COMMON_DIR}/lib/yaml.sh"
 fi
+# Source task adapter dispatcher if not already loaded. Functions in
+# this file (e.g. write_current_task) call load_task_adapter on
+# demand so common.sh can be sourced even when the adapter isn't
+# resolvable yet (early bootstrap, no PROJECT.yaml).
+if ! declare -f load_task_adapter &>/dev/null; then
+    # shellcheck source=lib/task-api.sh
+    source "${_COMMON_DIR}/lib/task-api.sh"
+fi
 # Source worktree utilities if not already loaded
 if ! declare -f is_in_worktree &>/dev/null; then
     source "${_COMMON_DIR}/lib/worktree-utils.sh" 2>/dev/null || true
@@ -133,26 +141,46 @@ write_current_task() {
   local tracker_json="null"
   if [[ -n "$tracker_backend" ]] && [[ -n "$tracker_id" ]]; then
     local tracker_url=""
-    case "$tracker_backend" in
-      asana)
-        tracker_url="https://app.asana.com/0/0/${tracker_id}"
-        ;;
-      gitlab)
-        local instance repo
-        instance=$(yaml_get '.git.instance' PROJECT.yaml)
-        repo=$(yaml_get '.git.repo' PROJECT.yaml)
-        if [[ -n "$instance" ]] && [[ -n "$repo" ]]; then
-          tracker_url="https://${instance}/${repo}/-/issues/${tracker_id}"
-        fi
-        ;;
-      github)
-        local repo
-        repo=$(yaml_get '.git.repo' PROJECT.yaml)
-        if [[ -n "$repo" ]]; then
-          tracker_url="https://github.com/${repo}/issues/${tracker_id}"
-        fi
-        ;;
-    esac
+    # Prefer the adapter's task_url so URL construction lives in one
+    # place — but only when the explicit tracker_backend matches the
+    # active backend. task_url resolves against the configured
+    # backend, so calling it with a mismatched tracker_id (e.g. a
+    # GitHub issue ID in an Asana-configured project) would silently
+    # return the wrong URL. The case-branch below handles the
+    # cross-backend case correctly.
+    local _active_backend
+    _active_backend=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || true)
+    if [[ -z "$_active_backend" || "$_active_backend" == "null" ]]; then
+      _active_backend=$(profile_env_get .task_management.backend 2>/dev/null || true)
+    fi
+    if [[ "$tracker_backend" == "$_active_backend" ]] \
+        && declare -f load_task_adapter &>/dev/null \
+        && load_task_adapter 2>/dev/null \
+        && declare -f task_url &>/dev/null; then
+      tracker_url=$(task_url "$tracker_id" 2>/dev/null || true)
+    fi
+    if [[ -z "$tracker_url" ]]; then
+      case "$tracker_backend" in
+        asana)
+          tracker_url="https://app.asana.com/0/0/${tracker_id}"
+          ;;
+        gitlab)
+          local instance repo
+          instance=$(yaml_get '.git.instance' PROJECT.yaml)
+          repo=$(yaml_get '.git.repo' PROJECT.yaml)
+          if [[ -n "$instance" ]] && [[ -n "$repo" ]]; then
+            tracker_url="https://${instance}/${repo}/-/issues/${tracker_id}"
+          fi
+          ;;
+        github)
+          local repo
+          repo=$(yaml_get '.git.repo' PROJECT.yaml)
+          if [[ -n "$repo" ]]; then
+            tracker_url="https://github.com/${repo}/issues/${tracker_id}"
+          fi
+          ;;
+      esac
+    fi
     tracker_json=$(jq -n \
       --arg backend "$tracker_backend" \
       --arg id "$tracker_id" \
