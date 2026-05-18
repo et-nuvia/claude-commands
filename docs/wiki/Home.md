@@ -19,6 +19,8 @@ profile, and get a consistent workflow across every project.
 
 ## Going deeper
 
+- [Workflows](08-workflows) — canonical command chains and where the
+  human owns the gap between steps
 - [Templates and Documents](05-templates-and-docs) — TSK, PLN, RCA, and
   friends
 - [Customization](06-customization) — adding your own commands and skills
