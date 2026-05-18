@@ -142,10 +142,19 @@ write_current_task() {
   if [[ -n "$tracker_backend" ]] && [[ -n "$tracker_id" ]]; then
     local tracker_url=""
     # Prefer the adapter's task_url so URL construction lives in one
-    # place. Fall back to the hand-rolled per-backend URL when the
-    # adapter can't be loaded (missing PROJECT.yaml during early
-    # bootstrap, or unknown backend).
-    if declare -f load_task_adapter &>/dev/null \
+    # place — but only when the explicit tracker_backend matches the
+    # active backend. task_url resolves against the configured
+    # backend, so calling it with a mismatched tracker_id (e.g. a
+    # GitHub issue ID in an Asana-configured project) would silently
+    # return the wrong URL. The case-branch below handles the
+    # cross-backend case correctly.
+    local _active_backend
+    _active_backend=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || true)
+    if [[ -z "$_active_backend" || "$_active_backend" == "null" ]]; then
+      _active_backend=$(profile_env_get .task_management.backend 2>/dev/null || true)
+    fi
+    if [[ "$tracker_backend" == "$_active_backend" ]] \
+        && declare -f load_task_adapter &>/dev/null \
         && load_task_adapter 2>/dev/null \
         && declare -f task_url &>/dev/null; then
       tracker_url=$(task_url "$tracker_id" 2>/dev/null || true)

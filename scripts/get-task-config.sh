@@ -31,8 +31,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/project-config.sh"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/load-profile.sh"
-# shellcheck disable=SC1091
-source "${SCRIPT_DIR}/lib/task-api.sh"
 
 # Resolve backend from PROJECT.yaml override, profile fallback, or
 # OS-based default — in that order. Used wherever the script used to
