@@ -20,9 +20,12 @@ if ! declare -f yaml_get &>/dev/null; then
     source "${_TRACKER_SYNC_DIR}/yaml.sh"
 fi
 
-# Source git API helper if not already loaded
-if ! declare -f gitlab_api &>/dev/null && [[ -f "${_TRACKER_SYNC_DIR}/git-api.sh" ]]; then
-    source "${_TRACKER_SYNC_DIR}/git-api.sh"
+# Source the GitLab platform adapter when we need raw GitLab API
+# access (gitlab_api). The function moved out of the generic
+# git-api.sh dispatcher to keep platform-specific code in its
+# platform file.
+if ! declare -f gitlab_api &>/dev/null && [[ -f "${_TRACKER_SYNC_DIR}/git-platforms/gitlab.sh" ]]; then
+    source "${_TRACKER_SYNC_DIR}/git-platforms/gitlab.sh"
 fi
 
 # Cached tracker backend
