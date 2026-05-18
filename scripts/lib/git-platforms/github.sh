@@ -248,6 +248,42 @@ git_pipeline_logs() {
   fi
 }
 
+# git_job_logs <job_id> [--lines N]
+# Fetch logs for a single job by its native ID. Returns the raw log
+# stream on stdout; if --lines is given, only the last N lines.
+git_job_logs() {
+  local job_id="${1:?job_id required}"
+  shift || true
+  local lines=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines) lines="$2"; shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+  if [[ -n "$lines" ]]; then
+    _gh run view --job "$job_id" --log | tail -n "$lines"
+  else
+    _gh run view --job "$job_id" --log
+  fi
+}
+
+# git_pipeline_watch <id> [--interval SECONDS]
+# Block until the pipeline reaches a terminal state, emitting status
+# updates. Returns 0 if the pipeline succeeded, non-zero otherwise.
+git_pipeline_watch() {
+  local id="${1:?id required}"
+  shift || true
+  local interval=10
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --interval) interval="$2"; shift 2 ;;
+      *)          shift ;;
+    esac
+  done
+  _gh run watch "$id" --interval "$interval"
+}
+
 # ----------------------------------------------------------------------
 # Health
 # ----------------------------------------------------------------------

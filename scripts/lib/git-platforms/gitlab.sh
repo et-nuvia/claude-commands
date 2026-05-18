@@ -263,6 +263,53 @@ git_pipeline_logs() {
   fi
 }
 
+# git_job_logs <job_id> [--lines N]
+# Fetch logs for a single job by its native ID.
+git_job_logs() {
+  local job_id="${1:?job_id required}"
+  shift || true
+  local lines=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines) lines="$2"; shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+  local proj
+  proj=$(_gitlab_project_id) || return 1
+  if [[ -n "$lines" ]]; then
+    _gitlab_call GET "/projects/${proj}/jobs/${job_id}/trace" | tail -n "$lines"
+  else
+    _gitlab_call GET "/projects/${proj}/jobs/${job_id}/trace"
+  fi
+}
+
+# git_pipeline_watch <id> [--interval SECONDS]
+# Poll until the pipeline reaches a terminal state. GitLab has no
+# native watch, so we poll git_pipeline_status. Emits status lines
+# to stderr; exit 0 if success, non-zero otherwise.
+git_pipeline_watch() {
+  local id="${1:?id required}"
+  shift || true
+  local interval=10
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --interval) interval="$2"; shift 2 ;;
+      *)          shift ;;
+    esac
+  done
+  local status
+  while :; do
+    status=$(git_pipeline_status "$id" | jq -r '.status') || return 1
+    echo "pipeline ${id}: ${status}" >&2
+    case "$status" in
+      success)               return 0 ;;
+      failed|cancelled)      return 1 ;;
+      *)                     sleep "$interval" ;;
+    esac
+  done
+}
+
 # ----------------------------------------------------------------------
 # Health
 # ----------------------------------------------------------------------
