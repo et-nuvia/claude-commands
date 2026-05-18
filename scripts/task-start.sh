@@ -772,7 +772,7 @@ main() {
                 if [[ ${#WARNINGS[@]} -gt 0 ]]; then
                     warnings_json=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s .)
                 fi
-                add_next_step "LLM: update Asana status to 'In Progress' via mcp__asana__update_custom_field"
+                add_next_step "LLM: update task status to 'In Progress' via task adapter (task_update $ASANA_GID status in_progress)"
                 add_next_step "Then run: task-start.sh --json --setup-env --task-id $TASK_ID"
                 local next_steps_json
                 next_steps_json=$(printf '%s\n' "${NEXT_STEPS[@]}" | jq -R . | jq -s .)
