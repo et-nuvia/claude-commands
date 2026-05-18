@@ -20,6 +20,8 @@ project_knowledge_sections: []
 
 # /deploy-to-stage
 
+> Part of the [Deployment workflow](../08-workflows.md#deployment).
+
 Merges your development branch into staging, monitors the CI/CD pipeline to
 completion, verifies service health and deployed version, and runs E2E tests.
 At the end you have a validated staging deployment and a clear path to

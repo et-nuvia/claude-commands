@@ -17,6 +17,8 @@ project_knowledge_sections: []
 
 # /task-hold
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Pauses work on a task while preserving the branch and all in-progress documents. Records who is being waited on, why, and by when, then commits the hold details locally, syncs the external tracker to "Hold", and merges the feature branch to main. The worktree (if in worktree mode) stays on disk for seamless resumption via `/task-resume`.
 
 > **Config:** PROJECT.yaml **required** — reads `task_management.backend`, plus either `task_management.asana.{workspace_id, default_project}` or `task_management.gitlab.project_id` depending on backend.

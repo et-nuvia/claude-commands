@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /rca-triage
 
+> Part of the [Incident Response workflow](../08-workflows.md#incident-response-rca).
+
 Kicks off the incident response protocol: collects the essential facts about an
 active incident (severity, affected service, impact, symptoms), classifies it
 into a SEV tier with a matching response SLA, and writes an INC document to

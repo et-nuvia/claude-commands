@@ -17,6 +17,8 @@ project_knowledge_sections: []
 
 # /task-resume
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Reopens a completed or on-hold task when new input arrives — an email, SMS, Asana comment, or direct description. Uses Opus to match the input against existing task documents, confirms the match with the user, syncs the external tracker back to "In Progress" before touching any files, moves docs from `completed/` to `active/`, creates a new document (UPD, FIX, etc.) capturing the new input, and restores the branch and worktree environment.
 
 > **Config:** PROJECT.yaml **required** — reads `task_management.backend`, plus either `task_management.asana.{workspace_id, default_project}` or `task_management.gitlab.project_id` depending on backend.

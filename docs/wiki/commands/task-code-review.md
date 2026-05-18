@@ -19,6 +19,8 @@ project_knowledge_sections:
 
 # /task-code-review
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Generates a CRV (code review) document for the current task: fetches the diff from the PR/MR or branch, analyzes it for quality, security, and performance issues, and writes a structured review document with confidence-scored findings. Produces a committed CRV file that can feed into `/task-audit` or `/task-close`.
 
 > **Config:** PROJECT.yaml **optional** — used to locate PR/MR context. PROJECT-KNOWLEDGE.md **optional** — informs review of architectural patterns and business rules.

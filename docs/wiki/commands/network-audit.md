@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /network-audit
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Navigates to a URL using a headless Playwright browser, records all network
 activity into a HAR file, and analyzes it for redundant API calls, excessive
 payloads, waterfall gaps, and error responses. Produces a structured network

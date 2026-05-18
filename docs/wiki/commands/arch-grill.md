@@ -14,6 +14,8 @@ project_knowledge_sections:
 
 # /arch-grill
 
+> Part of the [Architecture Review workflow](../08-workflows.md#architecture-review).
+
 Takes a deepening candidate from an ARC document and walks every design decision with you — seam placement, dependency category, adapter strategy, test posture, migration shape — one topic at a time. The result is a **Grilled Design** section filled into the ARC, which seeds a future task's DSN when `/feature-to-task` converts the candidate into a TSK. As a side effect, new domain terms are added to PROJECT-KNOWLEDGE.md and rejected candidates may produce ADR files.
 
 > **Config:** PROJECT-KNOWLEDGE.md **optional** — reads `## Domain Glossary` for domain vocabulary when naming the deepened module; **writes** new terms back inline when a concept surfaces that has no name yet.

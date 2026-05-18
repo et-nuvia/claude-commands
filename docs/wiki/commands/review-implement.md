@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /review-implement
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Parses a structured document — code review (CRV), implementation plan (PLN),
 implementation guide (IMP), or task (TSK) — extracts every actionable item,
 presents an implementation plan for your approval, then applies the approved

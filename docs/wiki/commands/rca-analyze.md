@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /rca-analyze
 
+> Part of the [Incident Response workflow](../08-workflows.md#incident-response-rca).
+
 Conducts a structured root cause analysis using the 5 Whys methodology: gathers
 the incident facts (or reads them from the existing INC document), walks through
 iterative causal questioning until a systemic root cause is reached, identifies

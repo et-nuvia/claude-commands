@@ -22,6 +22,8 @@ project_knowledge_sections:
 
 # /task-plan
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Reads a TSK (and optional DSN) document, explores the codebase, and produces a PLN document that breaks the feature into phased subtasks with estimates, model assignments, TDD flags, and `[AC#]` acceptance-criterion tags. Runs an automated quality review and iterates until the plan passes before committing.
 
 > **Config:** PROJECT.yaml **optional** — reads tech stack, component list, and testing config. PROJECT-KNOWLEDGE.md **optional** — reads domain workflows, entity relationships, service maps, integration flows, and business rules to improve requirement traceability and impact analysis.

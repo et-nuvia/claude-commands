@@ -20,6 +20,8 @@ project_knowledge_sections: []
 
 # /deployment-config
 
+> Part of the [Deployment workflow](../08-workflows.md#deployment).
+
 Reads `PROJECT.yaml`, validates the deployment section, and displays the
 resolved configuration: environment type, branch names, CI platform,
 deployment method, URLs, and current version. Read-only — makes no changes.

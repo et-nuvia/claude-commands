@@ -15,6 +15,8 @@ project_knowledge_sections: []
 
 # /docker-audit
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Audits a project's Docker setup — Dockerfiles, Compose files, and security
 hardening — against project standards and CIS benchmarks, producing a weighted
 0-100 score plus a P0–P3 action plan. Optionally runs image-layer scanning

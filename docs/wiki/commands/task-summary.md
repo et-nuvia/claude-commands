@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /task-summary
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Creates a SUM (executive summary) document for a task and commits it to the repo. The document is intended for stakeholders — it distills the task's outcome, key decisions, and impact into a concise, shareable format. Run it at task completion, after placing a task on hold, or after an incident.
 
 ---

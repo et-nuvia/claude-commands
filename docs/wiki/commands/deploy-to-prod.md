@@ -20,6 +20,8 @@ project_knowledge_sections: []
 
 # /deploy-to-prod
 
+> Part of the [Deployment workflow](../08-workflows.md#deployment).
+
 Promotes a validated staging deployment to production: merges staging into the
 production branch, monitors CI/CD to completion, verifies health and version,
 creates a versioned git tag, and syncs the tag back to staging and dev.

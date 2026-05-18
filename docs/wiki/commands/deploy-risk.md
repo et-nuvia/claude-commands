@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /deploy-risk
 
+> Part of the [Deployment workflow](../08-workflows.md#deployment).
+
 Runs a 10-category weighted risk analysis against the current diff and
 produces a scored RSK document with per-risk mitigations, a deployment
 readiness verdict, and a pre-deployment checklist. Makes no changes to git or

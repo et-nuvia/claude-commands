@@ -18,6 +18,8 @@ project_knowledge_sections:
 
 # /task-audit
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Runs a comprehensive quality audit of a task's implementation — checking commits, test coverage, acceptance criteria completion, and open TODOs — then writes an AUD document with a scored report and prioritized recommendations. Run it before closing to confirm the task is genuinely done.
 
 > **Config:** PROJECT.yaml **optional** — reads test command config when present. PROJECT-KNOWLEDGE.md **optional** — reads service maps, entity relationships, and business rules to improve impact analysis accuracy.

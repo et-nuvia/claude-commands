@@ -15,6 +15,8 @@ project_knowledge_sections: []
 
 # /makefile-audit
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Audits a project's Makefiles against the established project standards
 (hierarchical targets, JSON output contract, help system, delegation patterns),
 producing a weighted 0-100 score plus a prioritized fix plan. Can optionally

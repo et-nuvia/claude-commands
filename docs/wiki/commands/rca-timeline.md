@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /rca-timeline
 
+> Part of the [Incident Response workflow](../08-workflows.md#incident-response-rca).
+
 Reconstructs the sequence of events surrounding an incident by pulling from
 available log sources, deployment records, and alert history, then writes a
 chronological timeline document. Run this after `/rca-triage` opens the

@@ -21,6 +21,8 @@ project_knowledge_sections:
 
 # /task-close
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Closes a completed or deferred task: pre-verifies the merge, generates SUM and LRN documents, syncs the external tracker to "Done", squash-merges the feature branch into the target, moves all task docs to `completed/`, and deletes the branch. Handles worktrees, merge conflicts, and Asana hours logging. When a task must be deferred instead of shipped, the command preserves the branch and records the deferral reason.
 
 > **Config:** PROJECT.yaml **required** — reads `task_management.backend`, plus either `task_management.asana.{workspace_id, default_project}` or `task_management.gitlab.project_id` depending on backend. PROJECT-KNOWLEDGE.md **optional** — reviewed for inaccuracies introduced by the task's changes.

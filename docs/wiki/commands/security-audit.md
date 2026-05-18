@@ -17,6 +17,8 @@ project_knowledge_sections: []
 
 # /security-audit
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Runs a comprehensive security review — vulnerability scanning, secrets
 detection, compliance checks, IAM/access auditing, CVE patching guidance, and
 CI/CD security hardening — producing an executive summary with a prioritized

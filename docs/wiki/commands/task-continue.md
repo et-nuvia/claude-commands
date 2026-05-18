@@ -20,6 +20,8 @@ project_knowledge_sections:
 
 # /task-continue
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 The main implementation loop for a task: reads the PLN to find the next unchecked subtask, does the work (directly or via subagent), runs focused tests, optionally auto-reviews, and commits progress with the PLN marked complete — atomically, in one script call. Repeat until all subtasks are done.
 
 > **Config:** PROJECT.yaml **optional** — read for tech stack and test command configuration. PROJECT-KNOWLEDGE.md **optional** — read for domain context when implementing complex features.

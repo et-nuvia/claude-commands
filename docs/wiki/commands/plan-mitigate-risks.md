@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /plan-mitigate-risks
 
+> Part of the [Deployment workflow](../08-workflows.md#deployment).
+
 Takes an existing RSK (deployment risk) document, guides you through selecting
 which risks to address, builds an ordered implementation plan with per-risk
 mitigation choices, then executes the changes atomically — one commit per

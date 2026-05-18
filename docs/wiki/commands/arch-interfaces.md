@@ -14,6 +14,8 @@ project_knowledge_sections:
 
 # /arch-interfaces
 
+> Part of the [Architecture Review workflow](../08-workflows.md#architecture-review).
+
 Applies Ousterhout's "Design It Twice" to a grilled deepening candidate by spawning 3–4 parallel sub-agents, each working under a different design constraint (minimal, flexible, common-case-optimized, ports-and-adapters). The results are compared, and an opinionated recommendation is written into the ARC document's **Interface Alternatives** and **Recommendation** sections. Must be run after `/arch-grill` — the grilled-candidate shape is the prerequisite.
 
 > **Config:** PROJECT-KNOWLEDGE.md **optional** — reads `## Domain Glossary` so sub-agents use project vocabulary in their interface proposals.

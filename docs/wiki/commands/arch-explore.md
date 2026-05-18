@@ -15,6 +15,8 @@ project_knowledge_sections:
 
 # /arch-explore
 
+> Part of the [Architecture Review workflow](../08-workflows.md#architecture-review).
+
 Walks the codebase looking for architectural friction — shallow modules, leaky seams, untestable surfaces — and produces a numbered list of deepening candidates for the user to review. The output is an **ARC document** committed to `docs/active/`, which serves as the upstream artifact for `/arch-grill` and `/arch-interfaces`. Nothing changes in production code; this is a discovery-only pass.
 
 > **Config:** PROJECT-KNOWLEDGE.md **optional** — reads `## Domain Glossary` for domain vocabulary used to name candidates; reads `## Architecture Decisions` (ADR files in `docs/adr/`) to avoid re-litigating settled choices.

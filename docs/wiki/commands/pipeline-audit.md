@@ -17,6 +17,8 @@ project_knowledge_sections: []
 
 # /pipeline-audit
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Audits a project's CI/CD pipeline against project standards and industry
 frameworks (SLSA, OWASP DSOMM, DORA, CIS), producing a weighted 0-100 score
 plus a P0–P3 action plan. Auto-detects GitHub Actions vs GitLab CI from

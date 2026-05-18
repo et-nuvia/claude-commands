@@ -74,7 +74,10 @@ while IFS=$'\t' read -r orig flat; do
     flat_page="${flat%.md}"
     # Match `](orig)` or `](orig#anchor)` and rewrite, preserving the
     # anchor. ERE is portable across GNU and BSD sed.
-    printf 's|\\]\\(%s(#[^)]*)?\\)|](%s\\1)|g\n' "$orig_esc" "$flat_page" >> "$sed_script"
+    # Allow optional `../` prefixes (from links in subdirs like
+    # `commands/foo.md`) — the wiki is flat, so any number of leading
+    # `../` segments should collapse away.
+    printf 's|\\]\\((\\.\\./)*%s(#[^)]*)?\\)|](%s\\2)|g\n' "$orig_esc" "$flat_page" >> "$sed_script"
 done < "${map_file}.sorted"
 
 # Copy + transform each tracked file.

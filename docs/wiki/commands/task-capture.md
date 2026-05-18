@@ -23,6 +23,8 @@ project_knowledge_sections:
 
 # /task-capture
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Turns any task input — an Asana URL, a GitLab issue, an email, an SMS, or plain text — into a structured TSK document and optionally creates a matching record in the external tracker. Uses Opus for parsing to extract explicit requirements and infer implied ones. The result is a single document that `/task-start` and `/task-plan` can immediately consume.
 
 > **Config:** PROJECT.yaml **optional** — reads `task_management.backend` (and matching subfields) to create external tracking records. Without it, only the local TSK document is written. PROJECT-KNOWLEDGE.md **optional** — reads domain workflows, entity relationships, service maps, integration flows, and business rules to improve task classification and requirement inference.

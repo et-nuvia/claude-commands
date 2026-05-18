@@ -17,6 +17,8 @@ project_knowledge_sections: []
 
 # /task-start
 
+> Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
+
 Prepares the environment to begin work on a task: loads task context from
 Asana or GitLab, creates an isolated worktree (or a plain branch), syncs the
 external tracker to "In Progress", and boots Docker services + migrations +

@@ -13,6 +13,8 @@ project_knowledge_sections: []
 
 # /rca-pir
 
+> Part of the [Incident Response workflow](../08-workflows.md#incident-response-rca).
+
 Generates the post-incident review (PIR) document: the structured retrospective
 that closes the loop on a resolved incident. It gathers what went well, what
 could improve, and the full action item list; synthesizes this into a shareable

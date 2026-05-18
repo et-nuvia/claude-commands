@@ -21,6 +21,17 @@ Capture work, plan it, do it, ship it.
   /task-summary → /task-code-review → /task-close
 ```
 
+**Commands in this chain:** [`/task-capture`](commands/task-capture.md) ·
+[`/task-plan`](commands/task-plan.md) ·
+[`/task-start`](commands/task-start.md) ·
+[`/task-continue`](commands/task-continue.md) ·
+[`/task-audit`](commands/task-audit.md) ·
+[`/task-summary`](commands/task-summary.md) ·
+[`/task-code-review`](commands/task-code-review.md) ·
+[`/task-close`](commands/task-close.md) ·
+[`/task-hold`](commands/task-hold.md) ·
+[`/task-resume`](commands/task-resume.md)
+
 | Gap | What the human does |
 |---|---|
 | After `/task-capture` | Read the TSK doc. Confirm scope matches what you actually meant. Edit acceptance criteria if Claude misread the request. |
@@ -45,6 +56,12 @@ Risk → stage → smoke/E2E → promote → prod → verify.
   /deploy-to-prod → [HUMAN VERIFY]
 ```
 
+**Commands in this chain:** [`/deploy-risk`](commands/deploy-risk.md) ·
+[`/deploy-to-stage`](commands/deploy-to-stage.md) ·
+[`/deploy-to-prod`](commands/deploy-to-prod.md) ·
+[`/plan-mitigate-risks`](commands/plan-mitigate-risks.md) ·
+[`/deployment-config`](commands/deployment-config.md)
+
 | Gap | What the human does |
 |---|---|
 | After `/deploy-risk` | Read the RSK doc. **This is the most important gap.** If risk score is high, run `/plan-mitigate-risks` and address findings before staging. Do not deploy through a high-risk RSK because "it probably won't hit." |
@@ -68,6 +85,11 @@ Page goes off → triage → timeline → analyze → PIR.
   /rca-analyze → [HUMAN] → /rca-pir
 ```
 
+**Commands in this chain:** [`/rca-triage`](commands/rca-triage.md) ·
+[`/rca-timeline`](commands/rca-timeline.md) ·
+[`/rca-analyze`](commands/rca-analyze.md) ·
+[`/rca-pir`](commands/rca-pir.md)
+
 | Gap | What the human does |
 |---|---|
 | During `/rca-triage` | You are the on-call engineer. Claude drafts the INC doc; you confirm severity, scope, and current mitigation. Stop the bleeding first, document second. |
@@ -86,6 +108,10 @@ Explore the codebase → grill candidates → explore interfaces.
   /arch-interfaces → [HUMAN COMMITS]
 ```
 
+**Commands in this chain:** [`/arch-explore`](commands/arch-explore.md) ·
+[`/arch-grill`](commands/arch-grill.md) ·
+[`/arch-interfaces`](commands/arch-interfaces.md)
+
 | Gap | What the human does |
 |---|---|
 | After `/arch-explore` | Read the ARC doc. Pick **one** deepening candidate. Claude will surface several; advancing all of them at once produces no decisions. |
@@ -102,6 +128,14 @@ Read-only scorecards. Run them, read them, decide what to fix.
 /{pipeline,docker,makefile,testing,security}-audit → [HUMAN TRIAGES] →
   /review-implement (for chosen findings)
 ```
+
+**Commands in this chain:** [`/pipeline-audit`](commands/pipeline-audit.md) ·
+[`/docker-audit`](commands/docker-audit.md) ·
+[`/makefile-audit`](commands/makefile-audit.md) ·
+[`/testing-audit`](commands/testing-audit.md) ·
+[`/security-audit`](commands/security-audit.md) ·
+[`/network-audit`](commands/network-audit.md) ·
+[`/review-implement`](commands/review-implement.md)
 
 | Gap | What the human does |
 |---|---|

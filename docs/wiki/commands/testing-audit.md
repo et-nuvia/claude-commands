@@ -16,6 +16,8 @@ project_knowledge_sections: []
 
 # /testing-audit
 
+> Part of the [Auditing workflow](../08-workflows.md#auditing-scorecards).
+
 Audits a project's test infrastructure — target hierarchy, JSON output
 contract, framework abstraction, database seeding patterns, data isolation,
 coverage configuration, and test quality — against project standards, producing
