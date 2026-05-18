@@ -23,18 +23,23 @@ set -euo pipefail
 #   2. If error: Returns JSON with error details
 #   3. LLM can retry with --raw for more debugging info
 #   4. Or LLM runs specific --section after analyzing output
+#
+# Migrated off direct gh/glab/curl calls onto the git platform adapter
+# shims (scripts/lib/git-api.sh). Platform detection now uses git_health.
 
 # Global variables
 OUTPUT_MODE="json"  # json or raw
 SECTION="full"      # full, detect, jobs, logs, analyze, report
 PLATFORM=""         # github or gitlab
 PIPELINE_ID=""
-PROJECT_ID=""
 FAILED_JOBS_DATA=""
 LOGS_DIR="/tmp/pipeline-logs"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 #------------------------------------------------------------------------------
 # Section Functions
@@ -44,44 +49,38 @@ source "${SCRIPT_DIR}/lib/output-framework.sh"
 section_detect() {
     log "${BLUE}Detecting CI/CD Platform${NC}"
 
-    # Try to detect platform
-    if gh auth status &>/dev/null; then
-        PLATFORM="github"
-        log "${GREEN}✓${NC} Detected GitHub Actions"
-    elif glab auth status &>/dev/null; then
-        PLATFORM="gitlab"
-        log "${GREEN}✓${NC} Detected GitLab CI"
-    else
+    # Load adapter — this also determines the platform
+    if ! load_git_adapter; then
         exit_with_json "error" "Cannot detect CI/CD platform" \
-            "Neither 'gh' nor 'glab' CLI is authenticated. Run 'gh auth login' or 'glab auth status' first."
+            "Could not load git platform adapter. Check scripts/lib/git-api.sh and PROJECT.yaml."
     fi
+
+    # Verify auth/network
+    if ! git_health 2>/dev/null; then
+        exit_with_json "error" "Cannot detect CI/CD platform" \
+            "git_health failed. Ensure the CLI for your platform is authenticated."
+    fi
+
+    # Derive a human-readable platform name from the adapter that was loaded
+    PLATFORM="${GIT_PLATFORM:-unknown}"
+    log "${GREEN}✓${NC} Detected platform: $PLATFORM"
 
     # If pipeline ID not provided, get latest failed run
     if [[ -z "$PIPELINE_ID" ]]; then
         log "Fetching latest failed pipeline..."
 
-        if [[ "$PLATFORM" == "github" ]]; then
-            local failed_runs=$(gh run list --limit 20 --json status,conclusion,number,createdAt,displayTitle \
-                --jq '.[] | select(.conclusion == "failure")')
+        local pipelines
+        pipelines=$(git_pipeline_list --limit 20)
 
-            if [[ -z "$failed_runs" ]]; then
-                exit_with_json "success" "No recent failures found" "All recent pipelines passed"
-            fi
+        local failed_id
+        failed_id=$(echo "$pipelines" | jq -r '[.[] | select(.status == "failed")][0].id // empty')
 
-            PIPELINE_ID=$(echo "$failed_runs" | head -1 | jq -r '.number')
-            log "${GREEN}✓${NC} Found failed run: #${PIPELINE_ID}"
-        else
-            # GitLab
-            PROJECT_ID=$(glab api projects/:id --jq '.id')
-            local failed_pipelines=$(glab api "projects/$PROJECT_ID/pipelines?status=failed&per_page=20")
-
-            if [[ $(echo "$failed_pipelines" | jq 'length') -eq 0 ]]; then
-                exit_with_json "success" "No recent failures found" "All recent pipelines passed"
-            fi
-
-            PIPELINE_ID=$(echo "$failed_pipelines" | jq -r '.[0].id')
-            log "${GREEN}✓${NC} Found failed pipeline: #${PIPELINE_ID}"
+        if [[ -z "$failed_id" ]]; then
+            exit_with_json "success" "No recent failures found" "All recent pipelines passed"
         fi
+
+        PIPELINE_ID="$failed_id"
+        log "${GREEN}✓${NC} Found failed pipeline: #${PIPELINE_ID}"
     fi
 
     # If running only this section, return now
@@ -102,23 +101,14 @@ section_jobs() {
     log "${BLUE}Fetching Failed Job Details${NC}"
 
     local failed_jobs_json
-    if [[ "$PLATFORM" == "github" ]]; then
-        local run_details=$(gh run view "$PIPELINE_ID" --json jobs)
-        failed_jobs_json=$(echo "$run_details" | jq -c '[.jobs[] | select(.conclusion == "failure") | {name: .name, id: .databaseId, status: .conclusion}]')
+    local pipeline_data
+    pipeline_data=$(git_pipeline_status "$PIPELINE_ID")
+    # Normalize: keep jobs that are failed (normalized) or have conclusion==failure
+    failed_jobs_json=$(echo "$pipeline_data" | jq -c '[.jobs[] | select(.status == "failure" or .conclusion == "failure" or .status == "failed") | {name: .name, id: .id, status: (.conclusion // .status)}]')
 
-        if [[ $(echo "$failed_jobs_json" | jq 'length') -eq 0 ]]; then
-            exit_with_json "error" "No failed jobs found in run #${PIPELINE_ID}" \
-                "The pipeline may have been rerun successfully, or the jobs are still running."
-        fi
-    else
-        # GitLab
-        local pipeline_jobs=$(glab api "projects/$PROJECT_ID/pipelines/$PIPELINE_ID/jobs")
-        failed_jobs_json=$(echo "$pipeline_jobs" | jq -c '[.[] | select(.status == "failed") | {name: .name, id: .id, status: .status}]')
-
-        if [[ $(echo "$failed_jobs_json" | jq 'length') -eq 0 ]]; then
-            exit_with_json "error" "No failed jobs found in pipeline #${PIPELINE_ID}" \
-                "The pipeline may have been rerun successfully, or the jobs are still running."
-        fi
+    if [[ $(echo "$failed_jobs_json" | jq 'length') -eq 0 ]]; then
+        exit_with_json "error" "No failed jobs found in pipeline #${PIPELINE_ID}" \
+            "The pipeline may have been rerun successfully, or the jobs are still running."
     fi
 
     FAILED_JOBS_DATA="$failed_jobs_json"
@@ -152,15 +142,9 @@ section_logs() {
 
         log "  Fetching: $job_name (ID: $job_id)"
 
-        if [[ "$PLATFORM" == "github" ]]; then
-            gh run view --job="$job_id" --log > "${LOGS_DIR}/${job_name}.log" 2>/dev/null || {
+        git_job_logs "$job_id" > "${LOGS_DIR}/${job_name}.log" 2>/dev/null || {
                 log "${YELLOW}⚠${NC} Failed to fetch logs for $job_name"
             }
-        else
-            glab api "projects/$PROJECT_ID/jobs/$job_id/trace" > "${LOGS_DIR}/${job_name}.log" 2>/dev/null || {
-                log "${YELLOW}⚠${NC} Failed to fetch logs for $job_name"
-            }
-        fi
 
         ((i++))
     done
