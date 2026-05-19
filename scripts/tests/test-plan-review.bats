@@ -66,7 +66,7 @@ EOF
 - **Files**: `src/big.sh`
 - **Work Model**: Sonnet
 - **Test Model**: n/a
-- **Complexity**: S
+- **Complexity**: XS
 - **Estimated Time**: 45m
 - **TDD Required**: no
 - **Auto Review**: no
@@ -169,7 +169,7 @@ EOF
 - **Work Model**: Sonnet
 - **Test Model**: n/a
 - **Complexity**: M
-- **Estimated Time**: 2h
+- **Estimated Time**: 5h
 
 #### Task 1.2: [ ] [AC1] Second task
 - **Description**: This one is OK except it's oversized.

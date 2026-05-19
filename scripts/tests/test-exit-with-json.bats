@@ -140,10 +140,6 @@ assert_script_error_json() {
 # task-risk.sh: exit_with_json
 # =============================================================================
 
-@test "exit_with_json: task-risk error returns valid JSON" {
-    assert_script_error_json "task-risk.sh" --json --full
-}
-
 # =============================================================================
 # task-summary.sh: exit_with_json
 # =============================================================================

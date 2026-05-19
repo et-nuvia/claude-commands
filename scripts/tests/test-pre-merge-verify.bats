@@ -38,6 +38,20 @@ _create_makefile() {
         content+="${t}:\n\t@echo \"Running ${t}\"\n"
     done
     printf '%b' "$content" > "${TEST_DIR}/Makefile"
+
+    # pre-merge-verify.sh requires PROJECT.yaml with docker: services
+    # to advance past the "no docker services" auto-skip. Create a
+    # minimal one alongside the Makefile so the tests reach the
+    # service-detection / rebase / lint paths they're targeting.
+    if [[ ! -f "${TEST_DIR}/PROJECT.yaml" ]]; then
+        cat > "${TEST_DIR}/PROJECT.yaml" <<'YAML'
+name: test-project
+docker:
+  services:
+    - backend
+    - frontend
+YAML
+    fi
 }
 
 # Helper: add a file on the feature branch and commit it
@@ -139,16 +153,35 @@ _add_changed_file() {
 @test "pre-merge-verify: lint failure stops before test and build" {
     _add_changed_file "backend/main.py"
 
-    # Create Makefile where lint-backend fails
+    # Create Makefile where lint-backend fails. Output uses the
+    # "N error(s)" form that pre-merge-verify._count_lint_errors
+    # recognizes so the feature-vs-baseline comparison registers a
+    # real regression (otherwise both sides count 0 and the failure
+    # is treated as pre-existing).
     cat > "${TEST_DIR}/Makefile" <<'MAKEFILE'
 .PHONY: lint-backend test-backend build
 lint-backend:
-	@echo "lint error" >&2; exit 1
+	@echo "Found 1 error in foo.py" >&2; exit 1
 test-backend:
 	@echo "Running tests"
 build:
 	@echo "Building"
 MAKEFILE
+
+    # pre-merge-verify.sh requires PROJECT.yaml with docker: services
+    cat > "${TEST_DIR}/PROJECT.yaml" <<'YAML'
+name: test-project
+docker:
+  services:
+    - backend
+YAML
+
+    # Commit Makefile + PROJECT.yaml so the rebase doesn't carry the
+    # failing lint Makefile back to dev as untracked residual (which
+    # would make the baseline lint also fail and the failure appear
+    # pre-existing).
+    git add Makefile PROJECT.yaml
+    git commit -q -m "add failing lint Makefile + PROJECT.yaml on feature"
 
     run "$SCRIPT_PATH" --json --target-branch dev
     assert_valid_json "$output"
