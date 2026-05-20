@@ -21,6 +21,8 @@ profile, and get a consistent workflow across every project.
 
 - [Workflows](08-workflows) — canonical command chains and where the
   human owns the gap between steps
+- [Hooks](09-hooks) — optional Claude Code hooks shipped with this repo
+  (notifications, auto-allow of repo scripts) — opt in per-hook
 - [Templates and Documents](05-templates-and-docs) — TSK, PLN, RCA, and
   friends
 - [Customization](06-customization) — adding your own commands and skills
