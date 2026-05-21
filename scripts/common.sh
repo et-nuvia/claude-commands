@@ -57,6 +57,20 @@ json_escape() {
 # This ensures the file is found regardless of which directory a script runs from.
 # In linked worktrees, git rev-parse --show-toplevel returns the WORKTREE root
 # (not the main checkout), so .current-task is naturally per-worktree.
+# Declare CT_* globals at module-load time so callers running under `set -u`
+# can reference them before load_current_task() has been invoked (e.g., test
+# harnesses that check `[ -z "$CT_TASK_ID" ]` after a failed load).
+: "${CT_TASK_ID:=}"
+: "${CT_TASK_DOC:=}"
+: "${CT_BRANCH:=}"
+: "${CT_PARENT_BRANCH:=}"
+: "${CT_ASANA_GID:=}"
+: "${CT_STARTED:=}"
+: "${CT_TRACKER_BACKEND:=}"
+: "${CT_TRACKER_ID:=}"
+: "${CT_TRACKER_URL:=}"
+: "${CT_WORKTREE_PATH:=}"
+
 _resolve_current_task_path() {
   local root
   root=$(git rev-parse --show-toplevel 2>/dev/null) || root=""

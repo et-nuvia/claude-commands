@@ -86,7 +86,11 @@ gitlab_api() {
 
   local tmpfile
   tmpfile=$(mktemp)
-  trap 'rm -f "$tmpfile"' RETURN
+  # Use eager-expanded trap text so $tmpfile is resolved NOW, while in scope.
+  # The previous single-quoted form was evaluated when the trap fired (on
+  # RETURN, after `local tmpfile` had gone out of scope), which under
+  # `set -u` in any caller produced "tmpfile: unbound variable".
+  trap "rm -f '$tmpfile'" RETURN
 
   local http_code
   http_code=$(curl -s -o "$tmpfile" -w '%{http_code}' \
@@ -96,7 +100,7 @@ gitlab_api() {
     "$@" \
     "${GIT_API_URL}${endpoint}")
 
-  if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+  if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
     cat "$tmpfile"
     return 0
   elif [[ "$http_code" == "404" ]]; then
