@@ -275,24 +275,43 @@ Dev-SHA: ${source_sha}"
             fi
         fi
 
-        # Verify package-lock.json sync after merge (root and 1 level deep)
+        # Verify package-lock.json sync after merge (root and 1 level deep).
+        # Helper: amend the merge commit with the regenerated lockfile, or
+        # unwind the staged change and abort the whole merge on failure so the
+        # caller never sees a merge_hash that doesn't include the fix.
+        _amend_lockfile_or_fail() {
+            local lockfile_path="$1"
+            if ! git commit --amend --no-edit >/dev/null 2>&1; then
+                git reset HEAD "$lockfile_path" >/dev/null 2>&1 || true
+                git checkout -- "$lockfile_path" >/dev/null 2>&1 || true
+                git merge --abort >/dev/null 2>&1 || true
+                exit_with_json "error" "Failed to amend merge commit with regenerated $lockfile_path" \
+                    "Merge aborted to avoid pushing a commit without the lockfile fix"
+            fi
+        }
+
         local lockfile_fixed=false
         if [[ -f "package.json" ]] && [[ -f "package-lock.json" ]]; then
             if ! npm ls --package-lock-only >/dev/null 2>&1; then
                 log "${YELLOW}⚠️  package-lock.json out of sync — regenerating${NC}"
                 npm install --package-lock-only >/dev/null 2>&1
                 git add package-lock.json
-                git commit --amend --no-edit >/dev/null 2>&1
+                _amend_lockfile_or_fail "package-lock.json"
                 lockfile_fixed=true
             fi
         fi
+        # Only descend into top-level directories that are part of *this* repo
+        # (skip vendored checkouts, node_modules, etc., which have their own .git
+        # or are gitignored).
         for subdir in */; do
+            [[ -e "${subdir}.git" ]] && continue
+            git check-ignore -q "$subdir" 2>/dev/null && continue
             if [[ -f "${subdir}package.json" ]] && [[ -f "${subdir}package-lock.json" ]]; then
                 if ! (cd "$subdir" && npm ls --package-lock-only >/dev/null 2>&1); then
                     log "${YELLOW}⚠️  ${subdir}package-lock.json out of sync — regenerating${NC}"
                     (cd "$subdir" && npm install --package-lock-only >/dev/null 2>&1)
                     git add "${subdir}package-lock.json"
-                    git commit --amend --no-edit >/dev/null 2>&1
+                    _amend_lockfile_or_fail "${subdir}package-lock.json"
                     lockfile_fixed=true
                 fi
             fi
@@ -365,17 +384,27 @@ Dev-SHA: ${source_sha}"
                     exit_with_json "error" "Failed to create merge commit after auto-resolve" "Auto-resolved generated files but commit failed"
                 fi
             else
-                git commit --no-edit >/dev/null 2>&1 || true
+                if ! git commit --no-edit >/dev/null 2>&1; then
+                    git merge --abort >/dev/null 2>&1 || true
+                    exit_with_json "error" "Failed to commit merge after auto-resolve" "Auto-resolved generated files but commit failed (hook rejected, no changes staged, or similar)"
+                fi
             fi
 
-            # Regenerate auto-generated docs
+            # Regenerate auto-generated docs and amend them into the merge commit.
+            # If regeneration produces changes that fail to amend, undo the staged
+            # change rather than pushing a merge commit that's missing the regen.
             if [[ -x "${SCRIPT_DIR}/update-docs.sh" ]]; then
                 log "${BLUE}ℹ${NC} Regenerating auto-generated docs..."
                 "${SCRIPT_DIR}/update-docs.sh" >/dev/null 2>&1 || true
                 if [[ -n "$(git diff --name-only 2>/dev/null)" ]]; then
                     git add docs/DOCUMENT-INDEX.md docs/SEQUENCE-TRACKER.md 2>/dev/null || true
-                    git commit --amend --no-edit >/dev/null 2>&1 || true
-                    log "${GREEN}✓${NC} Regenerated and amended docs"
+                    if ! git commit --amend --no-edit >/dev/null 2>&1; then
+                        git reset HEAD docs/DOCUMENT-INDEX.md docs/SEQUENCE-TRACKER.md >/dev/null 2>&1 || true
+                        git checkout -- docs/DOCUMENT-INDEX.md docs/SEQUENCE-TRACKER.md >/dev/null 2>&1 || true
+                        log "${YELLOW}⚠${NC} Failed to amend regenerated docs into merge commit — merge proceeds without regen"
+                    else
+                        log "${GREEN}✓${NC} Regenerated and amended docs"
+                    fi
                 fi
             fi
 

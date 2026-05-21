@@ -1,6 +1,6 @@
 ---
 name: deploy-to-prod
-description: Deploy to production with risk analysis, merge, monitoring, version verification, and smoke tests
+description: Deploy to production with risk analysis, merge, monitoring, and version verification
 user_invocable: true
 ---
 
@@ -37,7 +37,7 @@ Script automatically:
 - Regular merge (not squash — preserves full history)
 - Monitors CI/CD pipeline to completion
 - Checks service health and deployed version
-- Reports post-deploy health and version (informational only — the CI pipeline owns smoke tests + rollback; this script does NOT auto-revert master on health/version warnings)
+- Reports post-deploy health and version (informational only — CI pipeline owns smoke tests and rollback)
 - Creates git tag (v{VERSION})
 - Syncs tags/changelog back to staging and dev branches
 
@@ -57,7 +57,7 @@ flowchart TD
     C -- confirm_action --> G{"risk_score >= 9<br/>(production threshold)"}
     G --> H["Display risk + concerns<br/>Suggest mitigations<br/>STOP — user must approve"]
 
-    C -- fix_error --> K["Show error message + section<br/>Debug with --raw<br/>Pipeline owns rollback — do NOT auto-revert master"]
+    C -- fix_error --> K["Show error message + section<br/>Debug with --raw<br/>CI pipeline owns rollback"]
 ```
 
 Based on `next_action`:
@@ -65,7 +65,7 @@ Based on `next_action`:
 **`display_summary`** — Production deployment completed
 - Perform AI code review with production-level scrutiny: migrations (destructive=BLOCK), API breaking changes (removed endpoints=BLOCK), security (hardcoded secrets=BLOCK), performance, dependencies
 - Display deployment summary with version, tag, health, and version-verification status
-- If `health_status` or `version_status` is a warning, surface it but do NOT propose reverting master — the pipeline already validated the deploy
+- If `health_status` or `version_status` is a warning, surface it for investigation (CI pipeline owns rollback)
 - Format per [Completion Format](docs/reference/ux/task-completion.md).
 
 **`resolve_conflicts`** — Merge conflicts detected
@@ -81,9 +81,9 @@ Based on `next_action`:
 
 **`fix_error`** — Deployment failed
 - Show error `message` and `section` that failed
-- If smoke tests failed: script auto-rolled back — verify `rollback_performed` field
+- CI pipeline owns rollback on smoke-test failure
 - Debug: `~/.claude/scripts/deploy-to-prod.sh --raw --<section>`
-- Fix and retry from failed section
+- Fix and retry from failed section (script is idempotent)
 - Report per [Error Format](docs/reference/ux/error-blocker.md).
 
 ## Section Resumption

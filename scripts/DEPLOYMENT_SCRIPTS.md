@@ -169,31 +169,34 @@ Verify deployed version matches expected version.
 
 ---
 
-### 6. `analyze-deployment-risk.sh`
-Perform code-aware deployment risk analysis.
+### 6. `deploy-risk.sh --gather`
+Perform code-aware deployment risk analysis. (Previously a standalone
+`analyze-deployment-risk.sh`; logic was folded into `deploy-risk.sh`.)
 
 **Usage:**
 ```bash
-./scripts/analyze-deployment-risk.sh <dev_branch> <staging_branch>
+./scripts/deploy-risk.sh --json --gather --environment staging|production
 ```
 
-**Returns JSON:**
+**Returns JSON** (within the larger gather payload):
 ```json
 {
-  "risk_score": 5,
-  "max_score": 10,
-  "breakdown": {
-    "migration": 0,
-    "api": 0,
-    "security": 0,
-    "performance": 0,
-    "dependencies": 0
-  },
-  "code_metrics": {
-    "files_changed": 12,
-    "lines_changed": "156"
-  },
-  "status": "low|low-medium|medium|high|critical"
+  "automated_scan": {
+    "risk_score": 5,
+    "max_score": 10,
+    "status": "low|low-medium|medium|high|critical",
+    "breakdown": {
+      "migration": 0,
+      "api": 0,
+      "security": 0,
+      "performance": 0,
+      "dependencies": 0
+    },
+    "code_metrics": {
+      "files_changed": 12,
+      "lines_changed": "156"
+    }
+  }
 }
 ```
 
@@ -413,9 +416,9 @@ source ~/.claude/scripts/get-deployment-config.sh
 VALIDATION=$(~/.claude/scripts/validate-git-state.sh --dev-branch "$DEV_BRANCH" --staging-branch "$STAGING_BRANCH")
 VALID=$(echo "$VALIDATION" | jq -r '.valid')
 
-# Analyze risks
-RISK=$(~/.claude/scripts/analyze-deployment-risk.sh "$DEV_BRANCH" "$STAGING_BRANCH")
-RISK_SCORE=$(echo "$RISK" | jq -r '.risk_score')
+# Analyze risks (folded into deploy-risk.sh --gather)
+RISK=$(~/.claude/scripts/deploy-risk.sh --json --gather --environment staging)
+RISK_SCORE=$(echo "$RISK" | jq -r '.automated_scan.risk_score')
 
 # Perform squash merge (NEW: using git-merge.sh)
 MERGE=$(~/.claude/scripts/git-merge.sh "$DEV_BRANCH" "$STAGING_BRANCH" --squash)
@@ -442,15 +445,11 @@ source ~/.claude/scripts/get-deployment-config.sh
 MERGE=$(~/.claude/scripts/git-merge.sh "$STAGING_BRANCH" "$PRODUCTION_BRANCH")
 
 # Monitor pipeline
-PIPELINE=$(~/.claude/scripts/monitor-pipeline.sh "$CI_PLATFORM" "$PRODUCTION_BRANCH")
+PIPELINE=$(~/.claude/scripts/monitor-pipeline.sh --branch "$PRODUCTION_BRANCH")
 
-# If pipeline fails, rollback (NEW: using deployment-rollback.sh)
-if [[ "$PIPELINE_STATUS" != "success" ]]; then
-  ROLLBACK=$(~/.claude/scripts/deployment-rollback.sh "$PRODUCTION_BRANCH" "pipeline failure")
-fi
-
-# Run smoke tests (NEW: quick production verification)
-SMOKE=$(~/.claude/scripts/smoke-tests.sh "$PRODUCTION_URL" --critical-only)
+# Note: rollback and smoke tests are owned by the CI pipeline itself.
+# deployment-rollback.sh is retained for manual operator use, not invoked
+# from deploy-to-prod.sh.
 ```
 
 ## Benefits

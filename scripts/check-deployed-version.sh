@@ -73,13 +73,16 @@ echo "  Deployed: $DEPLOYED_VERSION" >&2
 # Extract base semver (handle staging metadata like 1.2.3-staging.1234)
 BASE_VERSION=$(echo "$EXPECTED_VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || echo "$EXPECTED_VERSION")
 
-# Check if deployed version contains expected base version
-if echo "$DEPLOYED_VERSION" | grep -q "$BASE_VERSION"; then
-  echo "✓ Version verified (contains $BASE_VERSION)" >&2
+# Match base version as a whole semver token, not a regex substring.
+# Previous `grep -q "$BASE_VERSION"` treated dots as regex wildcards and
+# matched on substrings, so "1.2.3" would match "11x2x3" or "1.2.30".
+DEPLOYED_BASE=$(echo "$DEPLOYED_VERSION" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+if [[ -n "$DEPLOYED_BASE" && "$DEPLOYED_BASE" == "$BASE_VERSION" ]]; then
+  echo "✓ Version verified (deployed base $DEPLOYED_BASE == $BASE_VERSION)" >&2
   VERIFIED=true
   EXIT_CODE=0
 else
-  echo "⚠️  Version mismatch" >&2
+  echo "⚠️  Version mismatch (deployed base=${DEPLOYED_BASE:-unknown}, expected=$BASE_VERSION)" >&2
   EXIT_CODE=1
 fi
 

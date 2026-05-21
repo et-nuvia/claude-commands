@@ -29,6 +29,7 @@ set -euo pipefail
 #   - Orchestrates existing reusable scripts
 #   - LLM intervention at merge conflicts (only when needed)
 #   - Auto-flow when everything succeeds (no user input)
+#   - Idempotent: re-running --full after partial success resumes cleanly
 #   - --raw mode for debugging when --json insufficient
 
 # Global variables
@@ -49,6 +50,25 @@ map_status_to_action() {
 }
 
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+
+# Cleanup on unexpected exit: abort any in-progress merge and return to the
+# original branch.
+_ORIG_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+_cleanup_on_error() {
+    local rc=$?
+    [[ $rc -eq 0 ]] && return 0
+    git merge --abort >/dev/null 2>&1 || true
+    if [[ -n "$_ORIG_BRANCH" ]]; then
+        local current
+        current=$(git branch --show-current 2>/dev/null || echo "")
+        if [[ "$current" != "$_ORIG_BRANCH" ]]; then
+            git checkout "$_ORIG_BRANCH" >/dev/null 2>&1 || true
+        fi
+    fi
+    return $rc
+}
+trap '_cleanup_on_error' EXIT INT TERM
+
 RISK_SCORE=0
 RISK_STATUS="unknown"
 MERGE_COMMIT=""
@@ -64,9 +84,6 @@ PRODUCTION_BRANCH=""
 CI_PLATFORM=""
 VERSION=""
 STAGING_URL=""
-
-# Conflict details
-CONFLICT_FILES=()
 
 #------------------------------------------------------------------------------
 # Section Functions
@@ -201,6 +218,41 @@ EOF
 section_merge() {
     log "${BLUE}Merging to Staging${NC}"
 
+    # Idempotency guard: if source is already merged into target on origin, skip.
+    # Lets re-runs of --full after a partial success proceed straight to deploy.
+    git fetch origin "$DEV_BRANCH" "$STAGING_BRANCH" >/dev/null 2>&1 || true
+    local _src_sha _tgt_sha
+    _src_sha=$(git rev-parse "origin/$DEV_BRANCH" 2>/dev/null || echo "")
+    _tgt_sha=$(git rev-parse "origin/$STAGING_BRANCH" 2>/dev/null || echo "")
+    if [[ -n "$_src_sha" && -n "$_tgt_sha" ]] && \
+       git merge-base --is-ancestor "$_src_sha" "$_tgt_sha" 2>/dev/null; then
+        MERGE_STATUS="success"
+        MERGE_COMMIT="$_tgt_sha"
+        log "${GREEN}✓${NC} $DEV_BRANCH already merged into $STAGING_BRANCH ($_tgt_sha) — skipping merge"
+
+        if [[ "$SECTION" == "merge" ]]; then
+            local json=$(cat <<EOF
+{
+  "status": "success",
+  "next_action": "display_summary",
+  "section": "merge",
+  "message": "Already merged (idempotent skip)",
+  "merge_commit": "$MERGE_COMMIT",
+  "dev_branch": "$DEV_BRANCH",
+  "staging_branch": "$STAGING_BRANCH",
+  "next_steps": [
+    "Continue deployment: deploy-to-stage.sh --json --deploy"
+  ],
+  "timestamp": "$(date -Iseconds)"
+}
+EOF
+)
+            log_json "$json"
+            exit 0
+        fi
+        return 0
+    fi
+
     # Attempt merge — capture stdout (JSON) separately from stderr (logs)
     local merge_output
     local merge_stderr
@@ -328,6 +380,24 @@ EOF
         log "${YELLOW}⚠${NC} Push to origin/$STAGING_BRANCH returned non-zero (may already be pushed)"
     fi
 
+    # Verify the merge actually landed on origin — without this, a silently
+    # rejected push (branch protection, auth, race) lets section_deploy monitor
+    # a SHA only present locally and report false success against the previous
+    # build. Symmetric to deploy-to-prod.sh.
+    if ! git fetch origin "$STAGING_BRANCH" >/dev/null 2>&1; then
+        exit_with_json "error" "Failed to fetch $STAGING_BRANCH after merge" "Cannot verify merge was pushed"
+    fi
+    local _remote_head
+    _remote_head=$(git rev-parse "origin/$STAGING_BRANCH" 2>/dev/null || echo "")
+    if [[ -z "$MERGE_COMMIT" || "$MERGE_COMMIT" == "null" ]]; then
+        MERGE_COMMIT="$_remote_head"
+    fi
+    if [[ "$_remote_head" != "$MERGE_COMMIT" ]]; then
+        exit_with_json "error" \
+            "Merge commit not found on remote" \
+            "Local merge: $MERGE_COMMIT, origin/$STAGING_BRANCH: $_remote_head. Push may have failed or been rejected."
+    fi
+
     if [[ "$SECTION" == "merge" ]]; then
         # Return success
         local json=$(cat <<EOF
@@ -356,6 +426,14 @@ EOF
 # Section 4: Deploy (pipeline + health + version)
 section_deploy() {
     log "${BLUE}Deploying to Staging${NC}"
+
+    # Refuse to start a deploy section with a dirty working tree — a prior
+    # interrupted run could have left half-staged files that would corrupt
+    # the SHA we're about to monitor.
+    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+        exit_with_json "error" "Working tree is dirty" \
+            "Resolve uncommitted changes before re-running --deploy (git status to inspect)"
+    fi
 
     # Resolve the commit we expect the pipeline to build. Set by section_merge
     # during --full; fall back to local STAGING_BRANCH HEAD when called
@@ -482,7 +560,10 @@ main() {
             --merge) SECTION="merge"; shift ;;
             --deploy) SECTION="deploy"; shift ;;
             --full) SECTION="full"; shift ;;
-            *) shift ;;
+            *)
+                exit_with_json "error" "Unknown argument: $1" \
+                    "Valid flags: --json|--toon|--raw, --validate|--risk-analysis|--merge|--deploy|--full"
+                ;;
         esac
     done
 

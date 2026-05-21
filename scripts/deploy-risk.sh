@@ -60,7 +60,7 @@ DOC_PATH=""         # Resolved document path (set by section_document)
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) OUTPUT_MODE="json"; shift ;;
-            --toon) OUTPUT_MODE="json"; OUTPUT_FORMAT="toon"; shift ;;
+        --toon) OUTPUT_MODE="json"; OUTPUT_FORMAT="toon"; shift ;;
         --raw) OUTPUT_MODE="raw"; shift ;;
         --full) SECTION="full"; shift ;;
         --gather) SECTION="gather"; shift ;;
@@ -110,47 +110,72 @@ section_gather() {
 
     git fetch origin "$source_branch" "$target_branch" >/dev/null 2>&1 || true
 
-    # 1. Database migrations
-    if git diff "origin/$target_branch"..."origin/$source_branch" --name-only 2>/dev/null | grep -qE "migrations?/"; then
-        local migs
-        migs=$(git diff "origin/$target_branch"..."origin/$source_branch" -- "**/migrations*" 2>/dev/null | grep -cE "^[+-].*DROP|^[+-].*DELETE FROM|^[+-].*ALTER.*TYPE" || echo "0")
-        if [[ $migs -gt 0 ]]; then migration_risk=8; else migration_risk=3; fi
+    # Capture diffs once. Re-running git diff per check is slow on large branches
+    # and introduces subtle race conditions if the index changes mid-scan.
+    local diff_range="origin/${target_branch}...origin/${source_branch}"
+    local changed_files_list diff_added diff_full numstat
+    changed_files_list=$(git diff "$diff_range" --name-only 2>/dev/null || echo "")
+    diff_added=$(git diff "$diff_range" 2>/dev/null | grep '^+' | grep -v '^+++' || true)
+    diff_full=$(git diff "$diff_range" 2>/dev/null || echo "")
+    numstat=$(git diff "$diff_range" --numstat 2>/dev/null || echo "")
+
+    # 1. Database migrations — look only at *added* lines (post-merge state)
+    # and require actual SQL keywords at statement position (not random comments).
+    if echo "$changed_files_list" | grep -qE "(^|/)migrations?/"; then
+        local migration_diff migs
+        migration_diff=$(git diff "$diff_range" -- '*migrations*' '*migration*' 2>/dev/null | grep '^+' | grep -v '^+++' || true)
+        migs=$(echo "$migration_diff" | grep -cE '\b(DROP[[:space:]]+(TABLE|COLUMN|INDEX|CONSTRAINT)|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]]+[^[:space:]]+[[:space:]]+DROP|ALTER[[:space:]]+COLUMN[[:space:]]+[^[:space:]]+[[:space:]]+TYPE|TRUNCATE)\b' 2>/dev/null || echo "0")
+        if [[ "${migs:-0}" -gt 0 ]]; then migration_risk=8; else migration_risk=3; fi
         risk_score=$((risk_score + migration_risk))
     fi
 
-    # 2. Breaking API changes
-    if git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "^-.*@(get|post|put|delete|patch)\(|^-.*def (get_|post_|put_|delete_)|^-\s+def \w+\(.*:"; then
+    # 2. Breaking API changes — *removed* route/handler signatures
+    if echo "$diff_full" | grep -qE '^-.*@(get|post|put|delete|patch)\(|^-.*def (get_|post_|put_|delete_)|^-[[:space:]]+def [a-zA-Z_]+\(.*:'; then
         api_risk=6
         risk_score=$((risk_score + api_risk))
     fi
 
-    # 3. Security risks
-    if git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "password|secret|api_key|token" | grep -v "password_reset|reset_token"; then
+    # 3. Security risks — applied to *added* lines (introducing risk), with
+    # legitimate password-reset patterns filtered out before counting.
+    # Previous version had `grep -q ... | grep -v ...` which short-circuited:
+    # -q exits 0/1 without emitting, so the -v filter was a no-op.
+    local secret_hits exec_hits sql_hits
+    secret_hits=$(echo "$diff_added" | grep -E 'password|secret|api_key|token' | grep -vE 'password_reset|reset_token|password_hash|hashed_password' | head -1 || true)
+    exec_hits=$(echo "$diff_added" | grep -E 'exec\(|eval\(|os\.system\(|subprocess\.|shell=True' | head -1 || true)
+    sql_hits=$(echo "$diff_added" | grep -E '\.query\(|\.execute\(|SELECT[[:space:]]+.*FROM' | grep -vE 'WHERE|parameterized|prepared' | head -1 || true)
+    if [[ -n "$secret_hits" ]]; then
         security_risk=9; risk_score=$((risk_score + security_risk))
-    elif git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "exec\(|eval\(|system\(|subprocess|shell=True"; then
+    elif [[ -n "$exec_hits" ]]; then
         security_risk=8; risk_score=$((risk_score + security_risk))
-    elif git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "\.query\(|\.execute\(|SELECT.*FROM" | grep -v "WHERE"; then
+    elif [[ -n "$sql_hits" ]]; then
         security_risk=7; risk_score=$((risk_score + security_risk))
     fi
 
-    # 4. Performance risks
-    if git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "for.*in.*\{.*query|\.map.*query|db\.query"; then
+    # 4. Performance risks — N+1-style query patterns introduced
+    if echo "$diff_added" | grep -qE 'for.*in.*\{.*query|\.map.*query|db\.query'; then
         perf_risk=6; risk_score=$((risk_score + perf_risk))
     fi
 
-    # 5. Dependency changes
-    if git diff "origin/$target_branch"..."origin/$source_branch" --name-only 2>/dev/null | grep -qE "package.json|requirements.txt|pyproject.toml|go.mod|Gemfile|Cargo.toml"; then
-        local dep_changed
-        dep_changed=$(git diff "origin/$target_branch"..."origin/$source_branch" -- package.json requirements.txt pyproject.toml go.mod Gemfile Cargo.toml 2>/dev/null | grep -cE "^[+-]" | head -1 || echo "0")
-        if [[ $dep_changed -gt 5 ]]; then dep_risk=5; else dep_risk=2; fi
+    # 5. Dependency changes — count actual added/removed dep lines via numstat.
+    # The previous `grep -cE '^[+-]' | head -1` was nonsense: head -1 on a
+    # single count line is a no-op, and the count included diff headers
+    # (`+++`/`---`), inflating the result.
+    if echo "$changed_files_list" | grep -qE '(^|/)(package\.json|requirements\.txt|pyproject\.toml|go\.mod|Gemfile|Cargo\.toml)$'; then
+        local dep_changed=0
+        if [[ -n "$numstat" ]]; then
+            dep_changed=$(echo "$numstat" | awk '$3 ~ /(^|\/)(package\.json|requirements\.txt|pyproject\.toml|go\.mod|Gemfile|Cargo\.toml)$/ { sum += $1 + $2 } END { print sum+0 }')
+        fi
+        if [[ "${dep_changed:-0}" -gt 5 ]]; then dep_risk=5; else dep_risk=2; fi
         risk_score=$((risk_score + dep_risk))
     fi
 
     # 6. Code volume
-    changed_files=$(git diff "origin/$target_branch"..."origin/$source_branch" --name-only 2>/dev/null | wc -l | tr -d ' ')
-    changed_lines=$(git diff "origin/$target_branch"..."origin/$source_branch" --stat 2>/dev/null | tail -1 | awk '{print $4}' || echo "0")
-    if [[ $changed_files -gt 50 ]]; then risk_score=$((risk_score + 2))
-    elif [[ $changed_files -gt 30 ]]; then risk_score=$((risk_score + 1)); fi
+    changed_files=$(echo "$changed_files_list" | grep -c . 2>/dev/null || echo "0")
+    if [[ -n "$numstat" ]]; then
+        changed_lines=$(echo "$numstat" | awk '{ sum += $1 + $2 } END { print sum+0 }')
+    fi
+    if [[ "${changed_files:-0}" -gt 50 ]]; then risk_score=$((risk_score + 2))
+    elif [[ "${changed_files:-0}" -gt 30 ]]; then risk_score=$((risk_score + 1)); fi
 
     # Cap at 10
     [[ $risk_score -gt 10 ]] && risk_score=10

@@ -40,33 +40,37 @@ fi
 HEALTH_ENDPOINT="${BASE_URL}${HEALTH_PATH}"
 POLL_INTERVAL=5
 ELAPSED=0
-STATUS="unknown"
-HTTP_CODE="000"
+STATUS="timeout"
+HTTP_CODE=0
 RESPONSE=""
+EXIT_CODE=1
+
+RESPONSE_FILE=$(mktemp -t check-health.XXXXXX)
+trap 'rm -f "$RESPONSE_FILE"' EXIT
 
 echo "Checking health endpoint: $HEALTH_ENDPOINT" >&2
 
 while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-  HTTP_CODE=$(curl -s -o /tmp/health-response.txt -w "%{http_code}" "$HEALTH_ENDPOINT" 2>/dev/null || echo "000")
-  RESPONSE=$(cat /tmp/health-response.txt 2>/dev/null || echo "")
+  : > "$RESPONSE_FILE"
+  HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" --max-time 10 "$HEALTH_ENDPOINT" 2>/dev/null || echo "0")
+  # Strip leading zeros so JSON emission stays valid (000 is not valid JSON).
+  HTTP_CODE=$((10#${HTTP_CODE:-0}))
+  RESPONSE=$(cat "$RESPONSE_FILE" 2>/dev/null || echo "")
 
   if [[ "$HTTP_CODE" == "200" ]]; then
     STATUS="healthy"
+    EXIT_CODE=0
     echo "✓ Health check passed (HTTP $HTTP_CODE)" >&2
     break
-  else
-    echo "⏳ Waiting for service... (${ELAPSED}s, HTTP $HTTP_CODE)" >&2
-    ELAPSED=$((ELAPSED + POLL_INTERVAL))
-    sleep $POLL_INTERVAL
+  fi
+
+  echo "⏳ Waiting for service... (${ELAPSED}s, HTTP $HTTP_CODE)" >&2
+  ELAPSED=$((ELAPSED + POLL_INTERVAL))
+  # Skip the final sleep when we're about to exit the loop.
+  if [[ $ELAPSED -lt $MAX_WAIT ]]; then
+    sleep "$POLL_INTERVAL"
   fi
 done
-
-if [[ $ELAPSED -ge $MAX_WAIT ]]; then
-  STATUS="timeout"
-  EXIT_CODE=1
-else
-  EXIT_CODE=0
-fi
 
 # Try to parse response as JSON if available
 RESPONSE_JSON=""
