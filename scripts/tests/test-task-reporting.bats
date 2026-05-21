@@ -55,24 +55,28 @@ teardown() {
 }
 
 # =============================================================================
-# task-risk.sh
+# task-risk.sh — REMOVED. Functionality merged into deploy-risk.sh (V4 RSK
+# document mode) in commit 862e41c. Tests retargeted at deploy-risk.sh.
 # =============================================================================
 
-@test "task-risk: missing env returns error" {
+@test "deploy-risk: missing env returns error" {
     setup_mock_git_repo
-    run "$SCRIPTS_DIR/task-risk.sh" --json --full 2>/dev/null
+    run "$SCRIPTS_DIR/deploy-risk.sh" --json --full 2>/dev/null
     assert_json_field "$output" ".status" "error"
 }
 
-@test "task-risk: invalid env returns error" {
+@test "deploy-risk: --env flag is accepted" {
+    # Post-merge into deploy-risk, --env is free-form (matches a PROJECT.yaml
+    # deployment target, not a strict allowlist). Verify the flag parses and
+    # the script produces output instead of crashing.
     setup_mock_git_repo
-    run "$SCRIPTS_DIR/task-risk.sh" --json --full --env invalid 2>/dev/null
-    assert_json_field "$output" ".status" "error"
+    run "$SCRIPTS_DIR/deploy-risk.sh" --json --full --env staging 2>/dev/null
+    [ -n "$output" ]
 }
 
-@test "task-risk: error JSON is valid" {
+@test "deploy-risk: error JSON is valid" {
     setup_mock_git_repo
-    run "$SCRIPTS_DIR/task-risk.sh" --json --full 2>/dev/null
+    run "$SCRIPTS_DIR/deploy-risk.sh" --json --full 2>/dev/null
     assert_valid_json "$output"
 }
 

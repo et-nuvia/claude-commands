@@ -307,15 +307,23 @@ EOF
 # =============================================================================
 
 @test "plan-progress: task-plan command contains per-task execution config rules" {
-    local cmd="$HOME/.claude/commands/task-plan.md"
-    # Verify per-task field names are documented
+    # Read from the repo command file rather than the installed copy under
+    # ~/.claude so the test works in CI / fresh clones / agent worktrees
+    # where the install step may not have run.
+    local cmd="${BATS_TEST_DIRNAME}/../../commands/task-plan.md"
+    [ -f "$cmd" ] || cmd="$HOME/.claude/commands/task-plan.md"
+
+    # Verify per-task field names are documented (human-readable form).
     grep -q '\*\*TDD Required\*\*' "$cmd"
     grep -q '\*\*Auto Review\*\*' "$cmd"
     grep -q '\*\*Review Type\*\*' "$cmd"
     grep -q '\*\*Fresh Context\*\*' "$cmd"
-    # Verify complexity-based defaults are documented
-    grep -q 'tdd_required: yes' "$cmd"
-    grep -q 'tdd_required: no' "$cmd"
+
+    # Verify complexity-based defaults are documented. The doc now uses the
+    # display form `TDD Required: yes` / `TDD Required: no` (matches the
+    # field label) rather than the snake_case key form `tdd_required:`.
+    grep -qE 'TDD Required:\s*yes' "$cmd"
+    grep -qE 'TDD Required:\s*no' "$cmd"
 }
 
 # =============================================================================

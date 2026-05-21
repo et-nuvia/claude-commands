@@ -137,11 +137,11 @@ assert_script_error_json() {
 }
 
 # =============================================================================
-# task-risk.sh: exit_with_json
+# deploy-risk.sh: exit_with_json (formerly task-risk.sh — merged in 862e41c)
 # =============================================================================
 
-@test "exit_with_json: task-risk error returns valid JSON" {
-    assert_script_error_json "task-risk.sh" --json --full
+@test "exit_with_json: deploy-risk error returns valid JSON" {
+    assert_script_error_json "deploy-risk.sh" --json --full
 }
 
 # =============================================================================

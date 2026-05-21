@@ -53,7 +53,10 @@ EOF
 
     VALID_PLN="docs/active/0000-0099/VALID-PLN.md"
 
-    # PLN with oversized subtask (45m)
+    # PLN with oversized subtask. The size-check now scales by complexity:
+    # XS/default=30m, S=120m, M=240m, L=480m, XL=960m. To trigger
+    # subtask_size, we use complexity XS (defaults to 30m ceiling) with a
+    # 45m estimate — clearly over the XS budget.
     cat > docs/active/0000-0099/OVERSIZED-PLN.md << 'EOF'
 # Plan: Oversized Task
 
@@ -66,7 +69,7 @@ EOF
 - **Files**: `src/big.sh`
 - **Work Model**: Sonnet
 - **Test Model**: n/a
-- **Complexity**: S
+- **Complexity**: XS
 - **Estimated Time**: 45m
 - **TDD Required**: no
 - **Auto Review**: no
@@ -154,7 +157,9 @@ EOF
 
     NO_CONFIG_PLN="docs/active/0000-0099/NO-CONFIG-PLN.md"
 
-    # PLN with multiple issues
+    # PLN with multiple issues. Sized-by-complexity check needs Task 1.2 to
+    # exceed its limit: complexity XS defaults to 30m, so 45m is oversized.
+    # (Previous fixture used S=120m, which 45m did not exceed.)
     cat > docs/active/0000-0099/MULTI-ISSUE-PLN.md << 'EOF'
 # Plan: Multiple Issues
 
@@ -176,7 +181,7 @@ EOF
 - **Files**: `src/ok.sh`
 - **Work Model**: Haiku
 - **Test Model**: n/a
-- **Complexity**: S
+- **Complexity**: XS
 - **Estimated Time**: 45m
 - **TDD Required**: no
 - **Auto Review**: no
