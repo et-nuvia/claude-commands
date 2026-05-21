@@ -91,7 +91,7 @@ esac
 
 | Category | Scripts | Behavior if Missing |
 |----------|---------|-------------------|
-| **Required** | task-start, task-continue, task-fetch, task-close, task-risk, deploy-to-stage, deploy-to-prod | Exit with clear error |
+| **Required** | task-start, task-continue, task-fetch, task-close, deploy-risk, deploy-to-stage, deploy-to-prod | Exit with clear error |
 | **Optional** | task-capture, task-design, task-audit, task-hold, task-resume, task-summary, task-code-review | Use defaults, don't mention |
 
 ## next_action Mapping

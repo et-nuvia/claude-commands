@@ -66,7 +66,7 @@ Script can't proceed without user input.
 | `needs_decision` | Present options to user | task-start, task-resume |
 | `sync_external` | Update Asana/GitLab/GitHub | task-close, task-hold, task-create |
 | `run_tests` | Execute test suite | task-continue, deploy-to-stage |
-| `create_document` | Generate a V4 document | task-risk, task-summary, task-code-review |
+| `create_document` | Generate a V4 document | deploy-risk, task-summary, task-code-review |
 | `resolve_conflicts` | Handle merge conflicts | deploy-to-stage, git-merge |
 | `retry_with_fix` | Fix issue and retry | Pipeline failures |
 | `none` | No further action needed | Informational queries |
@@ -110,7 +110,7 @@ fi
 
 ## 5. Document Generation Pattern
 
-**Affected commands**: task-risk, task-summary, task-code-review, task-audit, rca-*
+**Affected commands**: deploy-risk, task-summary, task-code-review, task-audit, rca-*
 
 **Anti-pattern**: Commands contain document templates with variable substitution.
 
@@ -120,7 +120,7 @@ fi
 
 ## 6. Scoring/Analysis Pattern
 
-**Affected commands**: task-verify, task-risk, deploy-risk, db-performance, security-patch
+**Affected commands**: task-verify, deploy-risk, db-performance, security-patch
 
 **Anti-pattern**: Commands contain scoring matrices, weighted calculations, if/elif chains for grades.
 
@@ -164,10 +164,12 @@ Scripts call `check-health.sh`, `check-deployed-version.sh`. Commands document p
 ### P0 - Highest Impact (2 commands)
 deploy-to-stage, deploy-to-prod
 
-### P1 - Highest Usage (14 commands)
+### P1 - Highest Usage (13 commands)
 task-capture, task-close, task-code-review, task-continue (done), task-create,
-task-execute, task-fetch, task-hold, task-resume, task-risk,
+task-execute, task-fetch, task-hold, task-resume,
 task-start, task-summary, task-update, task-verify
+<!-- task-risk merged into deploy-risk (commit 862e41c) -->
+
 
 ### P2 - High Usage (12 commands)
 create-pr, deploy-ansible, deploy-risk, git-commit, git-merge, git-rebase,

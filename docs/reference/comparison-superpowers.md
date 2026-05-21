@@ -128,7 +128,7 @@ Superpowers' SDD pattern:
 4. Code quality reviewer subagent checks craftsmanship
 5. Fixes applied, re-reviewed until clean
 
-Eric's system has `/task-code-review` and `/task-feature-review` but they're manual invocations, not automatic gates in the execution pipeline. The two-stage review (spec compliance + code quality) is a good separation of concerns.
+Eric's system has `/task-code-review` as a manual invocation, not an automatic gate in the execution pipeline. (`/task-feature-review` was previously planned alongside it but has been removed — see commit `e5f0c7b`.) The two-stage review concept — spec compliance + code quality — is still a good separation of concerns even with a single command, since the reviewer subagent prompt can address both axes.
 
 **Brainstorm idea:** Make code review automatic in `/task-continue` after each subtask completion, using subagent dispatch.
 
