@@ -102,7 +102,7 @@ The commit step accepts additional reflection fields passed at runtime — see "
 
 5. **Auto review** (when `auto_review == "yes"`) — a review subagent analyzes the diff against the subtask spec. It must end with `APPROVED` or one or more `BLOCKING: file:line — description` lines. Real blockers go back to Step 4; non-blocking notes go into `--lessons`.
 
-6. **Commit progress** — `--commit` atomically marks the subtask complete in the PLN, appends a progress entry with reflection fields, stages files, and commits. TDD compliance is enforced here — the script blocks commits that lack test files for production changes when `tdd_required == "yes"`. Never bypass this with a direct `git commit`.
+6. **Commit progress** — `--commit` atomically marks the subtask complete in the PLN (the `plan_updated` field in the output reflects whether `plan-progress.sh` actually succeeded — a failure logs a warning and the commit still proceeds with `plan_updated:false`, instead of silently lying), appends a progress entry with reflection fields, stages files via `git add -u` + NUL-delimited untracked path handling (so renames and filenames-with-spaces survive — the previous `xargs git add` pipeline corrupted them), and commits. TDD compliance is enforced here — the script blocks commits that lack test files for production changes when `tdd_required == "yes"`. Never bypass this with a direct `git commit`.
 
 ## Example workflows
 

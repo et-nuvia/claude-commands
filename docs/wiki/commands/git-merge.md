@@ -104,6 +104,17 @@ protected branches by hand.
    detected, returns `resolve_conflicts` with the list of affected files. The
    LLM reads each file, resolves all `<<<<<<<`/`=======`/`>>>>>>>` markers via
    Edit, stages the resolved files, then resumes from `--cleanup`.
+
+   **Lockfile regeneration is fail-fast.** If the merge regenerates a
+   lockfile (root or subdir) and the resulting `git commit --amend` is
+   rejected by a hook (missing GPG key, signing config, pre-commit), the
+   script unstages the lockfile, restores it, aborts the merge, and exits
+   with a JSON error — instead of silently leaving the un-amended merge SHA
+   in place and pushing the merge commit *without* the lockfile fix. The
+   subdir loop also skips directories with their own `.git` and gitignored
+   paths so `npm install` doesn't run inside `node_modules/` or vendored
+   repos.
+
 4. **Cleanup** — pushes the target branch to remote and reports the merge
    hash, commit count, and version impact in a `display_summary` response.
 

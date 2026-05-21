@@ -123,8 +123,15 @@ plus `status` (`success` | `warning`), `issues[]`, `conflict_files[]`,
    concerns and mitigations and waits for explicit user approval.
 4. **Merge** — regular `--no-ff` merge (dev → staging). No squash: preserving
    commit SHAs lets production promotion re-tag cleanly without phantom
-   conflicts. Merge conflicts return `resolve_conflicts` with the file list;
-   after the LLM resolves and stages them, the `--deploy` flag resumes.
+   conflicts. The merge step is **idempotent**: if `origin/<dev>` is already
+   an ancestor of `origin/<staging>`, the merge is treated as a successful
+   no-op so `--full` can be re-run after a partial failure (e.g., pipeline
+   monitor lost the network). After the merge push, the script asserts
+   `origin/<staging> == MERGE_COMMIT` — a silently-rejected push (auth /
+   branch protection) is caught here instead of monitoring a SHA that's
+   only present locally. Merge conflicts return `resolve_conflicts` with
+   the file list; after the LLM resolves and stages them, `--deploy`
+   resumes.
 5. **Pipeline monitor** — script polls the CI/CD pipeline (GitHub Actions or
    GitLab CI, auto-detected from PROJECT.yaml) to completion.
 6. **Health + version check** — when `deployment.staging.url` is configured,

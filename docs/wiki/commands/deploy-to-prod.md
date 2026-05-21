@@ -101,7 +101,12 @@ Stricter thresholds than `/deploy-to-stage`; score ≥ 9 blocks automatically.
 **Outputs (structured JSON):** `next_action` ∈ {`display_summary`,
 `resolve_conflicts`, `confirm_action`, `fix_error`}, plus `status`
 (`success` | `warning`), `version`, `tag`, `health_status`, `version_status`,
-`conflict_files[]`, `risk_score`, `rollback_performed`.
+`conflict_files[]`, `risk_score`.
+
+> **Note:** `rollback_performed` and `smoke_test_status` were removed from
+> the output when rollback ownership was consolidated in the CI pipeline.
+> The script no longer reverts master; the pipeline does. Existing automation
+> reading those fields should treat their absence as "delegated to CI."
 
 **Invocation surface:**
 
@@ -188,9 +193,10 @@ API changes, no security findings.
 - **Production thresholds are stricter than staging.** Score ≥ 7 requires
   explicit confirmation; score ≥ 9 is a hard block. Do not attempt to work
   around the block — resolve the underlying risk first.
-- The CI pipeline owns smoke tests and automatic rollback. If `rollback_performed`
-  is `true` in `fix_error`, the pipeline already reverted — do NOT manually
-  revert the production branch.
+- The CI pipeline owns smoke tests and automatic rollback. The script no longer
+  emits `rollback_performed` — pipeline failure on production means the
+  pipeline already reverted (or is rolling back); do NOT manually revert the
+  production branch. Check pipeline logs to confirm.
 - If `health_status` or `version_status` is a warning after a successful
   pipeline, surface it to the user but do not revert. The pipeline validated
   the deploy; a transient health check miss is not a deployment failure.
@@ -201,8 +207,8 @@ API changes, no security findings.
 - **If it fails (merge):** resolve conflicts, `git add`, then
   `~/.claude/scripts/deploy-to-prod.sh --deploy`.
 - **If it fails (pipeline):** do NOT push a revert to master. Check CI logs,
-  confirm whether the pipeline auto-rolled back (`rollback_performed`), fix
-  root cause, then rerun from `--deploy`.
+  confirm whether the pipeline auto-rolled back, fix root cause, then rerun
+  from `--deploy`.
 - **If it fails (tag):** the deploy is live. Rerun
   `~/.claude/scripts/deploy-to-prod.sh --tag` to retry tag creation and sync
   only.

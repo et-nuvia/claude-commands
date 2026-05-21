@@ -105,18 +105,30 @@ Section flags for targeted resumption: `--identify`, `--verify`,
 
 ## How it works
 
-1. **Identify** — load task metadata; detect on-hold tasks with preserved branches.
+1. **Identify** — load task metadata; detect on-hold tasks with preserved
+   branches. If a backend (Asana / GitLab / GitHub) is configured and the
+   TSK doc has an external task ID, the script calls `task_get` on the
+   adapter to verify the backend task exists before creating any local
+   state. A typo'd or missing backend ID logs a warning so you don't end
+   up with an orphan branch pointing at nothing.
 2. **Verify** — confirm the working tree is clean. Tracked-file modifications
    block; untracked files (e.g., a TSK doc you just wrote) do not.
 3. **Update repo** — pull the latest from the default branch.
 4. **Create branch / worktree** — worktree mode creates `.worktrees/<task_id>`
-   and `cd`s into it; `--no-worktree` creates a normal branch. Writes
-   `.current-task`.
-5. **External sync gate** — if Asana sync is required, script returns
+   and `cd`s into it; `--no-worktree` creates a normal branch. `.gitignore`
+   is appended **before** `.current-task` is written, so a permission error
+   on `.gitignore` can't leave `.current-task` as a tracked artifact. An
+   `EXIT` trap removes the worktree if a later step fails before
+   `--link-task` completes — preventing orphan worktrees from a partial
+   run. Once linking succeeds, the trap disarms so `--setup-env` failures
+   leave the worktree in place for retry.
+5. **Link task** — `.current-task` is written with the backend mapping and
+   parent branch.
+6. **External sync gate** — if Asana sync is required, script returns
    `sync_external` and the LLM flips Asana **before** Docker boots. Saves a
    minute of env startup on misconfigured tasks.
-6. **Setup env** — Docker services up, migrations run, deps install.
-7. **Assess and route** — based on what docs exist, recommend the next
+7. **Setup env** — Docker services up, migrations run, deps install.
+8. **Assess and route** — based on what docs exist, recommend the next
    command: `/task-plan`, `/task-design`, or `/task-continue`.
 
 ## Example workflows

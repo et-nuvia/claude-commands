@@ -106,7 +106,7 @@ Closes a completed or deferred task: pre-verifies the merge, generates SUM and L
 
 1. **Initial run** — the LLM calls the script with `--ai --status completed` and all reflection fields. The script reads `.current-task`, checks for uncommitted changes, and determines whether Asana sync is needed. Returns `next_action`.
 
-2. **Asana sync** (`sync_asana`) — if the tracker requires updating, the LLM calls Asana MCP to set status to "Done", add a completion comment, and optionally log hours via Invoice Ninja. All MCP ops are best-effort; the flow continues even if they error.
+2. **External tracker sync** (`sync_asana`) — the closeout calls `task_close` on the active task-api adapter (Asana / GitLab / GitHub / none), so any backend is handled uniformly through the `task_*` contract. The legacy code path made raw `gh issue close` / `curl PUT` calls against GitHub and GitLab directly; those have been removed in favor of the adapter. The LLM may additionally invoke Asana MCP for richer fields (status → "Done", completion comment, Invoice Ninja hours). All sync ops are best-effort; the flow continues even if they error.
 
 3. **Pre-merge verification** (`generate_docs`) — before writing any docs, the LLM runs `--pre-verify` to confirm the branch can cleanly rebase, lint, and build. The verified SHA is recorded so the subsequent `--cleanup` call skips re-verification. If verification fails, the LLM fixes lint/test issues on the feature branch and re-runs `--pre-verify`.
 

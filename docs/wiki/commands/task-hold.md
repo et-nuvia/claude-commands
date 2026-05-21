@@ -19,7 +19,7 @@ project_knowledge_sections: []
 
 > Part of the [Task Lifecycle workflow](../08-workflows.md#task-lifecycle).
 
-Pauses work on a task while preserving the branch and all in-progress documents. Records who is being waited on, why, and by when, then commits the hold details locally, syncs the external tracker to "Hold", and merges the feature branch to main. The worktree (if in worktree mode) stays on disk for seamless resumption via `/task-resume`.
+Pauses work on a task while preserving the branch and all in-progress documents. Records who is being waited on, why, and by when, then commits the hold details locally, syncs the external tracker to "Hold", and pushes the feature branch to the remote so it survives if the local worktree is later removed. **The default branch is never touched** — in-progress work is held on the feature branch only. The worktree (if in worktree mode) stays on disk for seamless resumption via `/task-resume`.
 
 > **Config:** PROJECT.yaml **required** — reads `task_management.backend`, plus either `task_management.asana.{workspace_id, default_project}` or `task_management.gitlab.project_id` depending on backend.
 
@@ -65,7 +65,7 @@ Pauses work on a task while preserving the branch and all in-progress documents.
 
 | Dependency | Why it's needed | Install |
 |---|---|---|
-| `git` (≥ 2.30) | Commit hold details locally, merge branch to main | preinstalled |
+| `git` (≥ 2.30) | Commit hold details locally, push feature branch to remote | preinstalled |
 | `jq` | Parse script JSON output | `brew install jq` / `apt install jq` |
 | Asana MCP (work) | Sync status to "Hold" + add comment | `mcp__asana__*` tools registered |
 | `~/.asana-token` or `~/.gitlab-token` | Auth for external tracker | manual setup |
@@ -74,14 +74,14 @@ Pauses work on a task while preserving the branch and all in-progress documents.
 
 - `PROJECT.yaml` (PY) — Yes. Required: `task_management.backend` and either `task_management.asana.*` or `task_management.gitlab.*`
 - `PROJECT-KNOWLEDGE.md` (PK) — No
-- `.current-task` — read to identify the active task; cleared after merge
+- `.current-task` — read to identify the active task; left in place so `/task-resume` can pick the same context back up
 - `docs/active/<task_id>/` — task document updated with hold details in place
 
 ## Backing script
 
 **Script**: `~/.claude/scripts/task-hold.sh`
 
-**Inputs:** `--full` plus hold detail flags. Reads `.current-task` and PROJECT.yaml. Accepts `--merge` for the post-Asana-sync finalization step.
+**Inputs:** `--full` plus hold detail flags. Reads `.current-task` and PROJECT.yaml. Accepts `--merge` for the post-Asana-sync branch-preservation step (despite the flag name, no actual merge into the default branch happens — see "How it works" step 5).
 
 **Outputs (structured JSON):** `next_action` ∈ {`sync_external`, `display_summary`, `resolve_conflicts`, `fix_error`}, plus `hold_reason`, `waiting_on`, `expected_date`, `needed_info`, `branch`, `asana_gid`.
 
@@ -90,7 +90,7 @@ Pauses work on a task while preserving the branch and all in-progress documents.
 ```bash
 ~/.claude/scripts/task-hold.sh --full --hold-reason "..." --waiting-on "..." \
   --expected-date "..." [--needed-info "..."] [--resume-context "..."]   # main
-~/.claude/scripts/task-hold.sh --json --merge                            # after Asana sync
+~/.claude/scripts/task-hold.sh --json --merge                            # preserve branch on remote (after Asana sync)
 ~/.claude/scripts/task-hold.sh --json --identify --task-id TASK_ID       # identify only
 ~/.claude/scripts/task-hold.sh --json --validate                         # validate inputs
 ~/.claude/scripts/task-hold.sh --json --update                           # update task doc
@@ -105,11 +105,11 @@ Pauses work on a task while preserving the branch and all in-progress documents.
 
 2. **Update task document** — the TSK doc is updated with the hold details (reason, waiting on, expected date, needed info, resume context). A stakeholder summary document is created.
 
-3. **Local commit** — the hold details are committed to the feature branch. Nothing has been merged yet; `main` is untouched.
+3. **Local commit** — the hold details are committed to the feature branch. `main` is untouched. A trap is installed: if any later step fails or the user interrupts, the staging area is unwound so a retry sees a clean index.
 
-4. **External sync gate** (`sync_external`) — if the tracker is configured, the script returns `sync_external` before merging. The LLM updates Asana (status → "Hold", adds a comment with hold details). **Only after Asana sync succeeds** does the LLM call `--merge`. If Asana sync fails, the merge is blocked to prevent a diverged state.
+4. **External sync gate** (`sync_external`) — if the tracker is configured, the script returns `sync_external` before preserving the branch. The LLM updates Asana (status → "Hold", adds a comment with hold details). **Only after Asana sync succeeds** does the LLM call `--merge`. If Asana sync fails, the preservation step is blocked so external and local state don't diverge.
 
-5. **Merge** — `--merge` squash-merges the feature branch into the default branch and pushes. In worktree mode, the worktree at `.worktrees/<task_id>` is preserved on disk — it is NOT removed. The branch is merged as usual, and the worktree still points to the preserved branch for seamless resumption.
+5. **Preserve branch** — `--merge` pushes the feature branch to the remote so it survives if the local worktree is later removed. **The default branch is NOT merged into and NOT touched.** The flag is named `--merge` for historical reasons; the actual operation is `git push -u origin <feature-branch>`. In worktree mode, the worktree at `.worktrees/<task_id>` is preserved on disk — it is NOT removed.
 
 6. **Display summary** — shows task ID, hold reason, waiting on, expected date, and the preserved branch or worktree path.
 
@@ -139,16 +139,17 @@ Pauses work on a task while preserving the branch and all in-progress documents.
 ✓ Task A3F2B9 on hold: "Redesign navigation"
   Waiting on:  design-team
   Expected:    unknown
-  Branch:      feat/A3F2B9-redesign-nav (preserved)
+  Branch:      feat/A3F2B9-redesign-nav (preserved on local + remote)
   Asana:       Hold (comment added)
-  Merged:      feat/A3F2B9-redesign-nav → main
+  Default:     untouched (in-progress work stays on the feature branch)
 
 To resume: /task-resume [paste new input]
 ```
 
 ## Notes & gotchas
 
-- **Asana sync runs before the merge** — intentionally. If Asana is misconfigured, `main` is never touched. The local feature branch commit is safe to abandon or retry.
+- **In-progress work is never integrated into the default branch.** Putting a task on hold preserves the *feature branch* only; the default branch stays exactly as it was. This is intentional — partial WIP shouldn't land on `main` just because work paused.
+- **Asana sync runs before the branch is pushed** — intentionally. If Asana is misconfigured, the remote is never touched. The local feature branch commit is safe to abandon or retry.
 - In worktree mode, the worktree stays on disk after hold. On resume, `cd` back to `.worktrees/<task_id>` or use `/task-resume` (which detects the existing worktree automatically).
 - `--needed-info` and `--resume-context` are optional but dramatically improve the quality of `/task-resume` matching when the blocker resolves.
-- **If it fails:** validation error → fix the flagged `issues` from the `fix_error` response and rerun. Asana sync failed → fix MCP config and rerun `--merge`. Merge conflict → resolve with Edit tool, `git add`, then `--merge`. Debug with `~/.claude/scripts/task-hold.sh --raw --full`.
+- **If it fails:** validation error → fix the flagged `issues` from the `fix_error` response and rerun. Asana sync failed → fix MCP config and rerun `--merge`. Push rejected (permissions/network) → fix auth and rerun `--merge`. Commit hook failure → the cleanup trap unstages so the retry sees a clean index. Debug with `~/.claude/scripts/task-hold.sh --raw --full`.
