@@ -23,6 +23,8 @@ profile, and get a consistent workflow across every project.
   human owns the gap between steps
 - [Hooks](09-hooks) — optional Claude Code hooks shipped with this repo
   (notifications, auto-allow of repo scripts) — opt in per-hook
+- [Testing](10-testing) — how to run the Bats + Python suite, what each
+  file covers, and how to add new tests
 - [Templates and Documents](05-templates-and-docs) — TSK, PLN, RCA, and
   friends
 - [Customization](06-customization) — adding your own commands and skills
