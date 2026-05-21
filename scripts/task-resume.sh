@@ -68,6 +68,9 @@ BRANCH_RESTORED=false
 MOVED_COUNT=0
 ASANA_GID=""
 SHOULD_SYNC_ASANA=false
+# Promoted to module scope so --full mode's terminal JSON block (which runs
+# outside section_setup) can reference the branch under `set -u`.
+BRANCH_NAME=""
 DOCS_DIR="$(find_docs_dir 2>/dev/null || echo "docs")"
 
 #------------------------------------------------------------------------------
@@ -458,6 +461,20 @@ section_reopen() {
     # Determine range folder
     RANGE_FOLDER=$(basename "$(dirname "$SELECTED_TASK")")
 
+    # Read external-sync metadata BEFORE mutating local state. Previously,
+    # docs were moved completed/ -> active/ first, then Asana GID + backend
+    # config were inspected. If sync metadata was missing or misconfigured,
+    # docs ended up orphaned in active/ with no matching external state, and
+    # a retry skipped the (already-done) move so the inconsistency was
+    # invisible. Surface the requirement up front instead.
+    ASANA_GID=$(grep -m1 "^- Asana GID:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
+    if [[ -f "PROJECT.yaml" ]] && [[ "$(yaml_get '.task_management.backend' PROJECT.yaml)" == "asana" ]]; then
+        SHOULD_SYNC_ASANA=true
+        if [[ -z "$ASANA_GID" ]]; then
+            log_warn "Asana backend configured but task doc has no Asana GID — LLM will need to relink"
+        fi
+    fi
+
     # Move documents if in completed/
     if [[ "$PREVIOUS_STATUS" == "completed" ]]; then
         log_info "Moving documents from completed/ to active/${RANGE_FOLDER}/"
@@ -486,16 +503,6 @@ section_reopen() {
 
         # Update SELECTED_TASK path
         SELECTED_TASK="$DOCS_DIR/active/$RANGE_FOLDER/$(basename "$SELECTED_TASK")"
-    fi
-
-    # Extract Asana GID if present
-    if [[ -f "$SELECTED_TASK" ]]; then
-        ASANA_GID=$(grep -m1 "^- Asana GID:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
-
-        # Check if PROJECT.yaml has Asana configured
-        if [[ -f "PROJECT.yaml" ]] && [[ "$(yaml_get '.task_management.backend' PROJECT.yaml)" == "asana" ]]; then
-            SHOULD_SYNC_ASANA=true
-        fi
     fi
 
     # Check for preserved branch (on-hold tasks)
@@ -626,22 +633,23 @@ section_setup() {
         PRESERVED_BRANCH=$(grep -m1 "^\*\*Preserved Branch\*\*:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
     fi
 
-    # Determine branch name
-    local branch_name=""
+    # Determine branch name. Use module-scope BRANCH_NAME so --full mode's
+    # terminal JSON block (outside this function) can reference it under set -u.
     if [[ -n "$PRESERVED_BRANCH" ]] && git rev-parse --verify "$PRESERVED_BRANCH" >/dev/null 2>&1; then
-        branch_name="$PRESERVED_BRANCH"
+        BRANCH_NAME="$PRESERVED_BRANCH"
         BRANCH_RESTORED=true
-        log_success "Branch restored: $branch_name"
+        log_success "Branch restored: $BRANCH_NAME"
     else
-        branch_name="feature/${TASK_ID}-${TASK_SLUG}"
+        BRANCH_NAME="feature/${TASK_ID}-${TASK_SLUG}"
 
         # Check if branch exists
-        if git rev-parse --verify "$branch_name" >/dev/null 2>&1; then
-            log_info "Branch exists: $branch_name"
+        if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
+            log_info "Branch exists: $BRANCH_NAME"
         else
-            log_info "Branch will be created: $branch_name"
+            log_info "Branch will be created: $BRANCH_NAME"
         fi
     fi
+    local branch_name="$BRANCH_NAME"
 
     # Worktree detection/recreation (DSN Decision 15)
     # Check if there's an existing worktree for this task, or recreate from branch
@@ -843,7 +851,7 @@ main() {
   "doc_type": "$NEW_DOC_TYPE",
   "input_source": "$INPUT_SOURCE",
   "input_text": $(echo "$INPUT_TEXT" | jq -Rs .),
-  "branch_name": "$branch_name",
+  "branch_name": "$BRANCH_NAME",
   "branch_restored": $BRANCH_RESTORED,
   "asana_gid": "${ASANA_GID:-null}",
   "should_sync_asana": $SHOULD_SYNC_ASANA,

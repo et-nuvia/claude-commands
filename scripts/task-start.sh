@@ -55,6 +55,14 @@ source "${SCRIPT_DIR}/lib/output-framework.sh"
 source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
 
+# Source profile + task adapter so section_identify can verify the backend
+# task actually exists before any local state (branch, worktree, .current-task)
+# is created. Without this, a typo'd task ID happily creates orphan branches.
+# shellcheck source=lib/load-profile.sh
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+# shellcheck source=lib/task-api.sh
+source "${SCRIPT_DIR}/lib/task-api.sh"
+
 # Global variables
 OUTPUT_MODE="json"  # json or raw
 SECTION="full"      # full, identify, verify, update-repo, create-branch, setup-env, link-task
@@ -147,6 +155,19 @@ section_identify() {
                 tr -d '[]' | head -1 || echo "")
 
     log "${GREEN}✓${NC} Loaded: $TASK_ID - $TASK_TITLE"
+
+    # Validate the task exists in the configured backend before we create
+    # any local state (branch / worktree / .current-task). If the backend
+    # is none/missing, skip — local-only flows are still valid.
+    local _start_backend
+    _start_backend=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || echo "")
+    if [[ -n "$_start_backend" && "$_start_backend" != "none" && -n "$ASANA_GID" ]]; then
+        if load_task_adapter 2>/dev/null; then
+            if ! task_get "$ASANA_GID" >/dev/null 2>&1; then
+                log "${YELLOW}⚠${NC} Backend task $ASANA_GID not found in $_start_backend — continuing with local-only context"
+            fi
+        fi
+    fi
 
     # Check if task is in completed/ — reopen it
     if [[ "$TASK_DOC" == *"/completed/"* ]]; then
@@ -575,17 +596,20 @@ section_link_task() {
                      grep "^- Issue:" | sed 's/.*#\([0-9]*\).*/\1/' | head -1 || echo "")
     fi
 
+    # Ensure .gitignore excludes .current-task BEFORE writing the file. If the
+    # gitignore append fails (permissions, read-only FS) after the file was
+    # already written, the .current-task file would become a tracked artifact
+    # and could be committed accidentally.
+    if [[ -f ".gitignore" ]] && ! grep -q "^.current-task$" .gitignore; then
+        echo ".current-task" >> .gitignore
+        log "${GREEN}✓${NC} Added .current-task to .gitignore"
+    fi
+
     # Create .current-task file (JSON format)
     # DEFAULT_BRANCH is the resolved base branch (from --base-branch or auto-detected)
     write_current_task "$TASK_ID" "$BRANCH_NAME" "$DEFAULT_BRANCH" "$TASK_DOC" "$tracker_backend" "$tracker_id"
 
     log "${GREEN}✓${NC} Created $CURRENT_TASK_FILE file"
-
-    # Add to .gitignore if not already there
-    if [[ -f ".gitignore" ]] && ! grep -q "^.current-task$" .gitignore; then
-        echo ".current-task" >> .gitignore
-        log "${GREEN}✓${NC} Added .current-task to .gitignore"
-    fi
 
     # Check Asana integration
     local backend=$(yaml_get '.task_management.backend' PROJECT.yaml)
@@ -714,6 +738,25 @@ main() {
             "Usage: task-start.sh [--json|--raw] [--full|--section] <task_id>"
     fi
 
+    # Cleanup trap: if we create a worktree but later steps fail (failed cd,
+    # link-task error, env setup crash, user Ctrl-C), the worktree would be
+    # left orphaned with no .current-task pointing at it. Mark cleanup done
+    # via _START_SUCCESS at the end of `full` mode to suppress the trap.
+    _START_SUCCESS=0
+    _start_cleanup() {
+        local rc=$?
+        if [[ $rc -ne 0 ]] && [[ $_START_SUCCESS -eq 0 ]] && [[ -n "${WORKTREE_PATH:-}" ]] \
+           && [[ "${WORKTREE_MODE:-false}" == "true" ]] && [[ "${BRANCH_CREATED:-false}" == "true" ]] \
+           && [[ "${BRANCH_RESUMED:-false}" != "true" ]]; then
+            log "${YELLOW}⚠${NC} task-start failed mid-run — removing orphan worktree at $WORKTREE_PATH"
+            if declare -f remove_task_worktree >/dev/null 2>&1; then
+                remove_task_worktree "$TASK_ID" >/dev/null 2>&1 || true
+            fi
+        fi
+        return $rc
+    }
+    trap _start_cleanup EXIT
+
     # Execute sections based on flag
     case "$SECTION" in
         identify)
@@ -763,6 +806,10 @@ main() {
             # This lets the LLM sync Asana to "In Progress" before we spend minutes
             # booting Docker / running migrations / installing deps.
             section_link_task
+            # Worktree + .current-task are now linked. From here on, an env-setup
+            # failure should NOT remove the worktree — caller can retry with
+            # --setup-env. Disarm the cleanup trap.
+            _START_SUCCESS=1
             section_assess_task
 
             # If Asana sync is required, pause here and return to the LLM.

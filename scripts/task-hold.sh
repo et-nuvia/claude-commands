@@ -87,6 +87,9 @@ ISSUE_NUMBER=""
 ISSUE_ID=""
 ASANA_GID=""
 
+# Warnings accumulated across sections (surfaced in section_sync output)
+WARNINGS=()
+
 # Summary document
 SUMMARY_FILENAME=""
 
@@ -466,9 +469,19 @@ Expected: ${EXPECTED_DATE}
 Updated task document with hold information and context for resumption.
 Created summary document. Branch ${CURRENT_BRANCH} preserved for later continuation."
 
-    git commit -m "$commit_msg" 2>&1 || {
-        log "${YELLOW}⚠${NC} No changes to commit (already committed?)"
-    }
+    # Distinguish "nothing to commit" (benign) from "commit hook failed" (fatal).
+    # Previously both were swallowed with a single warning, so a hook failure
+    # left the staged docs uncommitted while the script proceeded to sync.
+    if git diff --cached --quiet; then
+        log "${BLUE}ℹ${NC} Nothing staged to commit (already committed?)"
+    elif ! git commit -m "$commit_msg" >/dev/null 2>&1; then
+        # Capture commit error for the JSON envelope; trap will unstage on exit.
+        local commit_err
+        commit_err=$(git commit -m "$commit_msg" 2>&1 || true)
+        exit_with_json "error" "Failed to commit hold documentation" \
+            "${commit_err}" \
+            "\"branch\": \"$CURRENT_BRANCH\""
+    fi
 
     log "${GREEN}✓${NC} Commit created on ${CURRENT_BRANCH}"
 
@@ -480,60 +493,30 @@ Created summary document. Branch ${CURRENT_BRANCH} preserved for later continuat
     fi
 }
 
-# Section 4b: Merge feature branch into default, push both.
-# Only called AFTER external sync succeeded, so we can't end up with main merged
-# but Asana still showing 'in progress'.
+# Section 4b: Preserve feature branch on remote.
+#
+# IMPORTANT: This section used to *merge* the WIP feature branch into the
+# default branch (main) and push main. That was destructive — putting a task
+# on hold should preserve in-progress work for later resumption, not integrate
+# unfinished work into the trunk. The documented contract ("Branch preserved
+# for resumption") was directly contradicted by the implementation.
+#
+# Now we only push the feature branch itself so it survives if the local
+# worktree is later removed. The default branch is never touched.
 section_merge() {
-    log "${BLUE}Merging and Pushing${NC}"
+    log "${BLUE}Preserving Feature Branch${NC}"
 
-    # In worktree mode, cd to main checkout first (DSN Decision 7)
-    if declare -f is_in_worktree &>/dev/null && is_in_worktree; then
-        local main_root
-        main_root=$(get_main_checkout 2>/dev/null)
-        if [[ -n "$main_root" ]] && [[ -d "$main_root" ]]; then
-            cd "$main_root" || exit_with_json "error" "Failed to cd to main checkout: $main_root"
-            log "${BLUE}ℹ${NC} Switched to main checkout for merge: $main_root"
-        fi
-    fi
+    MERGED_TO_MAIN=false
 
-    # Ensure we have latest main
-    git fetch origin "${DEFAULT_BRANCH}" >/dev/null 2>&1 || true
-
-    # Checkout main
-    git checkout "${DEFAULT_BRANCH}" >/dev/null 2>&1 || true
-    git pull origin "${DEFAULT_BRANCH}" >/dev/null 2>&1 || true
-
-    # Merge feature branch (no fast-forward to preserve history)
-    if git merge --no-ff "${CURRENT_BRANCH}" -m "chore(task-hold): merge ${TASK_ID} branch to ${DEFAULT_BRANCH}
-
-Work item ${TASK_ID} put on hold while waiting for ${WAITING_ON}.
-Branch preserved for resumption when response received." >/dev/null 2>&1; then
-        MERGED_TO_MAIN=true
-        log "${GREEN}✓${NC} Merged ${CURRENT_BRANCH} into ${DEFAULT_BRANCH}"
-    else
-        # Merge conflict detected
-        local conflict_files=$(git diff --name-only --diff-filter=U)
-
-        exit_with_json "conflict" "Merge conflicts detected" "" \
-            "\"conflict_files\": $(echo "$conflict_files" | jq -R . | jq -s .)," \
-            "\"branch\": \"$CURRENT_BRANCH\"," \
-            "\"default_branch\": \"$DEFAULT_BRANCH\"," \
-            "\"next_steps\": [\"Resolve conflicts in listed files\", \"Stage resolved files: git add <files>\", \"Resume: task-hold.sh --json --merge\"]"
-    fi
-
-    # Push main branch with merged changes
-    if git push origin "${DEFAULT_BRANCH}" >/dev/null 2>&1; then
-        log "${GREEN}✓${NC} Pushed ${DEFAULT_BRANCH} to remote"
-    else
-        log "${YELLOW}⚠${NC} Failed to push ${DEFAULT_BRANCH} (check permissions)"
-    fi
-
-    # Also push feature branch to preserve it remotely
+    # Push feature branch to preserve it remotely. We deliberately do NOT
+    # `git checkout $DEFAULT_BRANCH` — that would risk losing uncommitted state
+    # if the working tree isn't clean, and worktree-mode callers want to stay
+    # on the feature branch for `task-resume` to find later.
     if git push -u origin "${CURRENT_BRANCH}" >/dev/null 2>&1; then
         BRANCH_REMOTE=true
         log "${GREEN}✓${NC} Branch ${CURRENT_BRANCH} preserved on remote"
     else
-        log "${YELLOW}⚠${NC} Failed to push ${CURRENT_BRANCH} to remote"
+        log "${YELLOW}⚠${NC} Failed to push ${CURRENT_BRANCH} to remote (check permissions / network)"
     fi
 
     # Verify branch exists locally
@@ -543,9 +526,9 @@ Branch preserved for resumption when response received." >/dev/null 2>&1; then
     fi
 
     if [[ "$SECTION" == "merge" ]]; then
-        exit_with_json "success" "Merge and push complete" "" \
+        exit_with_json "success" "Feature branch preserved" "" \
             "\"branch\": \"$CURRENT_BRANCH\"," \
-            "\"merged_to_main\": $MERGED_TO_MAIN," \
+            "\"merged_to_main\": false," \
             "\"branch_local\": $BRANCH_LOCAL," \
             "\"branch_remote\": $BRANCH_REMOTE"
     fi
@@ -555,8 +538,17 @@ Branch preserved for resumption when response received." >/dev/null 2>&1; then
 section_sync() {
     log "${BLUE}Syncing External Systems${NC}"
 
-    # Load task adapter (no-op if already loaded; exits gracefully if none configured)
-    load_task_adapter 2>/dev/null || true
+    # Load task adapter. Distinguish "no backend configured" (benign — local-only
+    # task) from "adapter load failed" (real error — surface as warning so caller
+    # can see it instead of getting a quiet EXTERNAL_UPDATED=false).
+    local _adapter_backend
+    _adapter_backend=$(yaml_get '.task_management.backend' PROJECT.yaml 2>/dev/null || echo "")
+    if [[ -n "$_adapter_backend" && "$_adapter_backend" != "none" ]]; then
+        if ! load_task_adapter 2>/dev/null; then
+            WARNINGS+=("Task adapter load failed for backend '$_adapter_backend' — external hold-sync skipped")
+            log "${YELLOW}⚠${NC} Could not load task adapter for $_adapter_backend"
+        fi
+    fi
 
     # Extract issue numbers from task document (used only for logging; adapter uses TASK_ID)
     ISSUE_NUMBER=$(sed -n 's/.*GitHub.*Issue.*#\([0-9]\+\).*/\1/p' "$TASK_DOC" 2>/dev/null | head -1 || echo "")
@@ -684,6 +676,25 @@ main() {
         esac
     done
 
+    # Trap: if section_update stages files into the index but a later step
+    # fails (commit hook, push failure, interrupt), the staging area is left
+    # dirty. A retry sees a poisoned index. Unstage on non-success exit.
+    _HOLD_SUCCESS=0
+    _hold_cleanup() {
+        local rc=$?
+        if [[ $rc -ne 0 ]] && [[ $_HOLD_SUCCESS -eq 0 ]]; then
+            # Only unstage if there's anything staged AND we're in a git repo
+            if git rev-parse --git-dir >/dev/null 2>&1; then
+                if ! git diff --cached --quiet 2>/dev/null; then
+                    log "${YELLOW}⚠${NC} task-hold failed — unstaging files so retry sees clean index"
+                    git reset HEAD -- . >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+        return $rc
+    }
+    trap _hold_cleanup EXIT
+
     # Always run identify first (needed for all sections)
     section_identify "$task_input"
 
@@ -724,8 +735,9 @@ main() {
                     "\"next_steps\": [\"Verify adapter sync succeeded (external_updated flag)\", \"Apply any additional Asana custom-field updates if required\", \"Run: task-hold.sh --json --merge\"]"
             fi
 
-            # No Asana sync needed → proceed directly to merge
+            # No Asana sync needed → proceed directly to branch preservation
             section_merge
+            _HOLD_SUCCESS=1
             ;;
         validate)
             section_validate

@@ -2,7 +2,10 @@
 # Document utility functions for V4 naming convention (6-char hex Task IDs)
 # Source this file in command scripts: source ~/.claude/scripts/doc-utils.sh
 
-source "${HOME}/.claude/scripts/common.sh"
+# Source common.sh relative to this file so the repo's own copy is used
+# when scripts are run from the checkout (e.g., tests, dev, agent worktrees)
+# rather than silently falling back to the installed copy under ~/.claude.
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # Find project docs directory
 # Priority: 1) PROJECT.yaml docs_dir field  2) Auto-detect from directory structure

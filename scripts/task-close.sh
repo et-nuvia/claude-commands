@@ -52,6 +52,16 @@ source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
 
+# Source profile + task adapter so closeout mutations (close issue, comment,
+# transition MR) route through the task_* contract instead of the raw GitLab
+# curl path that lib/task-close-complete.sh used directly. Without this the
+# Group A/B adapter refactor was effectively half-applied: capture/hold used
+# the adapter, close did not.
+# shellcheck source=lib/load-profile.sh
+source "${SCRIPT_DIR}/lib/load-profile.sh"
+# shellcheck source=lib/task-api.sh
+source "${SCRIPT_DIR}/lib/task-api.sh"
+
 # Source section helpers
 source "${SCRIPT_DIR}/lib/task-close-identify.sh"
 source "${SCRIPT_DIR}/lib/task-close-complete.sh"

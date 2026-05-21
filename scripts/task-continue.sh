@@ -58,6 +58,7 @@ TASK_TITLE=""
 CURRENT_BRANCH=""
 DEFAULT_BRANCH=""
 PLAN_DOC=""
+PLAN_UPDATED=false
 TASK_TYPE=""
 ASANA_GID=""
 
@@ -587,19 +588,35 @@ section_commit() {
             progress_args+=("--patterns" "$PATTERNS")
         fi
 
-        "${SCRIPT_DIR}/plan-progress.sh" "${progress_args[@]}" >/dev/null 2>&1 || true
-        log "${GREEN}✓${NC} Plan updated"
+        local pp_rc=0
+        "${SCRIPT_DIR}/plan-progress.sh" "${progress_args[@]}" >/dev/null 2>&1 || pp_rc=$?
+        if [[ $pp_rc -eq 0 ]]; then
+            PLAN_UPDATED=true
+            log "${GREEN}✓${NC} Plan updated"
+        else
+            # Don't abort — plan-progress.sh failing is usually benign (nothing
+            # to advance, old format, etc.) and commits should still proceed.
+            # But track the actual result so the output JSON doesn't falsely
+            # claim plan_updated:true.
+            PLAN_UPDATED=false
+            log "${YELLOW}⚠${NC} plan-progress.sh returned $pp_rc — continuing without plan update"
+        fi
     fi
 
-    # Stage changed files (specific files, not -A)
-    local files_to_stage
-    files_to_stage=$(git status --porcelain | awk '{print $2}')
-
-    if [[ -z "$files_to_stage" ]]; then
+    # Stage changed files. Previously this used
+    #   git status --porcelain | awk '{print $2}' | xargs git add --
+    # which mishandles renames ("R old -> new" parsed as two paths), filenames
+    # with spaces (split on whitespace), and quoted paths. Use NUL-delimited
+    # porcelain output plus xargs -0 so every path is unambiguous.
+    if [[ -z "$(git status --porcelain)" ]]; then
         exit_with_json "success" "Nothing to commit - working tree clean"
     fi
 
-    echo "$files_to_stage" | xargs git add --
+    # Stage tracked modifications/deletions, then add untracked paths
+    # individually so renames and spaces survive.
+    git add -u
+    git status -z --porcelain | awk -v RS='\0' '/^\?\? / { sub(/^\?\? /, ""); printf "%s\0", $0 }' \
+        | xargs -0 -r git add --
 
     check_tdd_compliance
 
@@ -645,7 +662,7 @@ section_commit() {
         local tdd_warning_field=""
         [[ -n "$TDD_WARNING" ]] && tdd_warning_field=",\"tdd_warning\":\"$TDD_WARNING\""
         exit_with_json "success" "Changes committed" "" \
-            "\"commit_hash\":\"$COMMIT_HASH\",\"files_changed\":$changed_count,\"task_id\":\"$TASK_ID\",\"plan_updated\":$([ -n "$PLAN_DOC" ] && echo "true" || echo "false")$tdd_warning_field"
+            "\"commit_hash\":\"$COMMIT_HASH\",\"files_changed\":$changed_count,\"task_id\":\"$TASK_ID\",\"plan_updated\":$PLAN_UPDATED$tdd_warning_field"
     fi
 }
 

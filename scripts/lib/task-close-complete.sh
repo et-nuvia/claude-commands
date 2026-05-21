@@ -223,29 +223,31 @@ EOF
                     tr -d '[]' | head -1 || echo "")
     fi
 
-    # Update external systems (GitHub/GitLab issues only - Asana requires MCP)
+    # Update external systems via the task_* adapter contract.
+    #
+    # Previously this block held raw `gh issue close` / raw `curl PUT` calls
+    # against the GitLab API — bypassing the lib/task-api.sh adapter that
+    # task-capture and task-hold already route through. That left the Group
+    # A/B refactor half-applied. Route through `task_close` so any backend
+    # (asana / gitlab / github / none) is handled uniformly.
     print_header "Updating External Systems"
 
-    if [[ -n "$ISSUE_NUMBER" ]] && [[ "$GIT_PLATFORM" == "github" ]]; then
-        if command -v gh &> /dev/null; then
-            local issue_num=$(echo "$ISSUE_NUMBER" | tr -d '#')
-            gh issue close "$issue_num" --comment "✅ Task completed in PR #${PR_NUMBER}" 2>/dev/null && \
-                EXTERNAL_UPDATED=true && \
-                log "${GREEN}✓${NC} Closed GitHub issue #$issue_num" || \
-                log "${YELLOW}⚠${NC} Could not close GitHub issue"
-        fi
-    elif [[ -n "$ISSUE_ID" ]] && [[ "$GIT_PLATFORM" == "gitlab" ]]; then
-        if [[ -f "$HOME/.gitlab-token" ]]; then
-            local gitlab_token=$(cat "$HOME/.gitlab-token")
-            local project_id=$(git remote get-url origin | sed 's#.*[:/]\(.*\)\.git#\1#' | sed 's#/#%2F#g')
-            local gitlab_host=$(profile_env_get .git.instance 2>/dev/null)
-            curl -s --header "PRIVATE-TOKEN: $gitlab_token" \
-                --request PUT \
-                "https://${gitlab_host}/api/v4/projects/${project_id}/issues/${ISSUE_ID}?state_event=close" \
-                > /dev/null && \
-                EXTERNAL_UPDATED=true && \
-                log "${GREEN}✓${NC} Closed GitLab issue #$ISSUE_ID" || \
-                log "${YELLOW}⚠${NC} Could not close GitLab issue"
+    local adapter_id="${ISSUE_NUMBER:-${ISSUE_ID:-${ASANA_GID:-}}}"
+    adapter_id="${adapter_id#\#}"  # strip leading # if present
+    local close_comment="✅ Task completed${PR_NUMBER:+ in PR #${PR_NUMBER}}${MR_NUMBER:+ in MR !${MR_NUMBER}}"
+
+    if [[ -z "$adapter_id" ]]; then
+        log "${BLUE}ℹ${NC} No external task ID found — skipping adapter close"
+    elif ! declare -f load_task_adapter >/dev/null 2>&1; then
+        log "${YELLOW}⚠${NC} task-api adapter not loaded — skipping external close"
+    elif ! load_task_adapter 2>/dev/null; then
+        log "${YELLOW}⚠${NC} Could not load task adapter for current backend — skipping external close"
+    elif declare -f task_close >/dev/null 2>&1; then
+        if task_close "$adapter_id" "$close_comment" 2>/dev/null; then
+            EXTERNAL_UPDATED=true
+            log "${GREEN}✓${NC} Closed external task $adapter_id via adapter"
+        else
+            log "${YELLOW}⚠${NC} Could not close external task $adapter_id (adapter returned non-zero)"
         fi
     fi
 

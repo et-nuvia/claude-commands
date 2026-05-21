@@ -56,8 +56,17 @@ check_task() {
     docs_list=$(echo "$all_docs" | jq -R . | jq -s .)
   fi
 
+  # Surface a distinct status so callers can't ignore a branch mismatch.
+  # Previously returned active=true with branch_match=false; callers that
+  # only checked `active` would operate on stale context.
+  local status="active"
+  if [[ "$branch_match" != "true" ]]; then
+    status="branch_mismatch"
+  fi
+
   jq -n \
     --argjson active true \
+    --arg status "$status" \
     --arg seq "$seq" \
     --arg title "$title" \
     --arg expected "$expected" \
@@ -65,7 +74,7 @@ check_task() {
     --argjson match "$branch_match" \
     --arg doc "$doc" \
     --argjson docs "$docs_list" \
-    '{active: $active, task_id: $seq, title: $title, expected_branch: $expected, current_branch: $current, branch_match: $match, primary_doc: $doc, related_docs: $docs}'
+    '{active: $active, status: $status, task_id: $seq, title: $title, expected_branch: $expected, current_branch: $current, branch_match: $match, primary_doc: $doc, related_docs: $docs}'
 }
 
 check_task
