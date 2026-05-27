@@ -34,6 +34,16 @@ Script automatically:
 - Captures diff to a temp file, computes stats, file list, and commit log
 - Returns summary with `diff.pages` count telling you how many pages to fetch
 
+## Load structural context (if available)
+
+After the script returns, check if `.understand/graph.json` exists in cwd. If yes and the task ID is known (from `.current-task` or the task doc), pull ranked context:
+
+```bash
+~/.claude/scripts/understand-explore.sh --json --for-task <TASK_ID>
+```
+
+Take the top ~20 nodes and hold them alongside the diff. Most useful query for code review: **affected nodes beyond the diff** — the graph reveals callers and callees of changed symbols that the diff itself doesn't show, surfacing review hits the readability rubric alone would miss (e.g., a renamed symbol's stale callers). Skip silently if graph absent, no task ID, script errors, or empty result.
+
 ## Response Handling
 
 ### `analyze_code` — Summary ready, read the diff
@@ -66,7 +76,17 @@ The cost difference is ~5x — default to sonnet and only escalate when the diff
 **Confidence scoring**: Only include findings in the CRV document with **confidence >= 80**. If you're unsure whether something is a real issue or a stylistic preference, skip it. Low-confidence noise wastes the reviewer's (and user's) attention. If you must note a low-confidence observation, prefix it with `(low confidence)` and put it in a separate "Notes" section, not in the main findings.
 
 Then:
-1. Analyze: code quality, security, performance, testing coverage, documentation (checkpoint as above for large diffs)
+1. Analyze the diff across these dimensions (checkpoint as above for large diffs):
+   - **Readability** (flag with confidence >= 80):
+     - Nesting depth > 3 → suggest guard clauses / inversion
+     - Related conditionals that could merge (e.g. auth + authz)
+     - Complex boolean expressions inline → extract to named predicate
+     - Duplicated logic across 2+ sites → extract to shared function
+     - Cryptic identifiers (single-letter outside loops, abbreviations not in domain vocabulary)
+   - **Correctness & security**: auth, input validation, secrets handling, injection vectors
+   - **Performance**: N+1 queries, unnecessary allocations, blocking I/O on hot paths
+   - **Testing**: coverage of changed lines, edge cases, mocking boundaries
+   - **Documentation**: public APIs documented, non-obvious decisions explained
 2. Create doc: `~/.claude/scripts/task-code-review.sh --json --create-doc`
 3. Response contains `template` (CRV with scope pre-filled) and `crv_path`. Fill all `[LLM to fill in]` sections with your findings, write the completed document to `crv_path` using the Write tool.
 4. Commit: `~/.claude/scripts/task-code-review.sh --json --commit`
