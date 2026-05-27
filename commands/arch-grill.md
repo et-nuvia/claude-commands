@@ -38,6 +38,18 @@ Read `~/.claude/templates/architecture/LANGUAGE.md` and `~/.claude/templates/arc
 
 Arguments: `$ARGUMENTS` — optional ARC doc path and/or candidate number (e.g. `docs/active/2026-05/AB12CD-...-ARC-foo.md 3` or just `3`).
 
+## Step 0b: Load structural context (if available)
+
+After Step 0, check if `.understand/graph.json` exists. If yes and a task ID is available (from `.current-task` or the ARC's parent TSK), pull ranked context:
+
+```bash
+~/.claude/scripts/understand-explore.sh --json --for-task <TASK_ID>
+```
+
+Hold the top ~20 nodes as structural context. Most useful graph queries here: **the candidate node plus its 1-hop neighbors** (concrete files behind the seam) and **layer-crossing edges incident to those nodes** (where the leaky seam actually sits). This grounds Topics 3 (seam placement), 4 (what sits behind), and 7 (test-posture audit) in the real call graph rather than guessed file boundaries.
+
+Skip silently if graph absent, no task ID, script errors, or empty result.
+
 ## Step 1: Run the script
 
 ```bash

@@ -39,6 +39,18 @@ Before any exploration, read `~/.claude/templates/architecture/LANGUAGE.md` in f
 
 Also read `~/.claude/templates/architecture/DEEPENING.md` — you'll classify each candidate's dependencies by its categories.
 
+## Step 0c: Load structural context (if available)
+
+After Step 0, check if `.understand/graph.json` exists in cwd. If it does, pull ranked structural context using the active task ID (from `--task-id`, `.current-task`, or the TSK doc — if none, skip silently):
+
+```bash
+~/.claude/scripts/understand-explore.sh --json --for-task <TASK_ID>
+```
+
+Take the top ~20 returned nodes and hold them as structural context alongside PROJECT-KNOWLEDGE.md. Most useful graph queries for arch-exploration: **reverse-edges to surface shallow modules with high fan-in** (many callers depending on a thin module is a classic deepening candidate), and layer-crossing edges that hint at leaky seams. Use the ranked node list to ground candidate filenames in real code, not invented paths.
+
+Skip silently if: graph absent, no task ID available, script errors, or empty result. Never block, never surface a warning.
+
 ## Step 1: Run the script
 
 ```bash

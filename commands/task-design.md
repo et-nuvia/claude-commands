@@ -33,6 +33,32 @@ Before starting the design session, check if `docs/architecture/PROJECT-KNOWLEDG
 
 Use this as background context for the brainstorming — don't dump it on the user, but let it inform the options you propose. Skip if the file doesn't exist.
 
+## Step 0b: Load Structural Context (if available)
+
+After reading PROJECT-KNOWLEDGE.md (so the domain frame is in mind first), check if `.understand/graph.json` exists in the current working directory. If it does **and** a task ID is known (from `--task-id`, `.current-task`, or the TSK doc), pull ranked structural context for the task:
+
+```bash
+~/.claude/scripts/understand-explore.sh --json --for-task <TASK_ID>
+```
+
+Take the top ~20 returned nodes and hold them as **structural context** alongside the PK domain frame. When proposing options during brainstorming, reference concrete file paths, function names, and module boundaries from this list rather than inventing plausible-sounding ones. This is what lets the design session land on options grounded in the actual code surface, not just the domain model.
+
+Render the context internally as a bullet list shaped like:
+
+```
+Structural context from .understand/graph.json:
+- <node_id>: <one-line summary>
+- <node_id>: <one-line summary>
+...
+```
+
+Skip silently if any of these are true — never block, never error, never surface a warning to the user:
+- `.understand/graph.json` is absent
+- No task ID is available yet
+- `--for-task` returns an empty result set (no matches for this task)
+
+The PK frame remains the primary lens; structural context is secondary, used to make options concrete.
+
 ## Execute
 
 ```bash

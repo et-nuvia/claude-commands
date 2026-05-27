@@ -46,6 +46,18 @@ Parse `RESULT` as JSON.
 - Read `arc_body` to extract the grilled candidate's: name, files, seam placement, dependency category, what sits behind the seam.
 - Read `docs/architecture/PROJECT-KNOWLEDGE.md` if `knowledge_present == true`. Sub-agents need its vocabulary.
 
+## Step 2b: Load structural context (if available)
+
+If `.understand/graph.json` exists in cwd and a task ID is available (`.current-task` or the ARC's parent TSK), pull ranked context:
+
+```bash
+~/.claude/scripts/understand-explore.sh --json --for-task <TASK_ID>
+```
+
+Pass the top ~20 nodes to each sub-agent in their brief. Most useful graph queries for interface design: **outgoing edges of the candidate node** — those are the call sites that currently form the de-facto surface area, and any interface you propose must subsume them or explicitly reroute. Sub-agents that see this set produce designs grounded in real callers, not hypothetical ones.
+
+Skip silently if graph absent, no task ID, script errors, or empty result.
+
 ## Step 3: Frame the problem space
 
 Before spawning sub-agents, write a short user-facing explanation:

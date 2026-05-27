@@ -24,6 +24,18 @@ Systematic code refactoring with session management. Preserves functionality whi
 
 Arguments: `$ARGUMENTS` — files, directories, or refactoring scope (optional)
 
+## Load structural context (if available)
+
+Before invoking the refactor script, check if `.understand/graph.json` exists in cwd. If yes, derive a relevance source from `$ARGUMENTS` (file paths/keywords) or `.current-task`, and pull ranked context:
+
+```bash
+~/.claude/scripts/understand-explore.sh --json --search "$ARGUMENTS"
+# or, when a task is active:
+~/.claude/scripts/understand-explore.sh --json --for-task <TASK_ID>
+```
+
+Hold the top ~20 nodes as structural context for the analyze/plan phases. Most useful query for refactoring: **blast radius before touching anything** — the union of forward + reverse edges from the targeted symbols defines exactly which files the refactor's validation must cover. Skip silently if graph absent, no relevance source, script errors, or empty result.
+
 ## Execute
 
 ```bash
