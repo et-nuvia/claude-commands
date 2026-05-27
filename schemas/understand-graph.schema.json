@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/eric/claude-config/schemas/understand-graph-v1.json",
+  "title": "Understand-Anything Knowledge Graph",
+  "description": "Per-repo structural knowledge graph produced by /understand-scan. Captures files, symbols, dependencies, and layer assignments with LLM-authored summaries.",
+  "type": "object",
+  "required": ["graph_schema_version", "meta", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "graph_schema_version": {
+      "description": "Schema version. Bump on any breaking change to this document. Consumers MUST check this and degrade gracefully on mismatch.",
+      "const": 1
+    },
+    "meta": {
+      "type": "object",
+      "required": ["commit_sha", "scanned_at", "file_hashes"],
+      "additionalProperties": true,
+      "properties": {
+        "commit_sha": {
+          "description": "Git commit SHA the scan was performed against. Short (7) or full (40) hex.",
+          "type": "string",
+          "pattern": "^[a-f0-9]{7,40}$"
+        },
+        "scanned_at": {
+          "description": "ISO-8601 timestamp when the scan completed.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "file_hashes": {
+          "description": "Map of repo-relative file path to sha256:HEX hash. Drives incremental rescans.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          }
+        },
+        "scan_cost_usd": {
+          "description": "Total LLM cost in USD for this scan (sum across all subagents).",
+          "type": "number",
+          "minimum": 0
+        },
+        "scan_duration_seconds": {
+          "description": "Wall-clock duration of the scan.",
+          "type": "number",
+          "minimum": 0
+        },
+        "project_knowledge_sha": {
+          "description": "sha256 of PROJECT-KNOWLEDGE.md at scan time, or null if absent.",
+          "type": ["string", "null"]
+        },
+        "scanner_version": {
+          "description": "Version of the scan pipeline (semver).",
+          "type": "string"
+        }
+      }
+    },
+    "layers": {
+      "description": "Named architectural layers (e.g., api, service, data). Used for grouping and coloring in viewer.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Stable identifier referenced by node.layer. Lowercase letters, digits, hyphens, underscores.",
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "label": {
+            "description": "Human-readable name shown in the viewer.",
+            "type": "string",
+            "minLength": 1
+          },
+          "color": {
+            "description": "Hex color used for layer in the viewer (e.g., #3366cc).",
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "nodes": {
+      "description": "Graph nodes: files, modules, and symbols within them.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "path", "name", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Stable unique identifier. Convention: '<path>' for files, '<path>::<symbol>' for symbols. Used as the from/to value in edges.",
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "description": "What this node represents in source. 'file' and 'module' are container kinds; the rest are symbols.",
+            "enum": ["file", "module", "function", "class", "method", "type"]
+          },
+          "path": {
+            "description": "Repo-relative path to the source file.",
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "description": "Display name (basename for files, identifier for symbols).",
+            "type": "string",
+            "minLength": 1
+          },
+          "layer": {
+            "description": "Layer id from the top-level layers array, or null/absent if unclassified.",
+            "type": ["string", "null"]
+          },
+          "summary": {
+            "description": "LLM-authored plain-English summary of what this node does. Uses PROJECT-KNOWLEDGE.md vocabulary when applicable.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "hash": {
+            "description": "sha256:HEX of the source extent that produced this summary. Enables incremental rescan.",
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "tags": {
+            "description": "Optional freeform tags (e.g., entry-point, deprecated, generated).",
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "line_start": {
+            "description": "1-based start line in the source file (for symbol nodes).",
+            "type": "integer",
+            "minimum": 1
+          },
+          "line_end": {
+            "description": "1-based end line in the source file (for symbol nodes).",
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "edges": {
+      "description": "Directed edges between nodes. The 'from' and 'to' values must be node ids.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "description": "Relationship type. 'contains' is used for file→symbol parent edges; the rest are inter-symbol relationships.",
+            "enum": ["calls", "imports", "extends", "implements", "references", "contains"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -29,6 +29,7 @@ LINKS=(
   "docs"
   "profiles"
   "schemas"
+  "prompts"
   "tracking"
   "hooks"
   ".subagent-sessions"
