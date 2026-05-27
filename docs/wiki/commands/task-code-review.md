@@ -67,6 +67,7 @@ Generates a CRV (code review) document for the current task: fetches the diff fr
 
 - `PROJECT.yaml` (PY) — Optional. Read for backend type to resolve PR/MR source.
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional. Informs architectural and business-rule checks in the review.
+- `.understand/graph.json` — Optional. When present and a task ID is known, the command runs `understand-explore.sh --for-task` to surface affected nodes beyond the diff (callers/callees of changed symbols) — catches review hits the readability rubric alone would miss (e.g., stale callers of a renamed symbol). Skipped silently if absent.
 - `.current-task` — read to identify the active task
 - `docs/active/<task_id>/` — CRV document written here and committed
 

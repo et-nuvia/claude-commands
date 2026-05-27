@@ -60,6 +60,7 @@ Applies Ousterhout's "Design It Twice" to a grilled deepening candidate by spawn
 
 - `PROJECT.yaml` (PY) — No
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional. Located at `docs/architecture/PROJECT-KNOWLEDGE.md`. Read and passed to sub-agents for vocabulary. Not written by this command.
+- `.understand/graph.json` — Optional. When present and a task ID is available, the command runs `understand-explore.sh --for-task` and passes the top ~20 nodes (especially outgoing edges of the candidate — the de-facto surface area) into each sub-agent's brief. Skipped silently if absent.
 - `docs/active/**/*-ARC-*.md` — Required. Must have a filled **Grilled Design** section (verified by `has_grilled` flag). Auto-detected (newest) when not specified.
 - `~/.claude/templates/architecture/LANGUAGE.md` — Required. Vocabulary lock-in.
 - `~/.claude/templates/architecture/DEEPENING.md` — Required. Dependency category definitions passed to each sub-agent.

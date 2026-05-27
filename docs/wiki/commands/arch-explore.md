@@ -58,6 +58,7 @@ None — invoke with no input.
 
 - `PROJECT.yaml` (PY) — No
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional. Read at `docs/architecture/PROJECT-KNOWLEDGE.md`. Provides domain vocabulary for naming candidates; its absence is surfaced to the user with a prompt to create it before exploring.
+- `.understand/graph.json` — Optional. When present and a task ID is available, the command runs `understand-explore.sh --for-task` to fetch ranked structural context (high-fan-in modules, layer-crossing edges) used to ground candidate filenames in real code. Skipped silently if absent.
 - `docs/adr/*.md` — Optional. Decisions the exploration must not re-litigate.
 - `~/.claude/templates/architecture/LANGUAGE.md` — Required. Defines the mandatory vocabulary (module, interface, seam, adapter, leverage, locality, deletion test).
 - `~/.claude/templates/architecture/DEEPENING.md` — Required. Defines dependency categories used to classify each candidate.

@@ -62,6 +62,7 @@ Takes a deepening candidate from an ARC document and walks every design decision
 
 - `PROJECT.yaml` (PY) — No
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional, read and written. Located at `docs/architecture/PROJECT-KNOWLEDGE.md`. New domain terms are added here inline during grilling.
+- `.understand/graph.json` — Optional. When present and a task ID is available, the command runs `understand-explore.sh --for-task` to ground Topics 3 (seam placement), 4 (what sits behind), and 7 (test-posture audit) in the real call graph. Skipped silently if absent.
 - `docs/active/**/*-ARC-*.md` — Required. The ARC document produced by `/arch-explore`. Auto-detected (newest) when not specified.
 - `docs/adr/` — Written when user rejects a candidate with a load-bearing reason.
 - `.arch-grill-state.json` — Checkpoint file written by `--save-state`, read by `--load-state` to resume interrupted sessions.

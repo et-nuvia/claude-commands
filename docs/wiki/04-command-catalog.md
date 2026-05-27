@@ -147,6 +147,15 @@ documents and ADRs; updates PROJECT-KNOWLEDGE.md.
 - [`/arch-grill`](commands/arch-grill.md) — Grill a candidate; update PROJECT-KNOWLEDGE.md; write ADRs
 - [`/arch-interfaces`](commands/arch-interfaces.md) — Explore alternative interface shapes via parallel sub-agents
 
+## Knowledge Graph (Understand)
+
+Per-project understanding graph at `.understand/graph.json` — build it once with `/understand-scan`, query it read-only with `/understand-explore` and `/understand-impact`. `/understand` is the lightweight ad-hoc cousin that prints a summary without writing a graph.
+
+- [`/understand`](commands/understand.md) — Ad-hoc mental model via parallel `Explore` subagents; no artifact written
+- [`/understand-scan`](commands/understand-scan.md) — Build/refresh `.understand/graph.json` via 4-stage subagent pipeline
+- [`/understand-explore`](commands/understand-explore.md) — Read-only graph queries: `--search`, `--node`, `--tour`, `--for-task`, `--stats`
+- [`/understand-impact`](commands/understand-impact.md) — Map branch diff to affected graph nodes + downstream callers (reverse-edge walk)
+
 ## Outliers / Specialized
 
 Commands that don't fit a larger group.

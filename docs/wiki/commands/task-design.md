@@ -62,6 +62,7 @@ Runs an interactive brainstorming session across 12 design topics (architecture,
 
 - `PROJECT.yaml` (PY) — No
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional. Read at Step 0 for domain context.
+- `.understand/graph.json` — Optional. Read at Step 0b (after PK) when a task ID is available; the top ~20 nodes are held as structural context so brainstorming options reference real file paths and module boundaries rather than invented ones. Skipped silently if absent.
 - `.current-task` — read to identify the active task when no TASK_ID is provided
 - TSK document — read to understand requirements during brainstorming
 - DSN document (if exists) — read for `resume_design` flow; refined in place, never replaced

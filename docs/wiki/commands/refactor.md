@@ -60,6 +60,7 @@ Guides a systematic, session-managed refactoring from analysis through validatio
 
 - `PROJECT.yaml` (PY) — Optional. `testing.command` used to run validation.
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional. Architecture decisions read during analysis.
+- `.understand/graph.json` — Optional. When present, the command runs `understand-explore.sh --search "$ARGUMENTS"` (or `--for-task` when a task is active) before the analyze/plan phases to compute the structural blast radius (forward + reverse edges of the targeted symbols). Skipped silently if absent.
 - `refactor/plan.md` — created during the session; tracks progress and checklist.
 - `refactor/state.json` — session state for resuming interrupted refactors.
 

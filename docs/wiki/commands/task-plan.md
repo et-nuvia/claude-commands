@@ -70,6 +70,7 @@ Reads a TSK (and optional DSN) document, explores the codebase, and produces a P
 
 - `PROJECT.yaml` (PY) — Optional. Reads tech stack, components, and testing config when present.
 - `PROJECT-KNOWLEDGE.md` (PK) — Optional. Loaded at Step 0 for domain context.
+- `.understand/graph.json` — Optional. Loaded after PK (before TSK) when a task ID is available; the top ~20 ranked nodes are held in working context so subtask descriptions cite real file paths and function names. Skipped silently if absent.
 - TSK document — required source (from `--source` or `.current-task`)
 - DSN document — optional, loaded automatically when present for the same task
 - `~/.claude/scripts/new-doc.sh` — allocates PLN filepath and template
