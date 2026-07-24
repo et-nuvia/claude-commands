@@ -54,6 +54,18 @@
     "secrets": {
       "$ref": "#/$defs/secrets"
     },
+    "feature_flags": {
+      "type": "object",
+      "description": "Feature-flag manifest sync config (Praxis/Unleash consumer). Optional.",
+      "properties": {
+        "praxis_project_id": {
+          "type": "string",
+          "description": "Praxis ProjectRegistry UUID; used by sync-feature-flags.sh to fetch the flag manifest."
+        }
+      },
+      "required": ["praxis_project_id"],
+      "additionalProperties": false
+    },
     "databases": {
       "type": "array",
       "description": "Database configurations",
