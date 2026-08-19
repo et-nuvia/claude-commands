@@ -27,6 +27,12 @@ profile, and get a consistent workflow across every project.
   file covers, and how to add new tests
 - [Templates and Documents](05-templates-and-docs) — TSK, PLN, RCA, and
   friends
+- [Skills and Subagents](11-skills-and-subagents) — on-demand reference
+  knowledge, the agent roster, and how to pick a model without
+  overpaying 5×
+- [Worktrees and Docker Isolation](12-worktrees-and-docker) — the default
+  task-isolation mode, and why an unconfigured worktree runs your
+  migrations against the wrong checkout
 - [Customization](06-customization) — adding your own commands and skills
 - [Contributing](07-contributing) — how to land changes
 

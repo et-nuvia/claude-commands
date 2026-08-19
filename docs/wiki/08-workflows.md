@@ -32,6 +32,59 @@ Capture work, plan it, do it, ship it.
 [`/task-hold`](commands/task-hold.md) ·
 [`/task-resume`](commands/task-resume.md)
 
+### Front-loading: know what you're building before you plan
+
+The chain above assumes the work is already understood. Often it isn't,
+and planning a misdiagnosed problem is the most expensive mistake in the
+lifecycle. Two commands sit between capture and plan for that reason, and
+neither is mandatory — pick the one matching what you're missing.
+
+| You don't know… | Command | What it produces |
+|---|---|---|
+| Why the system behaves this way | [`/task-investigate`](commands/task-investigate.md) | An **INV** doc that traces the actual code path and classifies every finding as `CONFIRMED` or `THEORY` |
+| Which of several approaches to take | [`/task-research`](commands/task-research.md) | An **RDM** doc — a weighted decision matrix, built by adversarial pro/con agents rather than one agent's first instinct |
+| What the shape of the solution is | [`/task-design`](commands/task-design.md) | A **DSN** doc from an interactive design session |
+
+The discipline that makes `/task-investigate` worth running is its
+refusal to guess: "no defect found" is a valid, expected outcome, and a
+finding stays labelled `THEORY` until something in the code or in
+production proves it. A plan built on a `THEORY` is a plan built on
+sand — read the classification column before you plan, not after.
+
+### Back-loading: the gate before the merge
+
+`/task-audit` tells you whether the work is complete. It does not tell
+you whether the work is *good*, and a code review run by hand tends to
+find whatever the reviewer thought to look for.
+[`/task-post-work`](commands/task-post-work.md) runs the whole
+post-implementation pipeline as one gated sequence — audit, architecture
+review, code review, PR creation, PR review — with a deterministic
+fix-loop between passes: findings are applied, then only the *delta* is
+re-reviewed, so pass 2 never re-litigates what pass 1 already accepted.
+
+```
+/task-continue (loop) → /task-post-work → [HUMAN] → /task-close
+                            │
+                            └─ audit → arch review → code review
+                               → fix-loop → PR → PR review
+```
+
+Two of its stages are also useful on their own:
+
+- [`/task-arch-review`](commands/task-arch-review.md) — applies the
+  deepening heuristics to a task's diff, so shallow modules, leaky
+  seams, and untestable surfaces get caught *before* the merge to `dev`
+  rather than in a quarterly architecture sweep.
+- [`/task-risk`](commands/task-risk.md) — scores deployment blast radius
+  into an **RSK** doc. Distinct from `/deploy-risk`, which scores a
+  release; this scores one task's change.
+
+**Where the human still owns the gap.** The fix-loop is deterministic,
+not omniscient. It applies findings mechanically and reports a
+finding→commit→hunks ledger — read that ledger. A mechanically applied
+fix that satisfies the finding while missing its intent is exactly the
+failure mode a green pipeline will not show you.
+
 | Gap | What the human does |
 |---|---|
 | After `/task-capture` | Read the TSK doc. Confirm scope matches what you actually meant. Edit acceptance criteria if Claude misread the request. |

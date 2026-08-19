@@ -22,6 +22,8 @@ Capture → plan → start → work → hold/resume → close. Most require
 - [`/task-capture`](commands/task-capture.md) — Capture tasks from email, SMS, voice, or direct input
 - [`/task-fetch`](commands/task-fetch.md) — List tasks assigned to you in Asana/GitLab
 - [`/task-start`](commands/task-start.md) — Create branch/worktree, sync tracker, boot environment
+- [`/task-investigate`](commands/task-investigate.md) — Trace an issue's real root cause; produces an INV doc separating CONFIRMED from THEORY
+- [`/task-research`](commands/task-research.md) — Phased, adversarial research into an open question; produces a weighted RDM decision matrix
 - [`/task-plan`](commands/task-plan.md) — Break a task into a plan with subtasks and estimates
 - [`/task-design`](commands/task-design.md) — Interactive design brainstorming session, produces a DSN doc
 - [`/task-continue`](commands/task-continue.md) — Resume work, write tests, validate, update plan, commit
@@ -31,6 +33,9 @@ Capture → plan → start → work → hold/resume → close. Most require
 - [`/task-close`](commands/task-close.md) — Complete or defer; updates external systems and cleans up
 - [`/task-summary`](commands/task-summary.md) — Generate the executive SUM document
 - [`/task-code-review`](commands/task-code-review.md) — Generate the CRV code/security review document
+- [`/task-arch-review`](commands/task-arch-review.md) — Task-scoped architecture review; catches shallow modules and leaky seams before the merge
+- [`/task-post-work`](commands/task-post-work.md) — The whole post-implementation pipeline (audit → arch → review → PR → PR review) with a gated fix-loop
+- [`/task-risk`](commands/task-risk.md) — Score one task's deployment risk across ten weighted categories; produces an RSK doc
 
 ## Deploy
 
