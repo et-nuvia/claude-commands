@@ -193,6 +193,123 @@ git_pr_create() {
   jq -c '{id: .iid, url: .web_url}' <<<"$raw"
 }
 
+# git_pr_list [--state open|closed|all] [--limit N]
+git_pr_list() {
+  local state="opened" limit=30
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state)
+        case "$2" in
+          open)   state="opened" ;;
+          closed) state="closed" ;;
+          all)    state="all" ;;
+          *)      state="$2" ;;
+        esac
+        shift 2 ;;
+      --limit) limit="$2"; shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+  local proj raw
+  proj=$(_gitlab_project_id) || return 1
+  raw=$(_gitlab_call GET "/projects/${proj}/merge_requests?state=${state}&per_page=${limit}") || return $?
+  jq -c '[.[] | {
+    id: .iid,
+    title: .title,
+    state: (.state | sub("^opened$"; "open")),
+    url: .web_url,
+    head_ref: .source_branch,
+    base_ref: .target_branch,
+    author: .author.username,
+    is_draft: (.draft // .work_in_progress // false),
+    raw: .
+  }]' <<<"$raw"
+}
+
+# git_pr_get <id>
+# Fetches MR, changes (per-file diffs), and commits. Addresses gaps
+# surfaced in PR #53 review:
+#   - commits must be populated so downstream consumers can reason
+#     about change history (GitHub gets these via `gh pr view --json
+#     commits`; GitLab needs a separate /commits endpoint call).
+#   - additions/deletions are computed from the unified diff because
+#     the GitLab API doesn't expose them on the MR object; changes_count
+#     counts files, not lines.
+git_pr_get() {
+  local id="${1:?id required}"
+  local proj raw changes commits additions deletions
+  proj=$(_gitlab_project_id) || return 1
+  raw=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}") || return $?
+  changes=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/changes" 2>/dev/null || echo "{}")
+  commits=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/commits" 2>/dev/null || echo "[]")
+
+  # Count +/- lines from the per-file diffs. Skip the file-header
+  # lines (+++ / ---) so they aren't miscounted as content.
+  additions=$(jq -r '[.changes[]?.diff // ""] | join("\n")' <<<"$changes" \
+              | grep -cE '^\+[^+]' 2>/dev/null || echo 0)
+  deletions=$(jq -r '[.changes[]?.diff // ""] | join("\n")' <<<"$changes" \
+              | grep -cE '^-[^-]' 2>/dev/null || echo 0)
+
+  jq -c --argjson changes "$changes" \
+        --argjson commits "$commits" \
+        --argjson additions "$additions" \
+        --argjson deletions "$deletions" '{
+    id: .iid,
+    title: .title,
+    state: (.state | sub("^opened$"; "open")),
+    url: .web_url,
+    head_ref: .source_branch,
+    base_ref: .target_branch,
+    author: .author.username,
+    is_draft: (.draft // .work_in_progress // false),
+    body: .description,
+    additions: $additions,
+    deletions: $deletions,
+    files_changed: (($changes.changes // []) | length),
+    created_at: .created_at,
+    raw: (. + {changes: $changes, commits: $commits})
+  }' <<<"$raw"
+}
+
+# git_pr_diff <id>
+# Fetch the unified diff for an MR by id. GitLab doesn't return a
+# single concatenated unified diff like gh pr diff — it returns
+# per-file change objects under .changes[].diff. Concatenate them
+# into a unified-diff-shaped stream so callers see the same format
+# regardless of backend.
+git_pr_diff() {
+  local id="${1:?id required}"
+  local proj changes
+  proj=$(_gitlab_project_id) || return 1
+  changes=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}/changes") || return $?
+  jq -r '.changes[]? |
+    "diff --git a/\(.old_path) b/\(.new_path)\n" +
+    (if .deleted_file then "deleted file mode \(.b_mode // "100644")\n" else "" end) +
+    (if .new_file then "new file mode \(.b_mode // "100644")\n" else "" end) +
+    "--- a/\(.old_path)\n+++ b/\(.new_path)\n" + .diff
+  ' <<<"$changes"
+}
+
+# git_pr_checkout <id>
+# Fetch the MR head and switch the working tree to it. Uses the
+# Git refs that GitLab exposes for MRs (refs/merge-requests/<iid>/head),
+# falling back to the source branch. Hard-fails if neither fetch
+# resolves so callers see a useful error rather than a downstream
+# 'pathspec did not match' from git checkout.
+git_pr_checkout() {
+  local id="${1:?id required}"
+  local proj target_branch
+  proj=$(_gitlab_project_id) || return 1
+  target_branch=$(_gitlab_call GET "/projects/${proj}/merge_requests/${id}" \
+                  | jq -r '.source_branch') || return $?
+  if ! git fetch origin "merge-requests/${id}/head:${target_branch}" 2>/dev/null \
+     && ! git fetch origin "${target_branch}:${target_branch}" 2>/dev/null; then
+    echo "git_pr_checkout: failed to fetch MR #${id} head ref or branch '${target_branch}'" >&2
+    return 1
+  fi
+  git checkout "$target_branch"
+}
+
 # ----------------------------------------------------------------------
 # Pipelines
 # ----------------------------------------------------------------------

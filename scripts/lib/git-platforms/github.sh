@@ -177,6 +177,75 @@ git_pr_create() {
   jq -nc --arg id "$num" --arg url "$url" '{id: ($id | tonumber), url: $url}'
 }
 
+# git_pr_list [--state open|closed|all] [--limit N]
+# List PRs in the active repo. Returns JSON array of normalized
+# {id, title, state, url, head_ref, base_ref, author, is_draft, raw}.
+git_pr_list() {
+  local state="open" limit=30
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state) state="$2"; shift 2 ;;
+      --limit) limit="$2"; shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+  local raw
+  raw=$(_gh pr list --state "$state" --limit "$limit" \
+        --json number,title,state,url,headRefName,baseRefName,author,isDraft) || return $?
+  jq -c '[.[] | {
+    id: .number,
+    title: .title,
+    state: (.state | ascii_downcase),
+    url: .url,
+    head_ref: .headRefName,
+    base_ref: .baseRefName,
+    author: .author.login,
+    is_draft: .isDraft,
+    raw: .
+  }]' <<<"$raw"
+}
+
+# git_pr_get <id>
+# Fetch a single PR's metadata. Returns normalized JSON with .raw
+# containing the full backend response (commits, files, diffs of
+# stats, additions, deletions, body, etc).
+git_pr_get() {
+  local id="${1:?id required}"
+  local raw
+  raw=$(_gh_get pr view "$id" \
+        --json number,title,author,body,files,commits,additions,deletions,createdAt,headRefName,baseRefName,state,url,isDraft) || return $?
+  jq -c '{
+    id: .number,
+    title: .title,
+    state: (.state | ascii_downcase),
+    url: .url,
+    head_ref: .headRefName,
+    base_ref: .baseRefName,
+    author: .author.login,
+    is_draft: .isDraft,
+    body: .body,
+    additions: .additions,
+    deletions: .deletions,
+    files_changed: (.files | length),
+    created_at: .createdAt,
+    raw: .
+  }' <<<"$raw"
+}
+
+# git_pr_diff <id>
+# Fetch the unified diff for a PR.
+git_pr_diff() {
+  local id="${1:?id required}"
+  _gh pr diff "$id"
+}
+
+# git_pr_checkout <id>
+# Switch the working tree to the PR's head branch (fetches if needed).
+git_pr_checkout() {
+  local id="${1:?id required}"
+  _gh pr checkout "$id"
+}
+
 # ----------------------------------------------------------------------
 # Workflow runs (GitHub Actions)
 # ----------------------------------------------------------------------

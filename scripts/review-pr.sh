@@ -43,6 +43,8 @@ source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/load-profile.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/git-api.sh"
 
 # Global variables
 OUTPUT_MODE="json"
@@ -146,36 +148,22 @@ section_list() {
 
     local prs_json=""
 
-    if [[ "$PLATFORM" == "github" ]]; then
-        # Check gh auth
-        if ! gh auth status >/dev/null 2>&1; then
-            exit_with_json "error" "GitHub CLI not authenticated" "Run: gh auth login"
-        fi
+    load_git_adapter || exit_with_json "error" "Failed to load git adapter" "Set .git.platform in PROJECT.yaml or the active profile"
 
-        prs_json=$(gh pr list --json number,title,author,headRefName,baseRefName,isDraft 2>&1 || echo "[]")
-    else
-        # GitLab
-        if [[ ! -f ~/.gitlab-token ]]; then
-            exit_with_json "error" "GitLab token not found" "Create ~/.gitlab-token"
-        fi
+    # Probe auth/network up front so the user gets a platform-specific
+    # actionable hint rather than a generic empty-list result.
+    if ! git_health 2>/dev/null; then
+        local hint=""
+        case "$PLATFORM" in
+            github) hint="Run: gh auth login" ;;
+            gitlab) hint="Create a personal access token and save it to ~/.gitlab-token" ;;
+            *)      hint="Check adapter prerequisites for platform '$PLATFORM'" ;;
+        esac
+        exit_with_json "error" "Git platform auth/health check failed" "$hint"
+    fi
 
-        local project_id
-        if [[ -f "PROJECT.yaml" ]]; then
-            project_id=$(yaml_get '.git.repo' PROJECT.yaml)
-        fi
-
-        if [[ -z "$project_id" ]] || [[ "$project_id" == "null" ]]; then
-            exit_with_json "error" "GitLab project not configured" "Add git.repo to PROJECT.yaml"
-        fi
-
-        local token
-        token=$(cat ~/.gitlab-token)
-        local instance
-        instance=$(yaml_get_default '.git.instance' "$(profile_env_get .git.instance)" PROJECT.yaml)
-
-        prs_json=$(curl -s -H "PRIVATE-TOKEN: $token" \
-            "https://$instance/api/v4/projects/$(echo "$project_id" | jq -sRr @uri)/merge_requests?state=opened" \
-            | jq '[.[] | {number: .iid, title: .title, author: .author.username, headRefName: .source_branch, baseRefName: .target_branch, isDraft: .draft}]')
+    if ! prs_json=$(git_pr_list --state open 2>&1); then
+        exit_with_json "error" "Failed to list PRs" "$prs_json"
     fi
 
     if [[ "$SECTION" == "list" ]]; then
@@ -206,58 +194,44 @@ section_fetch() {
     fi
 
     detect_platform
+    load_git_adapter || exit_with_json "error" "Failed to load git adapter"
 
-    if [[ "$PLATFORM" == "github" ]]; then
-        PR_RAW_DATA=$(gh pr view "$PR_NUMBER" --json number,title,author,body,files,commits,additions,deletions,createdAt,headRefName,baseRefName 2>&1)
-        PR_DIFF=$(gh pr diff "$PR_NUMBER" | head -c 100000 || true)
-        PR_COMMITS_JSON=$(echo "$PR_RAW_DATA" | jq '.commits')
-        PR_FILES_JSON=$(echo "$PR_RAW_DATA" | jq '.files')
-    else
-        # GitLab
-        local token
-        token=$(cat ~/.gitlab-token)
-        local instance project_id
-        instance=$(yaml_get_default '.git.instance' "$(profile_env_get .git.instance)" PROJECT.yaml)
-        project_id=$(yaml_get '.git.repo' PROJECT.yaml)
+    local pr_normalized
+    pr_normalized=$(git_pr_get "$PR_NUMBER") || exit_with_json "error" "Failed to fetch PR #$PR_NUMBER"
+    PR_DIFF=$(git_pr_diff "$PR_NUMBER" | head -c 100000 || true)
 
-        PR_RAW_DATA=$(curl -s -H "PRIVATE-TOKEN: $token" \
-            "https://$instance/api/v4/projects/$(echo "$project_id" | jq -sRr @uri)/merge_requests/$PR_NUMBER")
+    # Build PR_RAW_DATA in the shape downstream consumers expect:
+    # {number, title, author: {login}, body, files, commits, additions, deletions, createdAt, headRefName, baseRefName}
+    local _raw
+    _raw=$(echo "$pr_normalized" | jq -r '.raw // "{}"')
+    PR_RAW_DATA=$(echo "$pr_normalized" | jq --argjson raw "$_raw" '{
+      number: (.id | tonumber? // .id),
+      title: .title,
+      author: { login: .author },
+      body: .body,
+      additions: (.additions // 0),
+      deletions: (.deletions // 0),
+      createdAt: .created_at,
+      headRefName: .head_ref,
+      baseRefName: .base_ref,
+      files: ($raw.files // $raw.changes // []),
+      commits: ($raw.commits // [])
+    }')
 
-        local changes_data
-        changes_data=$(curl -s -H "PRIVATE-TOKEN: $token" \
-            "https://$instance/api/v4/projects/$(echo "$project_id" | jq -sRr @uri)/merge_requests/$PR_NUMBER/changes")
+    PR_COMMITS_JSON=$(echo "$PR_RAW_DATA" | jq '.commits')
+    PR_FILES_JSON=$(echo "$PR_RAW_DATA" | jq '.files')
 
-        PR_DIFF=$(echo "$changes_data" | jq -r '.changes[] | .diff' | head -c 100000 || true)
-        PR_FILES_JSON=$(echo "$changes_data" | jq '.changes')
-
-        PR_COMMITS_JSON=$(curl -s -H "PRIVATE-TOKEN: $token" \
-            "https://$instance/api/v4/projects/$(echo "$project_id" | jq -sRr @uri)/merge_requests/$PR_NUMBER/commits")
-    fi
-
-    # Extract metadata from cached data
-    if [[ "$PLATFORM" == "github" ]]; then
-        PR_TITLE=$(echo "$PR_RAW_DATA" | jq -r '.title')
-        PR_AUTHOR=$(echo "$PR_RAW_DATA" | jq -r '.author.login')
-        PR_BODY=$(echo "$PR_RAW_DATA" | jq -r '.body // ""')
-        PR_CREATED=$(echo "$PR_RAW_DATA" | jq -r '.createdAt')
-        PR_BRANCH=$(echo "$PR_RAW_DATA" | jq -r '.headRefName')
-        BASE_BRANCH=$(echo "$PR_RAW_DATA" | jq -r '.baseRefName')
-        FILES_CHANGED=$(echo "$PR_RAW_DATA" | jq -r '.files | length')
-        LINES_ADDED=$(echo "$PR_RAW_DATA" | jq -r '.additions')
-        LINES_REMOVED=$(echo "$PR_RAW_DATA" | jq -r '.deletions')
-        COMMIT_COUNT=$(echo "$PR_RAW_DATA" | jq -r '.commits | length')
-    else
-        PR_TITLE=$(echo "$PR_RAW_DATA" | jq -r '.title')
-        PR_AUTHOR=$(echo "$PR_RAW_DATA" | jq -r '.author.username')
-        PR_BODY=$(echo "$PR_RAW_DATA" | jq -r '.description // ""')
-        PR_CREATED=$(echo "$PR_RAW_DATA" | jq -r '.created_at')
-        PR_BRANCH=$(echo "$PR_RAW_DATA" | jq -r '.source_branch')
-        BASE_BRANCH=$(echo "$PR_RAW_DATA" | jq -r '.target_branch')
-        FILES_CHANGED=$(echo "$PR_FILES_JSON" | jq 'length')
-        LINES_ADDED=0
-        LINES_REMOVED=0
-        COMMIT_COUNT=$(echo "$PR_RAW_DATA" | jq -r '.user_notes_count // 0')
-    fi
+    # Extract metadata from normalized data
+    PR_TITLE=$(echo "$pr_normalized" | jq -r '.title')
+    PR_AUTHOR=$(echo "$pr_normalized" | jq -r '.author')
+    PR_BODY=$(echo "$pr_normalized" | jq -r '.body // ""')
+    PR_CREATED=$(echo "$pr_normalized" | jq -r '.created_at')
+    PR_BRANCH=$(echo "$pr_normalized" | jq -r '.head_ref')
+    BASE_BRANCH=$(echo "$pr_normalized" | jq -r '.base_ref')
+    FILES_CHANGED=$(echo "$pr_normalized" | jq -r '.files_changed // 0')
+    LINES_ADDED=$(echo "$pr_normalized" | jq -r '.additions // 0')
+    LINES_REMOVED=$(echo "$pr_normalized" | jq -r '.deletions // 0')
+    COMMIT_COUNT=$(echo "$PR_COMMITS_JSON" | jq 'length')
 
     if [[ "$SECTION" == "fetch" ]]; then
         local json=$(cat <<EOF
@@ -303,12 +277,7 @@ section_security() {
 
     # Checkout PR branch
     log "${CYAN}Checking out PR branch: $PR_BRANCH${NC}"
-    if [[ "$PLATFORM" == "github" ]]; then
-        gh pr checkout "$PR_NUMBER" >/dev/null 2>&1 || exit_with_json "error" "Failed to checkout PR"
-    else
-        git fetch origin "$PR_BRANCH" >/dev/null 2>&1
-        git checkout "$PR_BRANCH" >/dev/null 2>&1 || exit_with_json "error" "Failed to checkout branch"
-    fi
+    git_pr_checkout "$PR_NUMBER" >/dev/null 2>&1 || exit_with_json "error" "Failed to checkout PR"
 
     # Run all scanners in parallel to avoid sequential wait
     log "${CYAN}Running security scans in parallel${NC}"

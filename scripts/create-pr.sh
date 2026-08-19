@@ -290,9 +290,10 @@ main() {
             section_push
             ;;
         create)
-            # This section would be handled by LLM using gh/gitlab CLI
-            # after generating description
-            exit_with_json "success" "Use gh pr create or gitlab API to create PR"
+            # PR creation goes through the git adapter (git_pr_create
+            # from scripts/lib/git-api.sh) so the caller doesn't need
+            # to know which platform is active.
+            exit_with_json "success" "Use git_pr_create via the git adapter (or your platform's CLI) to create the PR"
             ;;
         full)
             section_analyze
@@ -316,7 +317,7 @@ main() {
   "diff_stat": $(echo "$DIFF_STAT" | jq -Rs .),
   "next_steps": [
     "LLM generates PR description from commit data",
-    "LLM creates PR using: gh pr create --title '$PR_TITLE' --body '<description>' --base $BASE_BRANCH"
+    "LLM creates PR via git_pr_create from lib/git-api.sh with title='$PR_TITLE' and base='$BASE_BRANCH'"
   ],
   "timestamp": "$(date -Iseconds)"
 }
