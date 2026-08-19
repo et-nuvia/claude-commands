@@ -64,51 +64,8 @@ git_adapter_name() {
   echo "${_GIT_ADAPTER_LOADED:-}"
 }
 
-# ----------------------------------------------------------------------
-# Low-level GitLab helper — kept here (not in gitlab.sh) so it stays
-# accessible to scripts that need raw API access without going through
-# the high-level adapter. The gitlab.sh adapter uses this internally.
-#
-# Usage: gitlab_api GET "/projects/ID/pipelines" [extra_curl_args...]
-# Requires: GIT_API_URL and GIT_TOKEN_FILE variables set by caller.
-# Returns JSON on stdout. Exit codes match the contract:
-#   0 on 2xx
-#   2 on 404 (not found)
-#   1 on any other HTTP error (with stderr message)
-# ----------------------------------------------------------------------
-gitlab_api() {
-  local method="${1:?method required}"
-  local endpoint="${2:?endpoint required}"
-  shift 2
-
-  [[ -n "${GIT_API_URL:-}" ]] || { echo "Error: GIT_API_URL not set" >&2; return 1; }
-  [[ -f "${GIT_TOKEN_FILE:-}" ]] || { echo "Error: Token file not found: ${GIT_TOKEN_FILE:-unset}" >&2; return 1; }
-
-  local tmpfile
-  tmpfile=$(mktemp)
-  # Use eager-expanded trap text so $tmpfile is resolved NOW, while in scope.
-  # The previous single-quoted form was evaluated when the trap fired (on
-  # RETURN, after `local tmpfile` had gone out of scope), which under
-  # `set -u` in any caller produced "tmpfile: unbound variable".
-  trap "rm -f '$tmpfile'" RETURN
-
-  local http_code
-  http_code=$(curl -s -o "$tmpfile" -w '%{http_code}' \
-    --connect-timeout 10 --max-time 30 \
-    -X "$method" \
-    --header "PRIVATE-TOKEN: $(cat "$GIT_TOKEN_FILE")" \
-    "$@" \
-    "${GIT_API_URL}${endpoint}")
-
-  if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
-    cat "$tmpfile"
-    return 0
-  elif [[ "$http_code" == "404" ]]; then
-    # Quiet — callers will translate this to exit 2; not necessarily an error
-    return 2
-  else
-    echo "GitLab API error: HTTP ${http_code} on ${method} ${endpoint}" >&2
-    cat "$tmpfile" >&2
-    return 1
-  fi
-}
+# Raw GitLab REST access (gitlab_api) lives in git-platforms/gitlab.sh
+# now — keeping it out of the dispatcher preserves the seam: callers
+# go through load_git_adapter or source the platform file directly
+# rather than reaching backend-specific helpers through the generic
+# git-api dispatcher.

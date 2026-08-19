@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # task-backends/gitlab-tasks.sh — GitLab Issues adapter for the task contract.
 #
-# Reuses the low-level gitlab_api() helper from ../git-api.sh for HTTP +
-# auth. Adds task-lifecycle semantics on top: hold/resume via labels,
-# status normalization, normalized JSON schema.
+# Reuses the low-level gitlab_api() helper from
+# ../git-platforms/gitlab.sh for HTTP + auth. Adds task-lifecycle
+# semantics on top: hold/resume via labels, status normalization,
+# normalized JSON schema.
 #
 # Required config (PROJECT.yaml > profile fallback):
 #   .task_management.gitlab.project_id  — "org/repo" form, or derived from remote
 #
 # Don't source this file directly — go through scripts/lib/task-api.sh.
 
-# Pull in gitlab_api low-level helper.
+# Pull in gitlab_api low-level helper from the GitLab platform adapter.
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/../git-api.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../git-platforms/gitlab.sh"
 
 _GITLAB_TASKS_HOST="$(profile_env_get .git.instance 2>/dev/null)"
 _GITLAB_TASKS_HOST="${_GITLAB_TASKS_HOST:-gitlab.com}"

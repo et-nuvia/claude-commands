@@ -46,10 +46,15 @@ if [[ -z "$PIPELINE_ID" ]]; then
   # newest run is what let an unrelated fast workflow (Dependabot) go green
   # and stand in for a deploy that had not finished. See lib/gh-runs.sh.
   if [[ "$(git_adapter_name)" == "github" ]]; then
+    gh_runs_require || exit 1
     branch="${BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')}"
     sha="${HEAD_SHA:-$(git rev-parse HEAD 2>/dev/null || echo '')}"
 
-    selected=$(gh_runs_fetch "$branch" 50 | gh_runs_select "$sha" "$WORKFLOW" "")
+    if ! runs=$(gh_runs_fetch "$branch" 50); then
+      echo "Error: gh could not list runs for branch '${branch}' — not a run-less branch, an unanswered query" >&2
+      exit 1
+    fi
+    selected=$(printf '%s' "$runs" | gh_runs_select "$sha" "$WORKFLOW" "")
 
     if [[ "$(printf '%s' "$selected" | jq -r 'length')" == "0" ]]; then
       echo "No runs found for branch=${branch} sha=${sha:0:8} workflow=${WORKFLOW:-any}"

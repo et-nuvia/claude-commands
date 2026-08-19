@@ -53,21 +53,17 @@ source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
 
 # Source profile + task adapter so closeout mutations (close issue, comment,
-# transition MR) route through the task_* contract instead of the raw GitLab
-# curl path that lib/task-close-complete.sh used directly. Without this the
-# Group A/B adapter refactor was effectively half-applied: capture/hold used
-# the adapter, close did not.
+# transition MR) route through the task_* contract rather than raw gh/curl
+# calls. task-close-impl.sh calls load_task_adapter/task_close but does not
+# source the adapter itself, so it must be loaded here.
 # shellcheck source=lib/load-profile.sh
 source "${SCRIPT_DIR}/lib/load-profile.sh"
 # shellcheck source=lib/task-api.sh
 source "${SCRIPT_DIR}/lib/task-api.sh"
 
-# Source section helpers
-source "${SCRIPT_DIR}/lib/task-close-identify.sh"
-source "${SCRIPT_DIR}/lib/task-close-complete.sh"
-source "${SCRIPT_DIR}/lib/task-close-defer.sh"
-source "${SCRIPT_DIR}/lib/task-close-sync.sh"
-source "${SCRIPT_DIR}/lib/task-close-cleanup.sh"
+# Source the consolidated task-close implementation (formerly five
+# task-close-{identify,complete,defer,sync,cleanup}.sh fragments).
+source "${SCRIPT_DIR}/lib/task-close-impl.sh"
 
 # Global variables
 OUTPUT_MODE="json"  # json or raw

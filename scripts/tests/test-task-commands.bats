@@ -191,15 +191,15 @@ teardown() {
 }
 
 @test "command: no case statements in task-fetch" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-fetch.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-fetch.md"
 }
 
 @test "command: no case statements in task-capture" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-capture.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-capture.md"
 }
 
 @test "command: no case statements in task-summary" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-summary.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-summary.md"
 }
 
 # =============================================================================
@@ -351,19 +351,19 @@ teardown() {
 }
 
 @test "command: no case statements in task-resume" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-resume.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-resume.md"
 }
 
 @test "command: no case statements in task-code-review" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-code-review.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-code-review.md"
 }
 
 @test "command: no case statements in deploy-risk" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/deploy-risk.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/deploy-risk.md"
 }
 
 @test "command: no case statements in task-audit" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-audit.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-audit.md"
 }
 
 # =============================================================================
@@ -501,19 +501,19 @@ teardown() {
 }
 
 @test "command: no case statements in task-hold" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-hold.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-hold.md"
 }
 
 @test "command: no case statements in task-continue" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-continue.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-continue.md"
 }
 
 @test "command: no case statements in task-start" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-start.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-start.md"
 }
 
 @test "command: no case statements in task-close" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-close.md"
+    ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/task-close.md"
 }
 
 # =============================================================================
@@ -675,7 +675,7 @@ teardown() {
 
 @test "command: no case statements in P2+P0 commands" {
     for cmd in create-pr review-pr git-merge git-rebase task-plan deploy-to-stage deploy-to-prod; do
-        ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/${cmd}.md"
+        ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/${cmd}.md"
     done
 }
 
@@ -710,7 +710,7 @@ teardown() {
 # Batch compliance: no case statements in any P3 command
 @test "P3 commands: no case statements" {
     for cmd in add-dependency cleanproject contributing db-backup-verify db-performance db-restore db-upgrade db-user-audit deploy-ansible deployment-config deploy-risk dockerfile-build docs-verify format git-commit infra-apply infra-destroy infra-drift infra-plan infra-verify ops-capacity ops-cost ops-load-test ops-monitoring ops-scaling pipeline-create project-config rca-analyze rca-pir rca-timeline rca-triage refactor review-implement rotate-secret test-tdd todos-to-issues training-videos upgrade-dependencies; do
-        ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/${cmd}.md" || { echo "FAIL: $cmd has case statements"; return 1; }
+        ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/${cmd}.md" || { echo "FAIL: $cmd has case statements"; return 1; }
     done
 }
 
@@ -809,7 +809,7 @@ _prompt_only_commands() {
 
 @test "prompt-only commands: no case statements" {
     while IFS= read -r cmd; do
-        ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/${cmd}.md" || { echo "FAIL: $cmd has case statements"; return 1; }
+        ! grep -qE '^[[:space:]]*case[[:space:]]+.*[[:space:]]+in[[:space:]]*$' "$SCRIPTS_DIR/../commands/${cmd}.md" || { echo "FAIL: $cmd has case statements"; return 1; }
     done < <(_prompt_only_commands)
 }
 

@@ -55,6 +55,10 @@ the following exit codes:
 
 | Function | Args | Returns |
 |---|---|---|
+| `git_pr_list` | `[--state open\|closed\|all] [--limit N]` | JSON array `[{id, title, state, url, head_ref, base_ref, author, is_draft, raw}]` |
+| `git_pr_get` | `<id>` | JSON `{id, title, state, url, head_ref, base_ref, author, body, additions, deletions, files_changed, created_at, raw}` |
+| `git_pr_diff` | `<id>` | unified diff on stdout (see note) |
+| `git_pr_checkout` | `<id>` | switches working tree to the PR head branch |
 | `git_pipeline_list` | `[--ref <branch>] [--sha <sha>] [--limit N]` | JSON array `[{id, status, sha, ref, url, created_at}]` |
 | `git_pipeline_status` | `<id>` | JSON `{id, status, conclusion, jobs}` |
 | `git_pipeline_logs` | `<id> [job-name]` | log text on stdout (whole-pipeline or one named job) |
@@ -66,6 +70,18 @@ the following exit codes:
 | Function | Args | Returns |
 |---|---|---|
 | `git_health` | — | exit 0 if auth/network OK, exit 1 with stderr details |
+
+### Note on `git_pr_diff` output
+
+GitHub's `gh pr diff` returns a full git unified diff including
+`index <old_sha>..<new_sha> <mode>` lines. GitLab's API doesn't
+expose blob SHAs in the `/changes` payload, so the synthesized
+GitLab diff omits the `index` line. Standard diff parsers tolerate
+this, but commands that round-trip through git (`git apply`,
+`git apply --check`) require the `index` line and will reject
+the GitLab output. If you need a true round-trippable diff on
+GitLab, use `git_pr_checkout` and produce the diff locally with
+`git diff <base>...HEAD`.
 
 ## Normalized status values
 

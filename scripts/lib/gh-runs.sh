@@ -26,10 +26,44 @@ GH_RUNS_FIELDS="databaseId,headSha,workflowName,status,conclusion,createdAt,even
 
 # gh_runs_fetch <branch> [limit]
 # Emits a JSON array of recent runs for the branch.
+# Fail loudly when gh cannot be asked at all.
+#
+# gh_runs_fetch swallows errors into an empty array so a polling caller can
+# treat "no runs yet" as a wait state. That makes an UNANSWERABLE query look
+# identical to an answered one with no results — the same conflation this file
+# exists to prevent, one level up. Callers therefore assert the precondition
+# once, before any selection, rather than reading silence as "nothing ran".
+gh_runs_require() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "Error: gh CLI not installed — required to select GitHub workflow runs" >&2
+    return 1
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "Error: gh CLI not authenticated — run: gh auth login" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Fetch runs for a branch. Emits a JSON array on stdout.
+#
+# Returns NON-ZERO when gh itself failed, and still emits `[]` so a caller that
+# genuinely wants to tolerate the failure can pipe it onward. One-shot callers
+# must check the status: "gh could not answer" and "gh answered, nothing ran"
+# are different facts, and reporting the first as the second is how a query
+# that never ran gets read as a clean result.
 gh_runs_fetch() {
   local branch="$1"
   local limit="${2:-50}"
-  gh run list --branch "$branch" --limit "$limit" --json "$GH_RUNS_FIELDS" 2>/dev/null || echo '[]'
+  local out status
+  out=$(gh run list --branch "$branch" --limit "$limit" --json "$GH_RUNS_FIELDS" 2>/dev/null)
+  status=$?
+  if [[ $status -ne 0 || -z "$out" ]]; then
+    echo '[]'
+    return 1
+  fi
+  printf '%s' "$out"
+  return 0
 }
 
 # gh_runs_select <sha> <include_patterns> <exclude_patterns>

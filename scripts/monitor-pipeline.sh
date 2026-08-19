@@ -119,6 +119,14 @@ if ! load_git_adapter; then
   exit 1
 fi
 
+# Assert gh is usable BEFORE the poll loop. Inside the loop an unanswerable
+# query is indistinguishable from "no run yet", so a missing or unauthenticated
+# gh would spin silently until --max-wait and then report a timeout rather than
+# the real cause — on the very command a deploy gates on.
+if [[ "$(git_adapter_name)" == "github" ]]; then
+  gh_runs_require || exit 1
+fi
+
 POLL_INTERVAL=10
 ELAPSED=0
 STATUS="unknown"
@@ -145,7 +153,10 @@ monitor_loop() {
     # lib/gh-runs.sh for the selection rules.
     if [[ "$(git_adapter_name)" == "github" ]]; then
       local runs selected verdict
-      runs="$(gh_runs_fetch "$BRANCH" 50)"
+      # gh_runs_require already proved gh is usable, so a failure here is a
+      # transient (network, rate limit) rather than a misconfiguration — keep
+      # polling rather than aborting a deploy watch on one bad call.
+      runs="$(gh_runs_fetch "$BRANCH" 50 || true)"
       selected="$(printf '%s' "$runs" | gh_runs_select "$HEAD_SHA" "$INCLUDE_WORKFLOWS" "$EXCLUDE_WORKFLOWS")"
       verdict="$(printf '%s' "$selected" | gh_runs_aggregate)"
 

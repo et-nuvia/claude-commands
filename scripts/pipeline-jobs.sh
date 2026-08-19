@@ -37,9 +37,14 @@ if [[ -z "$PIPELINE_ID" ]]; then
   # this branch — often Dependabot or CodeQL rather than the run you mean.
   # Prefer the newest run for HEAD's SHA, then fall back to the raw latest.
   if [[ "$(git_adapter_name)" == "github" ]]; then
+    gh_runs_require || exit 1
     _sha=$(git rev-parse HEAD 2>/dev/null || echo '')
     _branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
-    PIPELINE_ID=$(gh_runs_fetch "$_branch" 50 \
+    if ! _runs=$(gh_runs_fetch "$_branch" 50); then
+      echo "Error: gh could not list runs for branch '${_branch}'" >&2
+      exit 1
+    fi
+    PIPELINE_ID=$(printf '%s' "$_runs" \
       | gh_runs_select "$_sha" "" "" \
       | jq -r '.[0].databaseId // empty')
   fi
