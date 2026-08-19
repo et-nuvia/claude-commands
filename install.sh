@@ -25,6 +25,7 @@ LINKS=(
   "commands"
   "scripts"
   "skills"
+  "agents"
   "templates"
   "docs"
   "profiles"
