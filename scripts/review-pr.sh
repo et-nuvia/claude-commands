@@ -78,18 +78,41 @@ SEMGREP_ISSUES=0
 GITLEAKS_SECRETS=0
 MANUAL_SECRETS=0
 
-# Temp files
-TRIVY_RESULTS="/tmp/review-pr-trivy-$$.json"
-TRIVY_SECRETS_FILE="/tmp/review-pr-trivy-secrets-$$.json"
-SEMGREP_RESULTS="/tmp/review-pr-semgrep-$$.json"
-GITLEAKS_RESULTS="/tmp/review-pr-gitleaks-$$.json"
+# Set once section_security finishes so section_analyze never re-runs the
+# scans just because a clean PR left all vuln counters at zero.
+SCANS_DONE="false"
+
+# Sidecar scan/diff files. Named by PR number rather than $$ so they survive
+# this run for the caller (e.g. /review-pr subagents) to Read after the script
+# exits. cleanup() intentionally does NOT remove them.
+DIFF_FILE=""
+
+# Sidecar scan files — resolved by PR number in resolve_sidecar_paths() once
+# the PR is known, so a later run for the same PR reuses the same names and the
+# caller can find them. Empty until then.
+TRIVY_RESULTS=""
+TRIVY_SECRETS_FILE=""
+SEMGREP_RESULTS=""
+GITLEAKS_RESULTS=""
+
+# Name every sidecar after the PR being reviewed. Called from section_fetch and
+# section_security, both of which run after PR_NUMBER is resolved.
+resolve_sidecar_paths() {
+    local key="${PR_NUMBER:-unknown}"
+    TRIVY_RESULTS="/tmp/review-pr-trivy-${key}.json"
+    TRIVY_SECRETS_FILE="/tmp/review-pr-trivy-secrets-${key}.json"
+    SEMGREP_RESULTS="/tmp/review-pr-semgrep-${key}.json"
+    GITLEAKS_RESULTS="/tmp/review-pr-gitleaks-${key}.json"
+    DIFF_FILE="/tmp/review-pr-diff-${key}.txt"
+}
 
 #------------------------------------------------------------------------------
 # Cleanup
 #------------------------------------------------------------------------------
 
 cleanup() {
-    rm -f "$TRIVY_RESULTS" "$TRIVY_SECRETS_FILE" "$SEMGREP_RESULTS" "$GITLEAKS_RESULTS"
+    # Sidecar scan/diff files are intentionally NOT removed here — they are
+    # named by PR number and read by the caller after this script exits.
 
     # Return to original branch if we checked out PR branch
     if [[ -n "$ORIGINAL_BRANCH" ]] && [[ -n "$PR_BRANCH" ]]; then
@@ -201,6 +224,8 @@ EOF
 section_fetch() {
     log "${BLUE}Fetching PR/MR Data${NC}"
 
+    resolve_sidecar_paths
+
     if [[ -z "$PR_NUMBER" ]]; then
         exit_with_json "error" "PR number required" "Use --pr NUMBER"
     fi
@@ -292,6 +317,8 @@ EOF
 # Section 3: Security scans
 section_security() {
     log "${BLUE}Running Security Scans${NC}"
+
+    resolve_sidecar_paths
 
     if [[ -z "$PR_NUMBER" ]] || [[ -z "$PR_BRANCH" ]]; then
         # Fetch first if not already done
@@ -398,6 +425,7 @@ EOF
         exit 0
     fi
 
+    SCANS_DONE="true"
     log "${GREEN}✓${NC} Security scans complete"
 }
 
@@ -410,8 +438,10 @@ section_analyze() {
         section_fetch
     fi
 
-    # Security scans if not already done
-    if [[ $TRIVY_VULNS_CRITICAL -eq 0 ]] && [[ $TRIVY_VULNS_HIGH -eq 0 ]]; then
+    # Security scans if not already done. Keyed off an explicit flag, not off
+    # the vuln counters — a genuinely clean PR leaves every counter at zero,
+    # and testing the counters re-ran the whole scan suite on every call.
+    if [[ "$SCANS_DONE" != "true" ]]; then
         section_security
     fi
 

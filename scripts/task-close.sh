@@ -180,7 +180,14 @@ main() {
             --create-summary) SECTION="create-summary"; shift ;;
             --full) SECTION="full"; shift ;;
             --ai) AI_MODE=true; shift ;;
-            --status) AI_STATUS="$2"; shift 2 ;;
+            --status)
+                # Accept short ("complete"/"defer") and full ("completed"/"deferred") forms.
+                case "$2" in
+                    complete|completed) AI_STATUS="completed" ;;
+                    defer|deferred)     AI_STATUS="deferred" ;;
+                    *) echo "Invalid --status value: $2 (expected complete|completed|defer|deferred)" >&2; exit 2 ;;
+                esac
+                shift 2 ;;
             --accomplished) AI_ACCOMPLISHED="$2"; shift 2 ;;
             --went-well) AI_WENT_WELL="$2"; shift 2 ;;
             --challenges) AI_CHALLENGES="$2"; shift 2 ;;
@@ -208,67 +215,77 @@ main() {
         esac
     done
 
+    # Honor an explicit --status from AI mode before any section runs.
+    # section_identify reads STATUS from the TSK document; for tasks still
+    # marked Active, --status complete/defer is the caller's signal to drive
+    # the close as if the doc said so. Without this override the doc's stale
+    # status wins and AI dispatches silently fall into the wrong branch
+    # (e.g. a complete close became a defer close because STATUS=active).
+    apply_ai_status_override() {
+        if [[ -n "$AI_STATUS" ]] && [[ "$STATUS" != "$AI_STATUS" ]]; then
+            STATUS="$AI_STATUS"
+        fi
+    }
+
     # Execute sections based on flag
     case "$SECTION" in
         identify)
             section_identify
             ;;
         complete)
-            # Need to identify first
             section_identify
+            apply_ai_status_override
             if [[ "$STATUS" != "completed" ]]; then
-                exit_with_json "error" "Task is not marked as completed" "Use --defer for deferred tasks"
+                exit_with_json "error" "Task is not marked as completed" "Use --defer for deferred tasks, or pass --status complete (AI mode)"
             fi
             section_complete
             ;;
         defer)
-            # Need to identify first
             section_identify
+            apply_ai_status_override
             if [[ "$STATUS" != "deferred" ]]; then
-                exit_with_json "error" "Task is not marked as deferred" "Use --complete for completed tasks"
+                exit_with_json "error" "Task is not marked as deferred" "Use --complete for completed tasks, or pass --status defer (AI mode)"
             fi
             section_defer
             ;;
         extract-summary-data)
-            # Extract all data for AI synthesis
             section_identify
+            apply_ai_status_override
             section_extract_summary_data
             ;;
         create-summary)
-            # Create summary from AI-provided content
             section_identify
+            apply_ai_status_override
             section_create_summary
             ;;
         pre-verify)
-            # Run pre-merge verification BEFORE doc generation so failures abort
-            # the flow before any SUM/LRN files are written or committed.
-            # Identifies task first to set TASK_ID / MERGE_TARGET context.
+            # Pre-merge verification runs BEFORE doc generation so failures
+            # abort the flow before any SUM/LRN files are written or committed.
             section_identify
-            # A pre-verify is only meaningful once we know the task is "completed"
-            # and will be merged. Force that assumption if caller hasn't set it.
-            if [[ "$STATUS" != "completed" ]] && [[ "$AI_STATUS" == "completed" ]]; then
-                STATUS="completed"
-            fi
+            apply_ai_status_override
             section_pre_verify
             ;;
         cleanup)
-            # Always identify task first to set necessary variables
             section_identify
+            apply_ai_status_override
             section_cleanup
             ;;
         full)
             section_identify
+            apply_ai_status_override
 
             if [[ "$STATUS" == "completed" ]]; then
                 section_complete
                 # Return for LLM to handle MCP operations
                 # LLM will call --cleanup after syncing
                 exit 0
-            else
+            elif [[ "$STATUS" == "deferred" ]]; then
                 section_defer
                 # Return for LLM to handle MCP operations
                 # LLM will call --cleanup after syncing
                 exit 0
+            else
+                exit_with_json "error" "Task status is '$STATUS' — must be completed or deferred to close" "Edit the TSK Status header, or pass --status complete|defer in AI mode"
             fi
             ;;
     esac
