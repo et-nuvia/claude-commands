@@ -36,6 +36,13 @@ Capture → plan → start → work → hold/resume → close. Most require
 - [`/task-arch-review`](commands/task-arch-review.md) — Task-scoped architecture review; catches shallow modules and leaky seams before the merge
 - [`/task-post-work`](commands/task-post-work.md) — The whole post-implementation pipeline (audit → arch → review → PR → PR review) with a gated fix-loop
 - [`/task-risk`](commands/task-risk.md) — Score one task's deployment risk across ten weighted categories; produces an RSK doc
+- [`/task-feature-review`](commands/task-feature-review.md) — Compare a task's implementation against PROJECT-KNOWLEDGE; produces an FRV doc
+- [`/feature-to-task`](commands/feature-to-task.md) — Convert an analysis document's recommendations into properly scoped TSKs
+- [`/sprint-plan`](commands/sprint-plan.md) — Plan a two-week sprint: reconcile, classify, score relevance, fill 80% of capacity
+- [`/leftoff`](commands/leftoff.md) — Reconstruct where you stopped and recommend the next step
+- [`/session-start`](commands/session-start.md) — Open a documented work session, recording goals into CLAUDE.md
+- [`/session-end`](commands/session-end.md) — Close a session with a summary and handoff notes
+- [`/execute-tasks`](commands/execute-tasks.md) — Execute the next task from an Agent OS plan (external dependency)
 
 ## Deploy
 
@@ -124,6 +131,16 @@ Thin, single-phase wrappers around tools.
 - [`/add-dependency`](commands/add-dependency.md) — Add a dep with license + security scan
 - [`/upgrade-dependencies`](commands/upgrade-dependencies.md) — Upgrade all deps to latest compatible
 - [`/ci-lint-local`](commands/ci-lint-local.md) — Pre-push validation of CI/Docker/Compose configs
+- [`/test`](commands/test.md) — Run the suite with structured results, scoped to the situation
+- [`/find-todos`](commands/find-todos.md) — Locate TODO/FIXME/HACK markers, grouped by priority
+- [`/fix-todos`](commands/fix-todos.md) — Resolve TODOs by implementing what they describe
+- [`/fix-imports`](commands/fix-imports.md) — Repair imports broken by moves or renames, resumable
+- [`/remove-comments`](commands/remove-comments.md) — Drop comments that restate the code, keep the ones that explain why
+- [`/make-it-pretty`](commands/make-it-pretty.md) — Improve readability without changing behaviour
+- [`/find-dead-code`](commands/find-dead-code.md) — Find and remove unreachable code behind a mandatory E2E gate
+- [`/explain-like-senior`](commands/explain-like-senior.md) — Explain the reasoning and trade-offs behind code
+- [`/undo`](commands/undo.md) — Roll back the last destructive operation
+- [`/docs`](commands/docs.md) — Update documentation to match what actually changed
 
 ## Generators / Scaffolders
 
@@ -133,6 +150,10 @@ Produce file artifacts.
 - [`/makefile-init`](commands/makefile-init.md) — Generate hierarchical Makefiles
 - [`/pipeline-create`](commands/pipeline-create.md) — Generate GitHub Actions or GitLab CI pipeline
 - [`/review-implement`](commands/review-implement.md) — Implement fixes from a review/task list
+- [`/scaffold`](commands/scaffold.md) — Generate a feature structure matching the project's existing patterns
+- [`/document-api`](commands/document-api.md) — Discover every endpoint and generate API reference docs
+- [`/docker-hardening`](commands/docker-hardening.md) — Apply the Docker security baseline to compose and Dockerfiles
+- [`/makefile-optimize`](commands/makefile-optimize.md) — Audit an existing Makefile against the standard and fix it
 
 ## Project / Config Management
 
@@ -142,6 +163,8 @@ Read and write project-level configuration.
 - [`/project-context`](commands/project-context.md) — Compact structural summary of the project
 - [`/setup-secrets`](commands/setup-secrets.md) — Set up Infisical project, folders, and `.secrets/`
 - [`/rotate-secret`](commands/rotate-secret.md) — Manage secret rotation with reminders
+- [`/claude-audit`](commands/claude-audit.md) — Audit a CLAUDE.md for size, structure, and token efficiency
+- [`/plan-product`](commands/plan-product.md) — Product planning via Agent OS (external dependency)
 
 ## Architecture
 
@@ -151,6 +174,9 @@ documents and ADRs; updates PROJECT-KNOWLEDGE.md.
 - [`/arch-explore`](commands/arch-explore.md) — Find codebase-wide architectural deepening candidates
 - [`/arch-grill`](commands/arch-grill.md) — Grill a candidate; update PROJECT-KNOWLEDGE.md; write ADRs
 - [`/arch-interfaces`](commands/arch-interfaces.md) — Explore alternative interface shapes via parallel sub-agents
+- [`/feature-review`](commands/feature-review.md) — Review one feature for implementation quality
+- [`/feature-refactor`](commands/feature-refactor.md) — Assess a feature for refactoring opportunities worth taking
+- [`/feature-performance`](commands/feature-performance.md) — Find bottlenecks, resource usage, and scaling limits in a feature
 
 ## Knowledge Graph (Understand)
 
@@ -172,6 +198,12 @@ Commands that don't fit a larger group.
 - [`/training-videos`](commands/training-videos.md) — Produce training videos with synchronized voiceover
 - [`/praxis-contract`](commands/praxis-contract.md) — Query the Praxis API for endpoint contracts
 - [`/todos-to-issues`](commands/todos-to-issues.md) — Convert TODO comments to GitHub/GitLab issues
+- [`/predict-issues`](commands/predict-issues.md) — Predict what recent changes are likely to break, before deploying
+- [`/analyze-command-health`](commands/analyze-command-health.md) — Find which of your own commands to improve, from transcript evidence
+- [`/analyze-task-lifecycle`](commands/analyze-task-lifecycle.md) — Mine transcripts for the real lifecycle and recommend hook-driven automation
+- [`/resume-crashed`](commands/resume-crashed.md) — List and restore sessions that died without a clean exit
+- [`/git-history-scrub`](commands/git-history-scrub.md) — **Destructive.** Remove leaked secrets from git history
+- [`/release-notes-standardize`](commands/release-notes-standardize.md) — Standardize release notes with verified commit attribution
 
 ---
 
