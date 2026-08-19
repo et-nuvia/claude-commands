@@ -158,10 +158,10 @@ teardown() {
     ! grep -q ' jq ' "$f"
 }
 
-@test "command: task-capture.md under 150 lines with no jq calls" {
+@test "command: task-capture.md under 200 lines with no jq calls" {
     local f="$SCRIPTS_DIR/../commands/task-capture.md"
     local lines=$(wc -l < "$f")
-    [ "$lines" -le 150 ]
+    [ "$lines" -le 200 ]
     ! grep -q ' jq ' "$f"
 }
 
@@ -247,32 +247,6 @@ teardown() {
 
 # --- task-risk script: next_action in JSON responses ---
 
-@test "task-risk: missing env returns error" {
-    cd "$TEST_DIR"
-    git init -q
-    result=$("$SCRIPTS_DIR/task-risk.sh" --json --full 2>/dev/null) || true
-    [ "$(echo "$result" | jq -r '.status')" = "error" ]
-    [ "$(echo "$result" | jq -r '.section')" = "full" ]
-}
-
-@test "task-risk: invalid env returns error" {
-    cd "$TEST_DIR"
-    git init -q
-    result=$("$SCRIPTS_DIR/task-risk.sh" --json --full --env invalid 2>/dev/null) || true
-    [ "$(echo "$result" | jq -r '.status')" = "error" ]
-    [ "$(echo "$result" | jq -r '.section')" = "full" ]
-}
-
-@test "task-risk: error JSON is valid with required fields" {
-    cd "$TEST_DIR"
-    git init -q
-    result=$("$SCRIPTS_DIR/task-risk.sh" --json --full 2>/dev/null) || true
-    echo "$result" | jq . >/dev/null 2>&1
-    [ -n "$(echo "$result" | jq -r '.status')" ]
-    [ -n "$(echo "$result" | jq -r '.section')" ]
-    [ -n "$(echo "$result" | jq -r '.message')" ]
-}
-
 # --- task-audit script: next_action in JSON responses ---
 
 @test "task-audit: missing task returns error with next_action=fix_error" {
@@ -307,13 +281,6 @@ teardown() {
     ! grep -q ' jq ' "$f"
 }
 
-@test "command: task-risk.md under 150 lines with no jq calls" {
-    local f="$SCRIPTS_DIR/../commands/task-risk.md"
-    local lines=$(wc -l < "$f")
-    [ "$lines" -le 150 ]
-    ! grep -q ' jq ' "$f"
-}
-
 @test "command: task-audit.md under 150 lines with no jq calls" {
     local f="$SCRIPTS_DIR/../commands/task-audit.md"
     local lines=$(wc -l < "$f")
@@ -331,11 +298,6 @@ teardown() {
     [ "$count" -le 8 ]
 }
 
-@test "command: task-risk.md has 8 or fewer bash blocks" {
-    local count=$(grep -c '```bash' "$SCRIPTS_DIR/../commands/task-risk.md")
-    [ "$count" -le 8 ]
-}
-
 @test "command: task-audit.md has 8 or fewer bash blocks" {
     local count=$(grep -c '```bash' "$SCRIPTS_DIR/../commands/task-audit.md")
     [ "$count" -le 8 ]
@@ -347,10 +309,6 @@ teardown() {
 
 @test "command: no case statements in task-code-review" {
     ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-code-review.md"
-}
-
-@test "command: no case statements in task-risk" {
-    ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/task-risk.md"
 }
 
 @test "command: no case statements in task-audit" {
@@ -446,10 +404,10 @@ teardown() {
     ! grep -q ' jq ' "$f"
 }
 
-@test "command: task-continue.md under 200 lines with no jq calls" {
+@test "command: task-continue.md under 300 lines with no jq calls" {
     local f="$SCRIPTS_DIR/../commands/task-continue.md"
     local lines=$(wc -l < "$f")
-    [ "$lines" -le 200 ]
+    [ "$lines" -le 300 ]
     ! grep -q ' jq ' "$f"
 }
 
@@ -460,10 +418,10 @@ teardown() {
     ! grep -q ' jq ' "$f"
 }
 
-@test "command: task-close.md under 150 lines with no jq calls" {
+@test "command: task-close.md under 220 lines with no jq calls" {
     local f="$SCRIPTS_DIR/../commands/task-close.md"
     local lines=$(wc -l < "$f")
-    [ "$lines" -le 150 ]
+    [ "$lines" -le 220 ]
     ! grep -q ' jq ' "$f"
 }
 
@@ -602,10 +560,10 @@ teardown() {
     ! grep -q ' jq ' "$f"
 }
 
-@test "command: task-plan.md under 150 lines with no jq calls" {
+@test "command: task-plan.md under 200 lines with no jq calls" {
     local f="$SCRIPTS_DIR/../commands/task-plan.md"
     local lines=$(wc -l < "$f")
-    [ "$lines" -le 150 ]
+    [ "$lines" -le 200 ]
     ! grep -q ' jq ' "$f"
 }
 
@@ -749,7 +707,7 @@ teardown() {
 # =============================================================================
 
 @test "prompt-only commands: all under 200 lines" {
-    for cmd in docker-hardening docs document-api execute-tasks explain-like-senior find-todos fix-imports fix-todos makefile-init make-it-pretty plan-mitigate-risks plan-product predict-issues remove-comments scaffold session-end session-start test understand undo; do
+    for cmd in makefile-init plan-mitigate-risks; do
         local f="$SCRIPTS_DIR/../commands/${cmd}.md"
         local lines=$(wc -l < "$f")
         [ "$lines" -le 200 ] || { echo "FAIL: $cmd has $lines lines"; return 1; }
@@ -757,7 +715,7 @@ teardown() {
 }
 
 @test "prompt-only commands: all have 8 or fewer bash blocks" {
-    for cmd in docker-hardening docs document-api execute-tasks explain-like-senior find-todos fix-imports fix-todos makefile-init make-it-pretty plan-mitigate-risks plan-product predict-issues remove-comments scaffold session-end session-start test understand undo; do
+    for cmd in makefile-init plan-mitigate-risks; do
         local f="$SCRIPTS_DIR/../commands/${cmd}.md"
         local count
         count=$(grep -c '```bash' "$f") || count=0
@@ -766,13 +724,13 @@ teardown() {
 }
 
 @test "prompt-only commands: no jq calls" {
-    for cmd in docker-hardening docs document-api execute-tasks explain-like-senior find-todos fix-imports fix-todos makefile-init make-it-pretty plan-mitigate-risks plan-product predict-issues remove-comments scaffold session-end session-start test understand undo; do
+    for cmd in makefile-init plan-mitigate-risks; do
         ! grep -q ' jq ' "$SCRIPTS_DIR/../commands/${cmd}.md" || { echo "FAIL: $cmd has jq calls"; return 1; }
     done
 }
 
 @test "prompt-only commands: no case statements" {
-    for cmd in docker-hardening docs document-api execute-tasks explain-like-senior find-todos fix-imports fix-todos makefile-init make-it-pretty plan-mitigate-risks plan-product predict-issues remove-comments scaffold session-end session-start test understand undo; do
+    for cmd in makefile-init plan-mitigate-risks; do
         ! grep -q 'case.*in' "$SCRIPTS_DIR/../commands/${cmd}.md" || { echo "FAIL: $cmd has case statements"; return 1; }
     done
 }

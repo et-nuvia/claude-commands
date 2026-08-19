@@ -32,8 +32,7 @@ teardown() {
     local core_scripts=(
         task-start.sh task-continue.sh task-close.sh task-hold.sh
         task-audit.sh task-code-review.sh task-summary.sh
-        task-fetch.sh task-risk.sh task-resume.sh
-        feature-review.sh
+        task-fetch.sh task-resume.sh
         git-commit.sh git-merge.sh
         task-plan.sh plan-progress.sh
         add-dependency.sh review-implement.sh
@@ -217,8 +216,7 @@ teardown() {
 @test "contract: core scripts use set -euo pipefail" {
     local core_scripts=(
         task-start.sh task-continue.sh task-close.sh task-hold.sh
-        task-code-review.sh task-fetch.sh task-risk.sh task-resume.sh
-        feature-review.sh
+        task-code-review.sh task-fetch.sh task-resume.sh
         git-commit.sh git-merge.sh
         task-plan.sh add-dependency.sh review-implement.sh
     )
@@ -242,8 +240,7 @@ teardown() {
     local core_scripts=(
         task-start.sh task-continue.sh task-close.sh task-hold.sh
         task-audit.sh task-code-review.sh task-summary.sh
-        task-fetch.sh task-risk.sh task-resume.sh
-        feature-review.sh
+        task-fetch.sh task-resume.sh
         git-commit.sh git-merge.sh
         task-plan.sh plan-progress.sh
         add-dependency.sh review-implement.sh

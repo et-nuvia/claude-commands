@@ -72,31 +72,21 @@ teardown() {
 # Task-close helpers syntax and guards
 # =============================================================================
 
-@test "lib: task-close-identify.sh passes bash -n" {
-    bash -n "$LIB_DIR/task-close-identify.sh"
+@test "lib: task-close-impl.sh passes bash -n" {
+    bash -n "$LIB_DIR/task-close-impl.sh"
 }
 
-@test "lib: task-close-complete.sh passes bash -n" {
-    bash -n "$LIB_DIR/task-close-complete.sh"
+@test "lib: task-close-impl.sh has double-source guard" {
+    grep -q '_TASK_CLOSE_IMPL_LOADED' "$LIB_DIR/task-close-impl.sh" \
+        || { echo "task-close-impl.sh missing double-source guard" >&2; return 1; }
 }
 
-@test "lib: task-close-defer.sh passes bash -n" {
-    bash -n "$LIB_DIR/task-close-defer.sh"
-}
-
-@test "lib: task-close-sync.sh passes bash -n" {
-    bash -n "$LIB_DIR/task-close-sync.sh"
-}
-
-@test "lib: task-close-cleanup.sh passes bash -n" {
-    bash -n "$LIB_DIR/task-close-cleanup.sh"
-}
-
-@test "lib: task-close helpers have double-source guards" {
-    for helper in task-close-identify.sh task-close-complete.sh task-close-defer.sh \
-                  task-close-sync.sh task-close-cleanup.sh; do
-        if ! grep -q '_LOADED' "$LIB_DIR/$helper"; then
-            echo "$helper missing double-source guard" >&2
+@test "lib: task-close-impl.sh exports the section functions" {
+    for fn in section_identify section_complete section_defer \
+              section_extract_summary_data section_create_summary \
+              section_pre_verify section_cleanup; do
+        if ! grep -q "^${fn}()" "$LIB_DIR/task-close-impl.sh"; then
+            echo "task-close-impl.sh missing function: $fn" >&2
             return 1
         fi
     done

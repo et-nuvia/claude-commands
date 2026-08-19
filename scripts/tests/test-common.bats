@@ -182,7 +182,10 @@ teardown() {
 @test "load_current_task: returns 1 when file missing" {
     run load_current_task
     [ "$status" -eq 1 ]
-    [ -z "$CT_TASK_ID" ]
+    # CT_TASK_ID is set inside `run`'s subshell; under set -u it would
+    # also be unbound in our shell. Either way "no task loaded" means
+    # the var was never assigned a non-empty value.
+    [ -z "${CT_TASK_ID:-}" ]
 }
 
 @test "load_current_task: parses JSON with all core fields" {

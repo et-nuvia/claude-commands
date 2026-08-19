@@ -35,8 +35,51 @@ _gitlab_project_id() {
   echo "$id" | sed 's#/#%2F#g'
 }
 
-# Low-level wrapper that sets GIT_API_URL + GIT_TOKEN_FILE and delegates
-# to gitlab_api() from git-api.sh.
+# Low-level GitLab HTTP helper. Used internally by the adapter
+# (_gitlab_call below) and exported so script-level callers that
+# need raw GitLab API access (task-tracker-sync.sh, gitlab-tasks.sh)
+# can reach it after sourcing the gitlab platform adapter.
+#
+# Returns JSON on stdout. Exit codes match the contract:
+#   0 on 2xx
+#   2 on 404 (not found)
+#   1 on any other HTTP error (with stderr message)
+gitlab_api() {
+  local method="${1:?method required}"
+  local endpoint="${2:?endpoint required}"
+  shift 2
+
+  local api_url="${GIT_API_URL:-https://${_GITLAB_HOST}/api/v4}"
+  local token_file="${GIT_TOKEN_FILE:-$_GITLAB_TOKEN_FILE}"
+
+  [[ -f "$token_file" ]] || { echo "Error: GitLab token file not found: $token_file" >&2; return 1; }
+
+  local tmpfile
+  tmpfile=$(mktemp)
+  trap 'rm -f "$tmpfile"' RETURN
+
+  local http_code
+  http_code=$(curl -s -o "$tmpfile" -w '%{http_code}' \
+    --connect-timeout 10 --max-time 30 \
+    -X "$method" \
+    --header "PRIVATE-TOKEN: $(cat "$token_file")" \
+    "$@" \
+    "${api_url}${endpoint}")
+
+  if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+    cat "$tmpfile"
+    return 0
+  elif [[ "$http_code" == "404" ]]; then
+    return 2
+  else
+    echo "GitLab API error: HTTP ${http_code} on ${method} ${endpoint}" >&2
+    cat "$tmpfile" >&2
+    return 1
+  fi
+}
+
+# Adapter-internal wrapper: pins the host + token to the resolved
+# adapter state so adapter functions don't need to thread env vars.
 _gitlab_call() {
   local method="$1" endpoint="$2"
   shift 2

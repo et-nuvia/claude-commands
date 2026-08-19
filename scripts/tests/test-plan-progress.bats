@@ -313,9 +313,12 @@ EOF
     grep -q '\*\*Auto Review\*\*' "$cmd"
     grep -q '\*\*Review Type\*\*' "$cmd"
     grep -q '\*\*Fresh Context\*\*' "$cmd"
-    # Verify complexity-based defaults are documented
-    grep -q 'tdd_required: yes' "$cmd"
-    grep -q 'tdd_required: no' "$cmd"
+    # Verify complexity-based defaults are documented. The command
+    # file documents these in bold-key form ('TDD Required: yes') in
+    # the complexity-mapping bullets; an older format used a
+    # yaml-style 'tdd_required: yes'. Accept either.
+    grep -qE 'TDD Required: yes|tdd_required: yes' "$cmd"
+    grep -qE 'TDD Required: no|tdd_required: no' "$cmd"
 }
 
 # =============================================================================

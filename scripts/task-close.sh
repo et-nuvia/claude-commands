@@ -52,12 +52,9 @@ source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
 
-# Source section helpers
-source "${SCRIPT_DIR}/lib/task-close-identify.sh"
-source "${SCRIPT_DIR}/lib/task-close-complete.sh"
-source "${SCRIPT_DIR}/lib/task-close-defer.sh"
-source "${SCRIPT_DIR}/lib/task-close-sync.sh"
-source "${SCRIPT_DIR}/lib/task-close-cleanup.sh"
+# Source the consolidated task-close implementation (formerly five
+# task-close-{identify,complete,defer,sync,cleanup}.sh fragments).
+source "${SCRIPT_DIR}/lib/task-close-impl.sh"
 
 # Global variables
 OUTPUT_MODE="json"  # json or raw

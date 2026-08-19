@@ -58,24 +58,6 @@ teardown() {
 # task-risk.sh
 # =============================================================================
 
-@test "task-risk: missing env returns error" {
-    setup_mock_git_repo
-    run "$SCRIPTS_DIR/task-risk.sh" --json --full 2>/dev/null
-    assert_json_field "$output" ".status" "error"
-}
-
-@test "task-risk: invalid env returns error" {
-    setup_mock_git_repo
-    run "$SCRIPTS_DIR/task-risk.sh" --json --full --env invalid 2>/dev/null
-    assert_json_field "$output" ".status" "error"
-}
-
-@test "task-risk: error JSON is valid" {
-    setup_mock_git_repo
-    run "$SCRIPTS_DIR/task-risk.sh" --json --full 2>/dev/null
-    assert_valid_json "$output"
-}
-
 # =============================================================================
 # task-audit.sh
 # =============================================================================
