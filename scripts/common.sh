@@ -19,6 +19,11 @@ fi
 if ! declare -f is_in_worktree &>/dev/null; then
     source "${_COMMON_DIR}/lib/worktree-utils.sh" 2>/dev/null || true
 fi
+# Source git utilities if not already loaded (detect_base_branch, used to
+# derive parent_branch in task worktrees where the TSK doc doesn't record it)
+if ! declare -f detect_base_branch &>/dev/null; then
+    source "${_COMMON_DIR}/lib/git-utils.sh" 2>/dev/null || true
+fi
 
 # Validate and normalize a 6-char hex Task ID to uppercase
 # Usage: normalize_task_id "a3f2b9"  → "A3F2B9"
@@ -83,10 +88,90 @@ _resolve_current_task_path() {
   fi
 }
 
+# Echo the 6-char uppercase Task ID a task worktree encodes in its directory
+# name (.worktrees/<task_id>), or return 1 if not in a task worktree.
+# A "task worktree" is a linked worktree whose basename is a 6-hex Task ID —
+# for these, the worktree itself is the source of truth for task identity and
+# any .current-task file is ignored.
+_worktree_task_id() {
+  declare -f is_in_worktree &>/dev/null || return 1
+  is_in_worktree || return 1
+  local root base
+  root=$(get_worktree_root 2>/dev/null) || return 1
+  base=$(basename "$root")
+  [[ "$base" =~ ^[A-Fa-f0-9]{6}$ ]] || return 1
+  echo "$base" | tr 'a-f' 'A-F'
+}
+
+# Populate the non-derivable CT_* extras from a TSK document: the start date
+# (Timeline → **Started**) and external tracker (External Tracking → Asana GID
+# / GitLab issue). These aren't recoverable from worktree structure, so the
+# TSK doc is their source of truth. Validation rejects unfilled [placeholder]
+# values so partially-templated docs don't yield garbage. Never fails.
+_load_metadata_from_tsk() {
+  local doc="$1" val
+  [[ -f "$doc" ]] || return 0
+
+  # Started date (Timeline section) — must look like a real ISO date.
+  val=$(grep -m1 -iE '^\*\*Started\*\*:' "$doc" 2>/dev/null \
+        | sed -E 's/^\*\*Started\*\*:[[:space:]]*//' | tr -d '[]' || true)
+  [[ "$val" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]] && CT_STARTED="$val"
+
+  # External tracker — Asana block takes precedence, then GitLab.
+  if grep -qiE '^\*\*Asana\*\*:' "$doc" 2>/dev/null; then
+    val=$(grep -m1 -iE '^-[[:space:]]*Task GID:' "$doc" 2>/dev/null \
+          | sed -E 's/.*Task GID:[[:space:]]*//' | tr -d '[]' || true)
+    if [[ "$val" =~ ^[0-9]+$ ]]; then
+      CT_TRACKER_BACKEND="asana"; CT_TRACKER_ID="$val"; CT_ASANA_GID="$val"
+      val=$(grep -m1 -iE '^-[[:space:]]*Task URL:' "$doc" 2>/dev/null \
+            | sed -E 's/.*Task URL:[[:space:]]*//' | tr -d '[]' || true)
+      [[ "$val" =~ ^https?:// ]] && CT_TRACKER_URL="$val"
+    fi
+  elif grep -qiE '^\*\*GitLab\*\*:' "$doc" 2>/dev/null; then
+    val=$(grep -m1 -iE '^-[[:space:]]*Issue:' "$doc" 2>/dev/null \
+          | sed -E 's/.*Issue:[[:space:]]*//' | tr -d '[]#' || true)
+    if [[ "$val" =~ ^[0-9]+$ ]]; then
+      CT_TRACKER_BACKEND="gitlab"; CT_TRACKER_ID="$val"
+      val=$(grep -m1 -iE '^-[[:space:]]*Issue URL:' "$doc" 2>/dev/null \
+            | sed -E 's/.*Issue URL:[[:space:]]*//' | tr -d '[]' || true)
+      [[ "$val" =~ ^https?:// ]] && CT_TRACKER_URL="$val"
+    fi
+  fi
+  return 0
+}
+
+# Given CT_TASK_ID is already set, fill the remaining context that is NOT
+# carried by a .current-task file: current branch, parent (fork point), the TSK
+# document path (find_primary is worktree-aware), and the TSK-sourced extras
+# (started, external tracker). Only fills fields still empty, so callers that
+# already know a value (e.g. the worktree's branch) keep it. Never fails.
+_derive_task_context_extras() {
+  [[ -z "$CT_BRANCH" ]] && CT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  if [[ -z "$CT_PARENT_BRANCH" ]] && declare -f detect_base_branch &>/dev/null; then
+    CT_PARENT_BRANCH=$(detect_base_branch 2>/dev/null || echo "")
+  fi
+  if [[ -z "$CT_TASK_DOC" ]] && declare -f find_primary &>/dev/null; then
+    CT_TASK_DOC=$(find_primary "$CT_TASK_ID" 2>/dev/null || echo "")
+  fi
+  [[ -n "$CT_TASK_DOC" ]] && _load_metadata_from_tsk "$CT_TASK_DOC"
+  [[ "$CT_TRACKER_BACKEND" == "asana" ]] && CT_ASANA_GID="$CT_TRACKER_ID"
+  return 0
+}
+
 # Load all fields from .current-task (JSON format) into global variables
 # Sets: CT_TASK_ID, CT_TASK_DOC, CT_BRANCH, CT_PARENT_BRANCH, CT_STARTED,
 #       CT_TRACKER_BACKEND, CT_TRACKER_ID, CT_TRACKER_URL, CT_ASANA_GID
-# Returns 0 if file exists and task_id was loaded, 1 otherwise
+# Returns 0 if task context was loaded, 1 otherwise.
+#
+# Resolution order:
+#   1. TASK worktree (.worktrees/<task_id>): the worktree IS the source of
+#      truth. Identity derived from structure, extras from the TSK doc, and any
+#      .current-task file is IGNORED.
+#   2. .current-task JSON file, when present (the source of truth in a plain
+#      checkout).
+#   3. Fallback: a task branch name (feature/<task_id>-…) with no file — derive
+#      identity from the branch and extras from the TSK doc, so a checkout on a
+#      task branch is never "not found" just because the file is missing.
 # Usage:
 #   if load_current_task; then
 #     echo "Working on $CT_TASK_ID from $CT_TASK_DOC"
@@ -103,8 +188,28 @@ load_current_task() {
   CT_TRACKER_URL=""
   CT_WORKTREE_PATH=""
 
+  # ── 1. Task worktree: derive deterministically, ignore any .current-task ──
+  local wt_task_id
+  if wt_task_id=$(_worktree_task_id 2>/dev/null); then
+    CT_TASK_ID="$wt_task_id"
+    CT_WORKTREE_PATH=$(get_worktree_root 2>/dev/null || echo "")
+    _derive_task_context_extras
+    return 0
+  fi
+
+  # ── 2. .current-task file (source of truth in a plain checkout) ──
   local ct_path
-  ct_path=$(_resolve_current_task_path) || return 1
+  if ! ct_path=$(_resolve_current_task_path); then
+    # ── 3. No file — fall back to the task branch name (feature/<id>-…) ──
+    local branch branch_id
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    branch_id=$(echo "$branch" | sed -n 's|^[^/]*/\([A-Fa-f0-9]\{6\}\)-.*|\1|p')
+    [[ -z "$branch_id" ]] && return 1
+    CT_TASK_ID=$(echo "$branch_id" | tr 'a-f' 'A-F')
+    CT_BRANCH="$branch"
+    _derive_task_context_extras
+    return 0
+  fi
 
   # Parse JSON — fail if not valid JSON
   local json
@@ -149,6 +254,13 @@ write_current_task() {
   local task_doc="$4"
   local tracker_backend="${5:-}"
   local tracker_id="${6:-}"
+
+  # In a task worktree the worktree IS the source of truth — do not create or
+  # update a .current-task file there (load_current_task ignores it anyway).
+  if _worktree_task_id &>/dev/null; then
+    return 0
+  fi
+
   local started
   started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
