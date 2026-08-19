@@ -14,6 +14,9 @@ profile, and get a consistent workflow across every project.
 - [Getting Started](01-getting-started) — install, profile, first command
 - [Mental Model](02-mental-model) — how commands, scripts, skills, and
   profiles fit together
+- [The Profile File](13-profile-and-environment) — the per-machine
+  `active.yaml`: what goes in it, what's valid, and why environment is
+  declared rather than inferred
 - [PROJECT.yaml Reference](03-project-yaml) — required and optional fields
 - [Command Catalog](04-command-catalog) — every command, grouped by purpose
 
