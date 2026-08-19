@@ -11,12 +11,8 @@
 
 set -euo pipefail
 
-# Honor CLAUDE_HOME for non-default install locations. Same pattern as
-# track-command.sh; see that file for the rationale on not using readonly.
-CLAUDE_HOME="${CLAUDE_HOME:-${HOME}/.claude}"
-TRACKING_DIR="${CLAUDE_HOME}/tracking"
-SESSION_FILE="${CLAUDE_HOME}/.tracking-session"
-SUBAGENT_SESSION_DIR="${CLAUDE_HOME}/.subagent-sessions"
+readonly TRACKING_DIR="${HOME}/.claude/tracking"
+readonly SESSION_FILE="${HOME}/.claude/.tracking-session"
 
 mkdir -p "${TRACKING_DIR}"
 
@@ -73,6 +69,7 @@ TRACKING_FILE="${TRACKING_DIR}/${TODAY}.json"
 if [[ "${HOOK_EVENT}" == "SubagentStart" ]]; then
 
   # Save start time for duration calculation at stop
+  SUBAGENT_SESSION_DIR="${HOME}/.claude/.subagent-sessions"
   mkdir -p "${SUBAGENT_SESSION_DIR}"
   echo "${TIMESTAMP}" > "${SUBAGENT_SESSION_DIR}/${AGENT_ID}"
 
@@ -103,17 +100,20 @@ elif [[ "${HOOK_EVENT}" == "SubagentStop" ]]; then
   TRANSCRIPT_PATH=$(echo "${HOOK_INPUT}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('agent_transcript_path',''))" 2>/dev/null || echo "")
 
   # Calculate duration from saved start time
-  SUBAGENT_SESSION_FILE="${SUBAGENT_SESSION_DIR}/${AGENT_ID}"
+  SUBAGENT_SESSION_FILE="${HOME}/.claude/.subagent-sessions/${AGENT_ID}"
   START_TIME=""
   if [[ -f "${SUBAGENT_SESSION_FILE}" ]]; then
     START_TIME="$(cat "${SUBAGENT_SESSION_FILE}")"
     rm -f "${SUBAGENT_SESSION_FILE}"
   fi
 
-  # Parse transcript for model, token usage, and cost
+  # Parse transcript for model, token usage, and cost via the shared library
+  # (same parser used by track-session.sh, so subagent + session fields match).
+  USAGE_JSON="$(python3 "${HOME}/.claude/scripts/lib/transcript-usage.py" "${TRANSCRIPT_PATH}" 2>/dev/null || echo '{}')"
+
   ENTRY_JSON=$(AGENT_ID="${AGENT_ID}" AGENT_TYPE="${AGENT_TYPE}" SESSION_ID="${SESSION_ID}" \
   PARENT_COMMAND="${PARENT_COMMAND}" TIMESTAMP="${TIMESTAMP}" \
-  START_TIME="${START_TIME}" TRANSCRIPT_PATH="${TRANSCRIPT_PATH}" python3 - <<'PYEOF'
+  START_TIME="${START_TIME}" USAGE_JSON="${USAGE_JSON}" python3 - <<'PYEOF'
 import json, os, re
 from datetime import datetime, timezone
 
@@ -132,62 +132,7 @@ if start_time:
     diff = parse_ts(e["TIMESTAMP"]) - parse_ts(start_time)
     duration = int(abs(diff.total_seconds()))
 
-# Parse transcript JSONL for model and token usage
-model = ""
-total_input = 0
-total_output = 0
-total_cache_read = 0
-total_cache_create = 0
-api_calls = 0
-
-transcript_path = e.get("TRANSCRIPT_PATH", "")
-if transcript_path:
-    # Expand ~ in path
-    transcript_path = os.path.expanduser(transcript_path)
-    try:
-        with open(transcript_path) as f:
-            for line in f:
-                try:
-                    entry = json.loads(line)
-                    msg = entry.get("message", {})
-                    if msg.get("role") == "assistant" and "usage" in msg:
-                        u = msg["usage"]
-                        total_input += u.get("input_tokens", 0)
-                        total_output += u.get("output_tokens", 0)
-                        total_cache_read += u.get("cache_read_input_tokens", 0)
-                        total_cache_create += u.get("cache_creation_input_tokens", 0)
-                        model = msg.get("model", model)
-                        api_calls += 1
-                except (json.JSONDecodeError, KeyError):
-                    continue
-    except FileNotFoundError:
-        pass
-
-# Estimate cost (approximate per-model pricing)
-cost = 0.0
-if model and (total_input + total_output) > 0:
-    # Pricing per million tokens (input, output, cache_read, cache_create)
-    pricing = {
-        "opus":   {"input": 15.0, "output": 75.0, "cache_read": 1.50, "cache_create": 18.75},
-        "sonnet": {"input":  3.0, "output": 15.0, "cache_read": 0.30, "cache_create":  3.75},
-        "haiku":  {"input":  0.8, "output":  4.0, "cache_read": 0.08, "cache_create":  1.00},
-    }
-    tier = "sonnet"  # default
-    model_lower = model.lower()
-    if "opus" in model_lower:
-        tier = "opus"
-    elif "haiku" in model_lower:
-        tier = "haiku"
-    elif "sonnet" in model_lower:
-        tier = "sonnet"
-
-    p = pricing[tier]
-    cost = (
-        (total_input * p["input"] / 1_000_000) +
-        (total_output * p["output"] / 1_000_000) +
-        (total_cache_read * p["cache_read"] / 1_000_000) +
-        (total_cache_create * p["cache_create"] / 1_000_000)
-    )
+usage = json.loads(e.get("USAGE_JSON") or "{}")
 
 result = {
     "type":             "subagent",
@@ -198,15 +143,8 @@ result = {
     "parent_command":   e["PARENT_COMMAND"] or None,
     "timestamp":        e["TIMESTAMP"],
     "duration_seconds": duration,
-    "model":            model or None,
-    "api_calls":        api_calls,
-    "input_tokens":     total_input,
-    "output_tokens":    total_output,
-    "cache_read_tokens":   total_cache_read,
-    "cache_create_tokens": total_cache_create,
-    "total_tokens":     total_input + total_output + total_cache_read + total_cache_create,
-    "cost_estimated":   round(cost, 4) if cost > 0 else None,
 }
+result.update(usage)
 print(json.dumps(result))
 PYEOF
 )

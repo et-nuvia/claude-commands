@@ -7,7 +7,7 @@ set -euo pipefail
 #   ~/.claude/scripts/plan-implementation.sh [--json|--raw] [--full|--section] [--source <path|url|description>]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags:
@@ -124,6 +124,8 @@ section_load() {
     local source_type="unknown"
     local source_data=""
     local dsn_doc="" dsn_data=""
+    local inv_doc="" inv_data=""
+    local arc_doc="" plan_notes_present="false"
 
     if [[ -f "$SOURCE" ]]; then
         # File path - read task document
@@ -141,7 +143,27 @@ section_load() {
                 dsn_data=$(cat "$dsn_doc" 2>/dev/null || echo "")
                 log "${GREEN}✓${NC} Found design document: $(basename "$dsn_doc")"
             fi
+            # Check for an INV (investigation report) — for investigation-driven
+            # tasks it carries the confirmed root cause the plan must build on.
+            inv_doc=$(find "$(dirname "$SOURCE")" -name "${task_id_match}-*-INV-*.md" 2>/dev/null | sort -r | head -1 || echo "")
+            if [[ -n "$inv_doc" ]] && [[ -f "$inv_doc" ]]; then
+                inv_data=$(cat "$inv_doc" 2>/dev/null || echo "")
+                log "${GREEN}✓${NC} Found investigation report: $(basename "$inv_doc")"
+            fi
         fi
+        # ARC linkage (advisory, never blocks): /feature-to-task writes a
+        # "## Related ARC" reference and a "## Notes for /task-plan" section
+        # (suggested phase structure + test-prep gaps) into ARC-derived TSKs.
+        arc_doc=$(grep -oE '[^ `"()]*-ARC-[^ `"()]*\.md' "$SOURCE" 2>/dev/null | head -1 || echo "")
+        if [[ -n "$arc_doc" ]]; then
+            if [[ -f "$arc_doc" ]]; then
+                log "${GREEN}✓${NC} Found linked ARC document: $(basename "$arc_doc")"
+            else
+                log "${YELLOW}⚠${NC} TSK references ARC but file not found: $arc_doc"
+                arc_doc=""
+            fi
+        fi
+        grep -qE '^##[[:space:]]+Notes for /task-plan' "$SOURCE" 2>/dev/null && plan_notes_present="true"
     elif [[ "$SOURCE" =~ ^#?[0-9]+$ ]]; then
         # Issue number
         source_type="issue_number"
@@ -159,12 +181,24 @@ section_load() {
         log "${GREEN}✓${NC} Using feature description"
     fi
 
+    # ADR list (gated: empty array when docs/adr/ doesn't exist)
+    local adr_files_json="[]"
+    if [[ -d "docs/adr" ]]; then
+        adr_files_json=$(find "docs/adr" -maxdepth 1 -type f -name '*.md' 2>/dev/null \
+            | sort | jq -R . | jq -sc . 2>/dev/null || echo "[]")
+    fi
+
     REQUIREMENTS_DATA=$(jq -n \
         --arg type "$source_type" \
         --arg data "$source_data" \
         --arg dsn_doc "${dsn_doc:-}" \
         --arg dsn_data "${dsn_data:-}" \
-        '{source_type: $type, source_data: $data, dsn_doc: (if $dsn_doc == "" then null else $dsn_doc end), dsn_data: (if $dsn_data == "" then null else $dsn_data end)}')
+        --arg inv_doc "${inv_doc:-}" \
+        --arg inv_data "${inv_data:-}" \
+        --arg arc_doc "${arc_doc:-}" \
+        --argjson plan_notes_present "$plan_notes_present" \
+        --argjson adr_files "$adr_files_json" \
+        '{source_type: $type, source_data: $data, dsn_doc: (if $dsn_doc == "" then null else $dsn_doc end), dsn_data: (if $dsn_data == "" then null else $dsn_data end), inv_doc: (if $inv_doc == "" then null else $inv_doc end), inv_data: (if $inv_data == "" then null else $inv_data end), arc_doc: (if $arc_doc == "" then null else $arc_doc end), plan_notes_present: $plan_notes_present, adr_files: $adr_files}')
 
     if [[ "$SECTION" == "load" ]]; then
         exit_with_json "success" "Requirements loaded" "" \
@@ -349,13 +383,13 @@ section_review() {
                 while IFS= read -r kw; do
                     [[ -z "$kw" ]] && continue
                     # Try exact match first, then stem match (strip common suffixes)
-                    if echo "$pln_lower" | grep -qF "$kw"; then
+                    if echo "$pln_lower" | grep -qF -- "$kw"; then
                         match_count=$((match_count + 1))
                     else
                         # Simple suffix stemming: strip ing/ed/tion/ment/able/ness/ity/ies/ying
                         local stem
                         stem=$(echo "$kw" | sed -E 's/(ating|ting|ing|ment|tion|sion|able|ible|ness|ity|ies|ied|ying)$//')
-                        if [[ ${#stem} -ge 4 ]] && echo "$pln_lower" | grep -qF "$stem"; then
+                        if [[ ${#stem} -ge 4 ]] && echo "$pln_lower" | grep -qF -- "$stem"; then
                             match_count=$((match_count + 1))
                         fi
                     fi
@@ -419,12 +453,12 @@ section_review() {
                 pln_lower=$(echo "$pln_content" | tr '[:upper:]' '[:lower:]')
                 while IFS= read -r kw; do
                     [[ -z "$kw" ]] && continue
-                    if echo "$pln_lower" | grep -qF "$kw"; then
+                    if echo "$pln_lower" | grep -qF -- "$kw"; then
                         dec_match_count=$((dec_match_count + 1))
                     else
                         local stem
                         stem=$(echo "$kw" | sed -E 's/(ating|ting|ing|ment|tion|sion|able|ible|ness|ity|ies|ied|ying)$//')
-                        if [[ ${#stem} -ge 3 ]] && echo "$pln_lower" | grep -qF "$stem"; then
+                        if [[ ${#stem} -ge 3 ]] && echo "$pln_lower" | grep -qF -- "$stem"; then
                             dec_match_count=$((dec_match_count + 1))
                         fi
                     fi
@@ -449,6 +483,66 @@ section_review() {
             else
                 log "${GREEN}✓${NC} All ${#dsn_decisions[@]} DSN decisions appear covered"
             fi
+
+            # ── Check 0b: Deferred Decisions coverage ──
+            # Each "### Deferred N: Title" in the DSN must map to an
+            # investigation subtask in the plan (the deferred list drives
+            # Phase 1 planning). A plan that silently drops deferred
+            # decisions skips the investigation phase entirely.
+            local dsn_deferred=()
+            while IFS= read -r def_line; do
+                local def_title
+                def_title=$(echo "$def_line" | sed 's/^###[[:space:]]*Deferred[[:space:]]*[0-9]*:[[:space:]]*//')
+                if [[ -n "$def_title" ]]; then
+                    dsn_deferred+=("$def_title")
+                fi
+            done < <(grep -E '^###[[:space:]]+Deferred[[:space:]]+[0-9]+:' "$dsn_file" 2>/dev/null || true)
+
+            if [[ ${#dsn_deferred[@]} -gt 0 ]]; then
+                local unmatched_deferred=()
+                for def in "${dsn_deferred[@]}"; do
+                    local def_keywords
+                    def_keywords=$(echo "$def" | sed 's/`//g; s/\*\*//g; s/[(){}[\]]//g; s/[—–]/ /g' | \
+                        tr '[:upper:]' '[:lower:]' | tr -s ' ' '\n' | \
+                        grep -vE '^(the|and|for|with|from|this|that|into|have|been|will|should|must|also|only|each|both|all|add|use|set|run|get|new|can|not|its|has|are|was|may|but|our|any|via|per|to|in|on|at|of|is|or|a|an|if|no|do|be|as|by|design|needed)$' | \
+                        grep -E '.{3,}' | head -8 || echo "")
+
+                    local def_match_count=0
+                    local pln_lower
+                    pln_lower=$(echo "$pln_content" | tr '[:upper:]' '[:lower:]')
+                    while IFS= read -r kw; do
+                        [[ -z "$kw" ]] && continue
+                        if echo "$pln_lower" | grep -qF -- "$kw"; then
+                            def_match_count=$((def_match_count + 1))
+                        else
+                            local stem
+                            stem=$(echo "$kw" | sed -E 's/(ating|ting|ing|ment|tion|sion|able|ible|ness|ity|ies|ied|ying)$//')
+                            if [[ ${#stem} -ge 3 ]] && echo "$pln_lower" | grep -qF -- "$stem"; then
+                                def_match_count=$((def_match_count + 1))
+                            fi
+                        fi
+                    done <<< "$def_keywords"
+
+                    local def_kw_count
+                    def_kw_count=$(echo "$def_keywords" | grep -c '.' || echo 0)
+                    local def_threshold=2
+                    [[ $def_kw_count -le 2 ]] && def_threshold=1
+
+                    if [[ $def_match_count -lt $def_threshold ]]; then
+                        unmatched_deferred+=("$def")
+                    fi
+                done
+
+                if [[ ${#unmatched_deferred[@]} -gt 0 ]]; then
+                    for unmatched in "${unmatched_deferred[@]}"; do
+                        _add_issue "dsn_deferred_coverage" "DSN deferred decision" \
+                            "DSN deferred decision has no investigation subtask in plan: ${unmatched:0:120}" 0
+                    done
+                    log "${YELLOW}⚠${NC} ${#unmatched_deferred[@]} DSN deferred decision(s) have no investigation subtask"
+                else
+                    log "${GREEN}✓${NC} All ${#dsn_deferred[@]} DSN deferred decisions map to plan subtasks"
+                fi
+            fi
         fi
     fi
 
@@ -460,6 +554,16 @@ section_review() {
             task_starts+=("$i")
             task_ids+=("${BASH_REMATCH[1]}")
         fi
+    done
+
+    # Index every declared task id + phase number, so dependency refs can be
+    # validated as pointing at something that actually exists in this plan.
+    local -A known_task_ids=()
+    local -A known_phases=()
+    local _tid
+    for _tid in "${task_ids[@]}"; do
+        known_task_ids["$_tid"]=1
+        known_phases["${_tid%%.*}"]=1
     done
 
     # Process each task block
@@ -578,10 +682,32 @@ section_review() {
             fi
         fi
 
-        # Check 4: Dependency ordering — no forward references
-        if [[ -n "$deps" ]] && [[ "$deps" != "None" ]] && [[ "$deps" != "none" ]]; then
+        # Check 4: Dependencies must be DECLARED on every incomplete subtask.
+        # An omitted field is indistinguishable from "unknown", which forces the
+        # executor to serialize the whole plan (see compute_ready_items in
+        # plan-progress.sh). Requiring an explicit `none` is what makes parallel
+        # dispatch possible at all.
+        local deps_trim="${deps#"${deps%%[![:space:]]*}"}"
+        deps_trim="${deps_trim%"${deps_trim##*[![:space:]]}"}"
+
+        if [[ "$is_complete" == false ]] && { [[ -z "$deps_trim" ]] || [[ "$deps_trim" =~ ^\[.*\]$ ]]; }; then
+            _add_issue "dependency_missing" "Task $task_id" \
+                "Missing Dependencies field — declare it explicitly as 'none' or a list of Task N.M / 'Phase N complete' refs. Omitting it forces the executor to run the plan serially." "$heading_line"
+        fi
+
+        # Check 4b/4c/4d: ordering, dangling refs, self-reference
+        if [[ -n "$deps_trim" ]] && ! [[ "$deps_trim" =~ ^([Nn]one|N/A|n/a|-|\[.*\])$ ]]; then
             local dep_refs
-            dep_refs=$(echo "$deps" | grep -oE '[0-9]+\.[0-9]+' || echo "")
+            dep_refs=$(echo "$deps_trim" | grep -oE '[0-9]+\.[0-9]+' || echo "")
+            local phase_refs
+            phase_refs=$(echo "$deps_trim" | grep -oiE '[Pp]hase[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo "")
+
+            if [[ -z "$dep_refs" ]] && [[ -z "$phase_refs" ]]; then
+                _add_issue "dependency_unparseable" "Task $task_id" \
+                    "Dependencies '$deps_trim' contains no recognizable ref — use 'none', 'Task N.M' (comma-separated), or 'Phase N complete'" "$heading_line"
+            fi
+
+            local dep_ref
             for dep_ref in $dep_refs; do
                 local dep_major dep_minor task_major task_minor
                 dep_major=$(echo "$dep_ref" | cut -d. -f1)
@@ -589,10 +715,32 @@ section_review() {
                 task_major=$(echo "$task_id" | cut -d. -f1)
                 task_minor=$(echo "$task_id" | cut -d. -f2)
 
-                if [[ $dep_major -gt $task_major ]] || \
-                   { [[ $dep_major -eq $task_major ]] && [[ $dep_minor -ge $task_minor ]]; }; then
+                if [[ "$dep_ref" == "$task_id" ]]; then
+                    _add_issue "dependency_self" "Task $task_id" \
+                        "Task depends on itself — remove the self-reference" "$heading_line"
+                elif [[ $dep_major -gt $task_major ]] || \
+                     { [[ $dep_major -eq $task_major ]] && [[ $dep_minor -ge $task_minor ]]; }; then
                     _add_issue "dependency_order" "Task $task_id" \
                         "Forward dependency reference to Task $dep_ref — must depend on earlier tasks only" "$heading_line"
+                elif [[ -z "${known_task_ids[$dep_ref]:-}" ]]; then
+                    _add_issue "dependency_dangling" "Task $task_id" \
+                        "Depends on Task $dep_ref, which does not exist in this plan" "$heading_line"
+                fi
+            done
+
+            local phase_ref
+            for phase_ref in $phase_refs; do
+                local task_major
+                task_major=$(echo "$task_id" | cut -d. -f1)
+                # A mention of the task's own phase is prose framing, not an edge
+                # ("Phase 2 starts after Phase 1 complete") — skip it.
+                [[ $phase_ref -eq $task_major ]] && continue
+                if [[ -z "${known_phases[$phase_ref]:-}" ]]; then
+                    _add_issue "dependency_dangling" "Task $task_id" \
+                        "Depends on Phase $phase_ref, which has no subtasks in this plan" "$heading_line"
+                elif [[ $phase_ref -gt $task_major ]]; then
+                    _add_issue "dependency_order" "Task $task_id" \
+                        "Depends on Phase $phase_ref but lives in Phase $task_major — cannot depend on a later phase" "$heading_line"
                 fi
             done
         fi
@@ -610,12 +758,12 @@ section_review() {
     if [[ "$issue_count" -eq 0 ]]; then
         log "${GREEN}✓${NC} All checks passed"
         exit_with_json "review_passed" "Plan review passed — all checks OK" "" \
-            '"plan_file": '"$(echo "$pln_file" | jq -Rs .)"', "checks_run": 7, "issues_found": 0'
+            '"plan_file": '"$(echo "$pln_file" | jq -Rs .)"', "checks_run": 10, "issues_found": 0'
     else
         log "${YELLOW}⚠${NC} Found $issue_count issue(s)"
         exit_with_json "review_failed" "Plan review found $issue_count issue(s)" \
             "Fix the issues in the PLN document, then re-run --review" \
-            '"plan_file": '"$(echo "$pln_file" | jq -Rs .)"', "checks_run": 7, "issues_found": '"$issue_count"', "issues": '"$issues"
+            '"plan_file": '"$(echo "$pln_file" | jq -Rs .)"', "checks_run": 10, "issues_found": '"$issue_count"', "issues": '"$issues"
     fi
 }
 

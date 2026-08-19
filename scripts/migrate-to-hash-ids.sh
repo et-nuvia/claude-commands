@@ -46,8 +46,9 @@ REPO_ROOT=$(git -C "$DOCS_DIR" rev-parse --show-toplevel 2>/dev/null || \
 echo "Git repo root: $REPO_ROOT"
 echo ""
 
-# macOS/BSD sed compatibility
-if [[ "$(uname -s)" == "Darwin" ]]; then
+# macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
+source "${HOME}/.claude/scripts/lib/platform.sh"
+if env_is_darwin; then
   sedi() { sed -i '' "$@"; }
 else
   sedi() { sed -i "$@"; }

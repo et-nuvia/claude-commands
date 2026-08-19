@@ -140,10 +140,11 @@ test_common_sh() {
   fi
 
   # Test 1.1.11: Works on current OS
-  if [[ "$(uname -s)" == "Darwin" ]] || [[ "$(uname -s)" == "Linux" ]]; then
-    pass "Works on macOS or Linux (detected: $(uname -s))"
+  source "${HOME}/.claude/scripts/lib/platform.sh"
+  if env_is_darwin || env_is_linux; then
+    pass "Works on macOS or Linux (detected: $(env_platform))"
   else
-    fail "Works on macOS or Linux" "Unsupported OS: $(uname -s)"
+    fail "Works on macOS or Linux" "Unsupported platform: $(env_platform)"
   fi
 }
 test_templates_sh() {

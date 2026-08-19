@@ -9,7 +9,7 @@ set -euo pipefail
 #   ~/.claude/scripts/create-pr.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -113,8 +113,8 @@ section_analyze() {
     # Get diff stats
     DIFF_STAT=$(git diff "origin/$BASE_BRANCH...HEAD" --stat 2>/dev/null || echo "")
     FILES_CHANGED=$(git diff "origin/$BASE_BRANCH...HEAD" --numstat 2>/dev/null | wc -l)
-    LINES_ADDED=$(git diff "origin/$BASE_BRANCH...HEAD" --numstat 2>/dev/null | awk '{sum+=$1} END {print sum}')
-    LINES_REMOVED=$(git diff "origin/$BASE_BRANCH...HEAD" --numstat 2>/dev/null | awk '{sum+=$2} END {print sum}')
+    LINES_ADDED=$(git diff "origin/$BASE_BRANCH...HEAD" --numstat 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
+    LINES_REMOVED=$(git diff "origin/$BASE_BRANCH...HEAD" --numstat 2>/dev/null | awk '{sum+=$2} END {print sum+0}')
 
     local files_output
     files_output=$(git diff "origin/$BASE_BRANCH...HEAD" --numstat 2>/dev/null | awk '{print "{\"file\":\""$3"\",\"added\":"$1",\"removed\":"$2"}"}' || echo "")

@@ -13,6 +13,7 @@ set -euo pipefail
 #   claude-sync.sh --pull       # Only pull remote changes
 #   claude-sync.sh --push       # Only push local commits
 #   claude-sync.sh --status     # Show sync status (no changes)
+#   claude-sync.sh --install    # Install cron entry on this machine
 
 CLAUDE_DIR="${CLAUDE_DIR:-${HOME}/.claude}"
 LOG_FILE="${CLAUDE_DIR}/scripts/.sync.log"
@@ -157,6 +158,40 @@ do_status() {
   fi
 }
 
+do_install() {
+  local script_path="${CLAUDE_DIR}/scripts/claude-sync.sh"
+
+  [[ -x "${script_path}" ]] || die "Script not found or not executable at ${script_path}"
+
+  cd "${CLAUDE_DIR}" || die "CLAUDE_DIR ${CLAUDE_DIR} does not exist"
+  git rev-parse --git-dir >/dev/null 2>&1 || die "${CLAUDE_DIR} is not a git repo"
+  git remote get-url origin >/dev/null 2>&1 || die "No 'origin' remote configured in ${CLAUDE_DIR}"
+
+  local cron_line="*/15 * * * * ${script_path} --commit && ${script_path} --pull && ${script_path} --push >> /tmp/claude-sync.log 2>&1"
+  local marker="# Claude config sync: commit/pull/push every 15 minutes"
+
+  local existing
+  existing=$(crontab -l 2>/dev/null || echo "")
+
+  if echo "${existing}" | grep -Fq "${script_path}"; then
+    log "Cron entry already installed for ${script_path}"
+    echo "Already installed. Current entry:"
+    echo "${existing}" | grep -F "${script_path}"
+    return 0
+  fi
+
+  {
+    if [[ -n "${existing}" ]]; then
+      echo "${existing}"
+    fi
+    echo "${marker}"
+    echo "${cron_line}"
+  } | crontab -
+
+  log "Installed cron entry: ${cron_line}"
+  echo "Installed. Verify with: crontab -l | grep claude-sync"
+}
+
 main() {
   local mode="${1:-full}"
 
@@ -164,6 +199,11 @@ main() {
 
   if [[ "${mode}" == "--status" ]]; then
     do_status
+    return 0
+  fi
+
+  if [[ "${mode}" == "--install" ]]; then
+    do_install
     return 0
   fi
 

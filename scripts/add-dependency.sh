@@ -7,7 +7,7 @@ set -euo pipefail
 #   ~/.claude/scripts/add-dependency.sh [--json|--raw] [--full|--section] --package <name> [options]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -34,6 +34,13 @@ SECTION="full"      # full, validate, security, add, verify
 PACKAGE=""
 DEPENDENCY_TYPE=""  # python or nodejs
 IS_DEV=false
+SERVICE=""          # compose service to target (e.g. backend, frontend, app). Auto-detected if empty.
+
+# Resolved lazily for nodejs by resolve_node_service():
+NODE_SERVICE=""        # the compose service name
+NODE_SVC_DIR=""        # absolute build context dir (where package.json lives)
+NODE_BUILDER_IMAGE=""  # build-stage image that actually has npm (runtime image is distroless)
+DEFAULT_NODE_BUILDER="dhi.io/node:22-dev"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -115,6 +122,151 @@ is_license_allowed() {
 }
 
 #------------------------------------------------------------------------------
+# Node service resolution (multi-service aware)
+#
+# The runtime images in DHI-based projects are distroless (no shell, no npm) and
+# read_only:true, so `docker compose run <service> npm ...` cannot work. Instead
+# we run npm/version lookups in the service's BUILD-stage image (which has npm)
+# with the host build-context dir bind-mounted, so package.json/package-lock.json
+# are written back to the host. This also works for classic writable projects.
+#------------------------------------------------------------------------------
+
+# Echo the build context (dir holding package.json) for a compose service.
+compose_service_dir() {
+    local svc="$1"
+    docker compose config --format json 2>/dev/null \
+        | jq -r --arg s "$svc" '.services[$s].build.context // empty' 2>/dev/null
+}
+
+# Echo the dockerfile path for a compose service (relative to its context).
+compose_service_dockerfile() {
+    local svc="$1"
+    docker compose config --format json 2>/dev/null \
+        | jq -r --arg s "$svc" '.services[$s].build.dockerfile // "Dockerfile"' 2>/dev/null
+}
+
+# Pick the build-stage image that has npm. Prefer a `-dev` node FROM in the
+# service's Dockerfile (the DHI build stage); fall back to a sane default.
+resolve_builder_image() {
+    local dir="$1" dockerfile="$2" image=""
+    local path="${dir}/${dockerfile}"
+    if [[ -f "$path" ]]; then
+        # First node `-dev` build image referenced (DHI convention), else first node FROM.
+        image=$(grep -iE '^[[:space:]]*FROM[[:space:]]+[^[:space:]]*node:[^[:space:]]*-dev' "$path" \
+            | head -1 | awk '{print $2}')
+        if [[ -z "$image" ]]; then
+            image=$(grep -iE '^[[:space:]]*FROM[[:space:]]+[^[:space:]]*node:' "$path" \
+                | head -1 | awk '{print $2}')
+        fi
+    fi
+    echo "${image:-$DEFAULT_NODE_BUILDER}"
+}
+
+# Resolve NODE_SERVICE / NODE_SVC_DIR / NODE_BUILDER_IMAGE once. Honors --service;
+# otherwise auto-detects the single node service that has a package.json.
+resolve_node_service() {
+    [[ -n "$NODE_SERVICE" ]] && return 0
+
+    local svc="$SERVICE"
+    if [[ -z "$svc" ]]; then
+        # Auto-detect: compose services whose build context contains a package.json.
+        local candidates=()
+        local all_svcs
+        all_svcs=$(docker compose config --services 2>/dev/null || true)
+        local s dir
+        for s in $all_svcs; do
+            dir=$(compose_service_dir "$s")
+            [[ -n "$dir" && -f "${dir}/package.json" ]] && candidates+=("$s")
+        done
+        if [[ ${#candidates[@]} -eq 1 ]]; then
+            svc="${candidates[0]}"
+        elif [[ ${#candidates[@]} -gt 1 ]]; then
+            exit_with_json "error" "Multiple Node services found — specify one" \
+                "Found: ${candidates[*]}. Re-run with --service <name> (e.g. --service backend)."
+        else
+            # Fall back to legacy default for classic single-service projects.
+            svc="frontend"
+        fi
+    fi
+
+    local dir
+    dir=$(compose_service_dir "$svc")
+    [[ -z "$dir" ]] && dir="${PWD}/${svc}"   # convention fallback: ./<service>
+    if [[ ! -f "${dir}/package.json" ]]; then
+        exit_with_json "error" "No package.json for service '$svc'" \
+            "Looked in '${dir}'. Pass --service <name> matching a Node compose service."
+    fi
+
+    local dockerfile
+    dockerfile=$(compose_service_dockerfile "$svc")
+
+    NODE_SERVICE="$svc"
+    NODE_SVC_DIR="$dir"
+    NODE_BUILDER_IMAGE=$(resolve_builder_image "$dir" "$dockerfile")
+    log "${CYAN}Node service: $NODE_SERVICE  dir: $NODE_SVC_DIR  builder: $NODE_BUILDER_IMAGE${NC}"
+}
+
+# Run npm inside the build-stage image with the service dir mounted at /app.
+# All file changes (package.json, package-lock.json, node_modules) land on host.
+node_npm() {
+    resolve_node_service
+    docker run --rm \
+        -v "${NODE_SVC_DIR}:/app" -w /app \
+        -e npm_config_cache=/tmp/.npm \
+        --entrypoint npm "$NODE_BUILDER_IMAGE" "$@"
+}
+
+# Run trivy against the service dir. Prefer host trivy; else a trivy image.
+node_trivy_scan() {
+    resolve_node_service
+    if command -v trivy >/dev/null 2>&1; then
+        trivy fs --scanners vuln --quiet --format json "$NODE_SVC_DIR" 2>&1 || true
+    else
+        docker run --rm -v "${NODE_SVC_DIR}:/scan" \
+            aquasec/trivy:latest fs --scanners vuln --quiet --format json /scan 2>&1 || true
+    fi
+}
+
+# Run trivy against the project dir for Python. Prefer host trivy; else a
+# trivy image — mirrors node_trivy_scan since DHI app images don't ship trivy.
+python_trivy_scan() {
+    if command -v trivy >/dev/null 2>&1; then
+        trivy fs --scanners vuln --quiet --format json "$PWD" 2>&1 || true
+    else
+        docker run --rm -v "${PWD}:/scan" \
+            aquasec/trivy:latest fs --scanners vuln --quiet --format json /scan 2>&1 || true
+    fi
+}
+
+# Scan the project for the active dependency type, emitting Trivy JSON.
+project_trivy_scan() {
+    if [[ "$DEPENDENCY_TYPE" == "python" ]]; then
+        python_trivy_scan
+    else
+        node_trivy_scan
+    fi
+}
+
+# Given two Trivy JSON scans (before, after a package was added), emit the JSON
+# array of vulnerabilities present in `after` but NOT in `before` — i.e. those
+# the new package actually introduced. Keyed by VulnerabilityID + PkgName so we
+# never block a package for the project's pre-existing vuln debt.
+trivy_delta() {
+    local before="$1" after="$2"
+    jq -n --argjson before "$before" --argjson after "$after" '
+        def vulns:
+            [ .Results[]?.Vulnerabilities[]?
+              | { key: ((.VulnerabilityID // "?") + "|" + (.PkgName // "?")),
+                  severity: (.Severity // "UNKNOWN"),
+                  id: .VulnerabilityID, pkg: .PkgName } ];
+        ($before | vulns) as $b
+        | ($after | vulns) as $a
+        | ($b | map(.key)) as $bkeys
+        | [ $a[] | select(.key as $k | ($bkeys | index($k)) | not) ]
+    ' 2>/dev/null || echo "[]"
+}
+
+#------------------------------------------------------------------------------
 # Section Functions
 #------------------------------------------------------------------------------
 
@@ -151,7 +303,14 @@ section_validate() {
     elif [[ "$DEPENDENCY_TYPE" == "nodejs" ]]; then
         log "Checking npm for license information..."
         local npm_data
-        if ! npm_data=$(npm view "${PACKAGE}" license 2>&1); then
+        local npm_view_cmd
+        if command -v npm >/dev/null 2>&1; then
+            npm_view_cmd=(npm view "${PACKAGE}" license)
+        else
+            # Host has no npm (docker-only dev) — query the registry via a node image.
+            npm_view_cmd=(docker run --rm --entrypoint npm "$DEFAULT_NODE_BUILDER" view "${PACKAGE}" license)
+        fi
+        if ! npm_data=$("${npm_view_cmd[@]}" 2>&1); then
             if [[ "$SECTION" == "validate" ]]; then
                 exit_with_json "error" "Package not found on npm" \
                     "Package '$PACKAGE' does not exist or npm is unreachable"
@@ -168,10 +327,13 @@ section_validate() {
 
     # Check if license is allowed
     local license_status
-    if is_license_allowed "$license"; then
+    local license_rc
+    is_license_allowed "$license"
+    license_rc=$?
+    if [[ $license_rc -eq 0 ]]; then
         license_status="allowed"
         log "${GREEN}✓${NC} License is permissive ($license)"
-    elif [[ $? -eq 1 ]]; then
+    elif [[ $license_rc -eq 1 ]]; then
         license_status="forbidden"
         log "${RED}✗${NC} License is copyleft ($license)"
     else
@@ -260,50 +422,54 @@ section_security() {
 
     detect_dependency_type
 
-    # First, do a quick add to test (we'll remove after scan)
+    # Baseline scan BEFORE adding the package, so we can attribute vulnerabilities
+    # to THIS package (the delta) rather than the project's pre-existing vuln debt.
+    log "Capturing baseline vulnerability scan..."
+    local baseline_scan
+    baseline_scan=$(project_trivy_scan)
+    echo "$baseline_scan" | jq empty 2>/dev/null || baseline_scan='{}'
+
+    # Temporarily add the package (removed later if the caller doesn't keep it).
     log "Adding package temporarily for security scan..."
 
     if [[ "$DEPENDENCY_TYPE" == "python" ]]; then
         if [[ "$IS_DEV" == "true" ]]; then
-            docker compose run --rm app uv add --dev "$PACKAGE" >/dev/null 2>&1 || true
+            docker compose run --rm "${SERVICE:-app}" uv add --dev "$PACKAGE" >/dev/null 2>&1 || true
         else
-            docker compose run --rm app uv add "$PACKAGE" >/dev/null 2>&1 || true
+            docker compose run --rm "${SERVICE:-app}" uv add "$PACKAGE" >/dev/null 2>&1 || true
         fi
     elif [[ "$DEPENDENCY_TYPE" == "nodejs" ]]; then
         if [[ "$IS_DEV" == "true" ]]; then
-            docker compose run --rm frontend npm install --save-dev "$PACKAGE" >/dev/null 2>&1 || true
+            node_npm install --save-exact --save-dev "$PACKAGE" >/dev/null 2>&1 || true
         else
-            docker compose run --rm frontend npm install "$PACKAGE" >/dev/null 2>&1 || true
+            node_npm install --save-exact "$PACKAGE" >/dev/null 2>&1 || true
         fi
     fi
 
-    # Run Trivy scan
-    log "Scanning for vulnerabilities..."
-    local scan_result
-    local service
-    if [[ "$DEPENDENCY_TYPE" == "python" ]]; then
-        service="app"
-    else
-        service="frontend"
-    fi
+    # Re-scan and compute the delta introduced by this package.
+    log "Scanning for vulnerabilities introduced by ${PACKAGE}..."
+    local after_scan delta_scan
+    after_scan=$(project_trivy_scan)
+    echo "$after_scan" | jq empty 2>/dev/null || after_scan='{}'
+    delta_scan=$(trivy_delta "$baseline_scan" "$after_scan")
 
-    scan_result=$(docker compose run --rm "$service" trivy fs --scanners vuln --quiet --format json . 2>&1 || true)
-
-    # Parse vulnerabilities
+    # Count vulnerabilities by severity — from the DELTA, not the whole project.
     local critical_count=0
     local high_count=0
     local medium_count=0
     local low_count=0
+    local baseline_high=0
 
-    if [[ -n "$scan_result" ]] && echo "$scan_result" | jq empty 2>/dev/null; then
-        # Count vulnerabilities by severity
-        critical_count=$(echo "$scan_result" | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' 2>/dev/null || echo 0)
-        high_count=$(echo "$scan_result" | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' 2>/dev/null || echo 0)
-        medium_count=$(echo "$scan_result" | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' 2>/dev/null || echo 0)
-        low_count=$(echo "$scan_result" | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "LOW")] | length' 2>/dev/null || echo 0)
+    if echo "$delta_scan" | jq empty 2>/dev/null; then
+        critical_count=$(echo "$delta_scan" | jq '[.[] | select(.severity == "CRITICAL")] | length' 2>/dev/null || echo 0)
+        high_count=$(echo "$delta_scan" | jq '[.[] | select(.severity == "HIGH")] | length' 2>/dev/null || echo 0)
+        medium_count=$(echo "$delta_scan" | jq '[.[] | select(.severity == "MEDIUM")] | length' 2>/dev/null || echo 0)
+        low_count=$(echo "$delta_scan" | jq '[.[] | select(.severity == "LOW")] | length' 2>/dev/null || echo 0)
     fi
+    baseline_high=$(echo "$baseline_scan" | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length' 2>/dev/null || echo 0)
 
-    log "${CYAN}Vulnerabilities: CRITICAL=$critical_count HIGH=$high_count MEDIUM=$medium_count LOW=$low_count${NC}"
+    log "${CYAN}New vulnerabilities from ${PACKAGE}: CRITICAL=$critical_count HIGH=$high_count MEDIUM=$medium_count LOW=$low_count${NC}"
+    log "${CYAN}(Pre-existing project HIGH+CRITICAL, not attributable to this package: $baseline_high)${NC}"
 
     # If running only this section, return now
     if [[ "$SECTION" == "security" ]]; then
@@ -402,25 +568,27 @@ section_add() {
     detect_dependency_type
 
     local add_result
-    local add_cmd
+    local -a add_cmd
 
     if [[ "$DEPENDENCY_TYPE" == "python" ]]; then
+        local py_service="${SERVICE:-app}"
         if [[ "$IS_DEV" == "true" ]]; then
-            add_cmd="docker compose run --rm app uv add --dev $PACKAGE"
+            add_cmd=(docker compose run --rm "$py_service" uv add --dev "$PACKAGE")
         else
-            add_cmd="docker compose run --rm app uv add $PACKAGE"
+            add_cmd=(docker compose run --rm "$py_service" uv add "$PACKAGE")
         fi
     elif [[ "$DEPENDENCY_TYPE" == "nodejs" ]]; then
+        # Pin exact versions (no caret) per dependency policy.
         if [[ "$IS_DEV" == "true" ]]; then
-            add_cmd="docker compose run --rm frontend npm install --save-dev $PACKAGE"
+            add_cmd=(node_npm install --save-exact --save-dev "$PACKAGE")
         else
-            add_cmd="docker compose run --rm frontend npm install $PACKAGE"
+            add_cmd=(node_npm install --save-exact "$PACKAGE")
         fi
     fi
 
-    log "Running: $add_cmd"
+    log "Running: ${add_cmd[*]}"
 
-    if ! add_result=$(eval "$add_cmd" 2>&1); then
+    if ! add_result=$("${add_cmd[@]}" 2>&1); then
         if [[ "$SECTION" == "add" ]]; then
             exit_with_json "error" "Failed to add package" "$add_result"
         else
@@ -484,7 +652,10 @@ section_verify() {
         docker compose run --rm app uv sync --frozen >/dev/null 2>&1
 
     elif [[ "$DEPENDENCY_TYPE" == "nodejs" ]]; then
-        version=$(docker compose run --rm frontend npm list "$PACKAGE" 2>/dev/null | grep "$PACKAGE@" | sed -n 's/.*@\([^ ]*\).*/\1/p' || echo "")
+        version=$(node_npm pkg get "dependencies.${PACKAGE}" devDependencies."${PACKAGE}" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^"]*' | head -1 || echo "")
+        if [[ -z "$version" ]]; then
+            version=$(node_npm ls "$PACKAGE" --depth=0 2>/dev/null | grep "$PACKAGE@" | sed -n 's/.*@\([^ ]*\).*/\1/p' | head -1 || echo "")
+        fi
         lock_file="package-lock.json"
 
         if [[ -z "$version" ]]; then
@@ -494,12 +665,8 @@ section_verify() {
 
         log "${CYAN}Installed version: $version${NC}"
 
-        # npm should have already pinned it in package.json
-        log "Verifying lock file..."
-        docker compose run --rm frontend npm install >/dev/null 2>&1
-
-        log "Verifying deterministic install..."
-        docker compose run --rm frontend npm ci >/dev/null 2>&1
+        log "Verifying deterministic install (npm ci)..."
+        node_npm ci >/dev/null 2>&1
     fi
 
     # If running only this section, return now
@@ -551,27 +718,40 @@ main() {
             --dev) IS_DEV=true; shift ;;
             --python) DEPENDENCY_TYPE="python"; shift ;;
             --nodejs) DEPENDENCY_TYPE="nodejs"; shift ;;
+            --service) SERVICE="$2"; shift 2 ;;
             --help|-h)
-                echo "Usage: add-dependency.sh [--json|--raw] [--full|--section] <package> [options]"
+                echo "Usage: add-dependency.sh [--json|--raw] [--full|--section] --package <name> [options]"
                 echo ""
                 echo "Sections: --validate, --security, --add, --verify, --full (default)"
-                echo "Options: --dev, --python, --nodejs"
+                echo "Options: --dev, --python, --nodejs, --service <name>"
+                echo ""
+                echo "  --service <name>  Target a specific compose service (e.g. backend,"
+                echo "                    frontend, app). Required when a project has more than"
+                echo "                    one Node service; auto-detected otherwise."
                 exit 0
-                ;;
-            -*)
-                echo "Unknown flag: $1" >&2
-                exit 1
                 ;;
             --package)
                 PACKAGE="$2"
                 shift 2
                 ;;
+            -*)
+                echo "Unknown flag: $1" >&2
+                exit 1
+                ;;
             *)
-                echo "Unknown option: $1" >&2
+                echo "Unknown option: $1 (use --package <name>)" >&2
                 exit 2
                 ;;
         esac
     done
+
+    # Validate PACKAGE against a safe charset before it's ever used in a shell
+    # command — blocks shell injection via --package while still allowing
+    # extras (pkg[extra]) and version pins (pkg==1.2.3, pkg@1.2.3).
+    if [[ -n "$PACKAGE" ]] && [[ ! "$PACKAGE" =~ ^[A-Za-z0-9_.@/:\[\]=\<\>!,-]+$ ]]; then
+        exit_with_json "error" "Invalid package name" \
+            "Package name '$PACKAGE' contains disallowed characters."
+    fi
 
     # Execute sections based on flag
     case "$SECTION" in
@@ -599,9 +779,9 @@ main() {
             # Full success - return complete results
             local final_version=""
             if [[ "$DEPENDENCY_TYPE" == "python" ]]; then
-                final_version=$(docker compose run --rm app uv pip show "$PACKAGE" 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo "unknown")
+                final_version=$(docker compose run --rm "${SERVICE:-app}" uv pip show "$PACKAGE" 2>/dev/null | grep "^Version:" | awk '{print $2}' || echo "unknown")
             elif [[ "$DEPENDENCY_TYPE" == "nodejs" ]]; then
-                final_version=$(docker compose run --rm frontend npm list "$PACKAGE" 2>/dev/null | grep "$PACKAGE@" | sed -n 's/.*@\([^ ]*\).*/\1/p' || echo "unknown")
+                final_version=$(node_npm pkg get "dependencies.${PACKAGE}" devDependencies."${PACKAGE}" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^"]*' | head -1 || echo "unknown")
             fi
 
             local json=$(jq -n \

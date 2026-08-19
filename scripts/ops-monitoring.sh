@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# macOS/BSD sed compatibility
-if [[ "$(uname -s)" == "Darwin" ]]; then
+# macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
+source "${HOME}/.claude/scripts/lib/platform.sh"
+if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else
     sedi() { sed -i "$@"; }
@@ -47,6 +48,11 @@ source "${SCRIPT_DIR}/lib/output-framework.sh"
 # Default values
 OUTPUT_MODE="json"
 SECTIONS=()
+# Set by --service-name/--service-type/--monitoring-stack, or inherited from the
+# environment if the caller exported them.
+SERVICE_NAME="${SERVICE_NAME:-}"
+SERVICE_TYPE="${SERVICE_TYPE:-}"
+MONITORING_STACK="${MONITORING_STACK:-}"
 
 # ============================================================================
 # Section: Detect Monitoring Stack and Services
@@ -545,6 +551,22 @@ main() {
                 SECTIONS+=("generate")
                 shift
                 ;;
+            # Parameters for --generate and --verify. Previously these were
+            # only readable as pre-exported environment variables, so the
+            # documented `--generate --service-name x --service-type y
+            # --monitoring-stack z` call hit the catch-all below and exited 1.
+            --service-name)
+                SERVICE_NAME="$2"
+                shift 2
+                ;;
+            --service-type)
+                SERVICE_TYPE="$2"
+                shift 2
+                ;;
+            --monitoring-stack)
+                MONITORING_STACK="$2"
+                shift 2
+                ;;
             *)
                 echo "Unknown option: $1" >&2
                 exit 1
@@ -573,7 +595,13 @@ main() {
                 section_verify "${SERVICE_NAME:-}"
                 ;;
             generate)
-                # This would be called by LLM with environment variables set
+                # Params come from --service-name/--service-type/--monitoring-stack,
+                # falling back to same-named environment variables.
+                if [[ -z "${SERVICE_NAME:-}" || -z "${SERVICE_TYPE:-}" || -z "${MONITORING_STACK:-}" ]]; then
+                    exit_with_json "error" \
+                        "--generate requires --service-name, --service-type, and --monitoring-stack" \
+                        "Example: ops-monitoring.sh --json --generate --service-name api --service-type node --monitoring-stack prometheus"
+                fi
                 generate_configs "${SERVICE_NAME}" "${SERVICE_TYPE}" "${MONITORING_STACK}"
                 ;;
             *)

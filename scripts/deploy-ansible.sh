@@ -9,7 +9,7 @@ set -euo pipefail
 #   ~/.claude/scripts/deploy-ansible.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -302,8 +302,13 @@ section_execute() {
 
     log "Command: ${CYAN}$ansible_cmd${NC}"
 
-    # Production confirmation (only in raw mode)
-    if [[ "$ENV" == "production" ]] && [[ "$OUTPUT_MODE" == "raw" ]]; then
+    # Production confirmation
+    if [[ "$ENV" == "production" ]]; then
+        if [[ "$OUTPUT_MODE" != "raw" ]]; then
+            exit_with_json "blocked" "Production deployment requires interactive confirmation" \
+                "Re-run with --raw to confirm interactively"
+        fi
+
         log ""
         log "${YELLOW}⚠  WARNING: Running against PRODUCTION${NC}"
         log ""

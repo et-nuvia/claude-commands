@@ -154,7 +154,7 @@ if [[ -n "${ADMIN_SECRET}" ]]; then
     [[ -z "${ADMIN_USER}" ]] && ADMIN_USER="<from-secret:${ADMIN_KEY_USER}>"
     [[ -z "${ADMIN_PASSWORD}" ]] && ADMIN_PASSWORD="<from-secret:${ADMIN_KEY_PASSWORD}>"
   else
-    ADMIN_JSON=$(aws secretsmanager get-secret-value \
+    ADMIN_JSON=$(aws --cli-read-timeout 30 --cli-connect-timeout 10 secretsmanager get-secret-value \
       --region "${REGION}" \
       --secret-id "${ADMIN_SECRET}" \
       --query SecretString \
@@ -300,17 +300,17 @@ success "User '${MIGRATIONS_USER}' created with DDL privileges"
 info "Storing credentials in AWS Secrets Manager: ${TARGET_SECRET}"
 
 # Check if secret already exists
-if aws secretsmanager describe-secret \
+if aws --cli-read-timeout 30 --cli-connect-timeout 10 secretsmanager describe-secret \
     --region "${REGION}" \
     --secret-id "${TARGET_SECRET}" >/dev/null 2>&1; then
   warn "Secret already exists, updating value..."
-  aws secretsmanager put-secret-value \
+  aws --cli-read-timeout 30 --cli-connect-timeout 10 secretsmanager put-secret-value \
     --region "${REGION}" \
     --secret-id "${TARGET_SECRET}" \
     --secret-string "${SECRET_JSON}" || die "Failed to update secret"
   success "Secret updated: ${TARGET_SECRET}"
 else
-  aws secretsmanager create-secret \
+  aws --cli-read-timeout 30 --cli-connect-timeout 10 secretsmanager create-secret \
     --region "${REGION}" \
     --name "${TARGET_SECRET}" \
     --secret-string "${SECRET_JSON}" \

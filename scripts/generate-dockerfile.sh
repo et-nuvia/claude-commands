@@ -266,6 +266,29 @@ read_project_config() {
     fi
 }
 
+json_array_from_words() {
+    # Word-split a shell command string into a tokenized JSON array literal,
+    # e.g. "node server.js" -> ["node", "server.js"]. Required because DHI
+    # exec-form CMD/ENTRYPOINT arrays have no shell to word-split at runtime.
+    local cmd="$1"
+    local -a words
+    read -ra words <<< "$cmd"
+
+    local json="[" first=true word esc
+    for word in "${words[@]}"; do
+        if [[ "$first" == "true" ]]; then
+            first=false
+        else
+            json+=", "
+        fi
+        esc="${word//\\/\\\\}"
+        esc="${esc//\"/\\\"}"
+        json+="\"${esc}\""
+    done
+    json+="]"
+    echo "$json"
+}
+
 export_template_variables() {
     # Export all template variables with defaults
     # These can be overridden by environment variables or PROJECT.yaml
@@ -285,6 +308,8 @@ export_template_variables() {
     export NODE_PORT="${NODE_PORT:-3000}"
     export BUILD_CMD="${BUILD_CMD:-npm run build}"
     export START_CMD="${START_CMD:-node server.js}"
+    export START_CMD_JSON_ARRAY
+    START_CMD_JSON_ARRAY="$(json_array_from_words "$START_CMD")"
 
     print_info "Template variables exported:"
     print_info "  USER_ID=$USER_ID, GROUP_ID=$GROUP_ID"

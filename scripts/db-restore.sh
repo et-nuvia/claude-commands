@@ -7,7 +7,7 @@ set -euo pipefail
 #   ~/.claude/scripts/db-restore.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags:
@@ -37,6 +37,7 @@ map_status_to_action() {
         input_needed)     echo "provide_input" ;;
         selection_needed) echo "select_backup" ;;
         error)            echo "fix_error" ;;
+        blocked)          echo "confirm_with_user" ;;
         *)                echo "fix_error" ;;
     esac
 }
@@ -54,6 +55,7 @@ BACKUP_DIR=""
 BACKUP_FILE=""
 TARGET_DB=""
 CREATE_DB="false"
+CONFIRM_OVERWRITE=""
 SAFETY_BACKUP_FILE=""
 RESTORE_STATUS=0
 TABLE_COUNT=0
@@ -332,6 +334,16 @@ EOF
         esac
     fi
 
+    # Guard: --target-db can pre-supply an existing-DB overwrite (CREATE_DB
+    # stays false) without ever going through the prompts above. In non-raw
+    # output modes that would skip every destructive confirmation, so require
+    # an explicit --confirm-overwrite matching the target DB name.
+    if [[ "$CREATE_DB" != "true" && "$OUTPUT_MODE" != "raw" && "$CONFIRM_OVERWRITE" != "$TARGET_DB" ]]; then
+        exit_with_json "blocked" "Overwrite confirmation required for target database: $TARGET_DB" \
+            "Re-run with --confirm-overwrite $TARGET_DB to proceed" \
+            "\"target_db\": \"$TARGET_DB\""
+    fi
+
     # Create database if needed
     if [[ "$CREATE_DB" == "true" ]]; then
         log "Creating database: $TARGET_DB"
@@ -467,6 +479,7 @@ main() {
             --backup-file) BACKUP_FILE="$2"; shift 2 ;;
             --target-db) TARGET_DB="$2"; shift 2 ;;
             --create-db) CREATE_DB="true"; shift ;;
+            --confirm-overwrite) CONFIRM_OVERWRITE="$2"; shift 2 ;;
             *) shift ;;
         esac
     done

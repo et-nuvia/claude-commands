@@ -14,11 +14,39 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/project-config.sh"
 source "${LIB_DIR}/yaml.sh"
+source "${LIB_DIR}/output-framework.sh"  # log_json: TOON for AI callers
 
 # Configuration
 STAGE="all"
 QUICK_MODE=false
 OUTPUT_FILE="/tmp/pipeline-audit-result.json"
+EMIT_SPEC=false
+
+# ---------------------------------------------------------------------------
+# Scoring weights — SINGLE SOURCE OF TRUTH
+#
+# These drive both the overall-score arithmetic below AND the scoring tables
+# published in the wiki and ~/.claude/docs/reference/pipelines.md, which are
+# generated from `--emit-spec` by ~/.claude/scripts/audit-spec-sync.sh.
+# Change a weight here and regenerate; never hand-edit the markdown tables.
+#
+# Each variant must total 100. `blue_green` applies when
+# PROJECT.yaml sets deployment.strategy: blue-green — the Blue-Green category
+# takes 8% out of the project-standards pool, leaving industry weights intact.
+# ---------------------------------------------------------------------------
+# Project Standards (60%)          default  blue-green
+W_BUILD_DEFAULT=12;         W_BUILD_BG=10
+W_SAFETY_DEFAULT=12;        W_SAFETY_BG=10
+W_SECRETS_DEFAULT=10;       W_SECRETS_BG=10
+W_ZERO_DOWNTIME_DEFAULT=10; W_ZERO_DOWNTIME_BG=8
+W_BRANCH_DEFAULT=8;         W_BRANCH_BG=8
+W_VERSION_DEFAULT=8;        W_VERSION_BG=6
+W_BLUE_GREEN_DEFAULT=0;     W_BLUE_GREEN_BG=8
+# Industry Standards (40%) — identical across variants
+W_SUPPLY_CHAIN_DEFAULT=12;  W_SUPPLY_CHAIN_BG=12
+W_SECURITY_SCAN_DEFAULT=12; W_SECURITY_SCAN_BG=12
+W_DORA_DEFAULT=8;           W_DORA_BG=8
+W_HARDENING_DEFAULT=8;      W_HARDENING_BG=8
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -35,13 +63,92 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_FILE="$2"
       shift 2
       ;;
+    --emit-spec)
+      EMIT_SPEC=true
+      shift
+      ;;
     *)
       print_error "Unknown argument: $1"
-      echo "Usage: pipeline-audit.sh --stage <scan|score|report|all> [--quick] [--output FILE]"
+      echo "Usage: pipeline-audit.sh --stage <scan|score|report|all> [--quick] [--output FILE] [--emit-spec]"
       exit 2
       ;;
   esac
 done
+
+# Emit the machine-readable scoring spec. Pure metadata, so it runs before the
+# PROJECT.yaml requirement — the docs generator calls this outside any project.
+emit_spec() {
+  cat <<SPEC
+{
+  "spec_version": 1,
+  "audit": "pipeline",
+  "command": "/pipeline-audit",
+  "generated_by": "pipeline-audit.sh --emit-spec",
+  "variants": [
+    { "id": "default", "label": "Default", "condition": "no blue-green deployment" },
+    { "id": "blue_green", "label": "With Blue-Green", "condition": "PROJECT.yaml \`deployment.strategy: blue-green\`" }
+  ],
+  "groups": [
+    { "id": "project", "label": "Project Standards", "total": 60 },
+    { "id": "industry", "label": "Industry Standards", "total": 40 }
+  ],
+  "categories": [
+    { "id": "build", "group": "project", "label": "Build & Deploy", "framework": "",
+      "checks": "Build once/promote, RUN_TESTS, security scan, tag rotation + ordering + depth, image tag format, cleanup as dedicated job, feature-branch deploys, manual trigger",
+      "weights": { "default": ${W_BUILD_DEFAULT}, "blue_green": ${W_BUILD_BG} } },
+    { "id": "safety", "group": "project", "label": "Safety & Rollback", "framework": "",
+      "checks": "Smoke test tiers, E2E in staging only, auto-rollback on smoke failure, rollback mechanics, no DNS flips, release notes + sync-back, conditional cleanup, notifications, reusable workflows",
+      "weights": { "default": ${W_SAFETY_DEFAULT}, "blue_green": ${W_SAFETY_BG} } },
+    { "id": "secrets", "group": "project", "label": "Secrets Management", "framework": "",
+      "checks": "No hardcoded secrets, CI variables defined per platform, OIDC (GitHub), secrets manager at runtime, minimal .env",
+      "weights": { "default": ${W_SECRETS_DEFAULT}, "blue_green": ${W_SECRETS_BG} } },
+    { "id": "zero_downtime", "group": "project", "label": "Zero-Downtime", "framework": "",
+      "checks": "Rolling recreate, compose change detection + clean-recreate, deploy phase ordering, health polling params, no arbitrary sleeps, backward-compatible migrations",
+      "weights": { "default": ${W_ZERO_DOWNTIME_DEFAULT}, "blue_green": ${W_ZERO_DOWNTIME_BG} } },
+    { "id": "branch", "group": "project", "label": "Branch Strategy", "framework": "",
+      "checks": "Pipeline files exist, branches from PROJECT.yaml (not hardcoded), lint + test stages, merge strategy per branch",
+      "weights": { "default": ${W_BRANCH_DEFAULT}, "blue_green": ${W_BRANCH_BG} } },
+    { "id": "version", "group": "project", "label": "Version Management", "framework": "",
+      "checks": "Git tag versioning, conventional commits, tag on production success only, version calculated once, manual override",
+      "weights": { "default": ${W_VERSION_DEFAULT}, "blue_green": ${W_VERSION_BG} } },
+    { "id": "blue_green", "group": "project", "label": "Blue-Green Deploy", "framework": "",
+      "checks": "Active color resolved from DNS, per-color instance IDs + domains, manual color override, instance startup check, rollback targets correct color, manual cutover discipline, strategy validation",
+      "weights": { "default": ${W_BLUE_GREEN_DEFAULT}, "blue_green": ${W_BLUE_GREEN_BG} } },
+    { "id": "supply_chain", "group": "industry", "label": "Supply Chain Security", "framework": "SLSA",
+      "checks": "Pinned actions/images, SBOM, artifact signing, build provenance, dependency lockfiles",
+      "weights": { "default": ${W_SUPPLY_CHAIN_DEFAULT}, "blue_green": ${W_SUPPLY_CHAIN_BG} } },
+    { "id": "security_scan", "group": "industry", "label": "Security Scanning", "framework": "OWASP DSOMM",
+      "checks": "SAST, dependency scanning (SCA), secret detection, container image scanning, DAST, license compliance",
+      "weights": { "default": ${W_SECURITY_SCAN_DEFAULT}, "blue_green": ${W_SECURITY_SCAN_BG} } },
+    { "id": "dora", "group": "industry", "label": "DORA Readiness", "framework": "DORA",
+      "checks": "Auto-deploy frequency, lead time metadata, change failure detection, MTTR support",
+      "weights": { "default": ${W_DORA_DEFAULT}, "blue_green": ${W_DORA_BG} } },
+    { "id": "hardening", "group": "industry", "label": "Pipeline Hardening", "framework": "CIS",
+      "checks": "Least-privilege permissions, job timeouts, concurrency controls, artifact retention, PR/MR gates",
+      "weights": { "default": ${W_HARDENING_DEFAULT}, "blue_green": ${W_HARDENING_BG} } }
+  ],
+  "rating_scale": [
+    { "min": 90, "rating": "EXCELLENT", "action": "Production ready, industry best practices" },
+    { "min": 70, "rating": "GOOD", "action": "Minor improvements, schedule within 2 weeks" },
+    { "min": 50, "rating": "FAIR", "action": "Several issues, fix before next release" },
+    { "min": 0, "rating": "NEEDS WORK", "action": "Blocks deployment" }
+  ],
+  "maturity_levels": [
+    { "level": 4, "name": "Optimized", "min": 85, "characteristics": "Signed artifacts, DAST, full compliance, proactive security" },
+    { "level": 3, "name": "Defined", "min": 65, "characteristics": "SBOM, provenance, DORA tracking, hardened pipeline" },
+    { "level": 2, "name": "Managed", "min": 40, "characteristics": "Testing, basic scanning, rollback capability" },
+    { "level": 1, "name": "Basic", "min": 0, "characteristics": "Automated build/deploy exists" }
+  ],
+  "maturity_basis": "Average of the four industry category scores",
+  "blocking_rule": "Any P0 finding (missing rollback, hardcoded secrets, no test stage, production rebuilds, no SCA, pipeline flips DNS, rotate-tags after build, tag created before deploy succeeds) blocks deployment."
+}
+SPEC
+}
+
+if [[ "$EMIT_SPEC" == "true" ]]; then
+  emit_spec
+  exit 0
+fi
 
 # Require PROJECT.yaml
 require_project_config
@@ -1304,29 +1411,23 @@ score_stage() {
     esac
   done
 
-  # Weighted overall score
-  # When blue-green is active, it takes 10% from the project standards pool:
-  #   Project Standards (60%):
-  #     Build & Deploy: 10%, Safety & Rollback: 10%, Secrets: 10%,
-  #     Zero-Downtime: 8%, Branch Strategy: 8%, Version Mgmt: 6%, Blue-Green: 8%
-  #   Industry Standards (40%):
-  #     Supply Chain (SLSA): 12%, Security Scanning (DSOMM): 12%,
-  #     DORA Readiness: 8%, Pipeline Hardening (CIS): 8%
-  # When not blue-green (original weights, 100% total):
-  #   Project Standards (60%):
-  #     Build & Deploy: 12%, Safety & Rollback: 12%, Secrets: 10%,
-  #     Zero-Downtime: 10%, Branch Strategy: 8%, Version Mgmt: 8%
-  #   Industry Standards (40%):
-  #     Supply Chain (SLSA): 12%, Security Scanning (DSOMM): 12%,
-  #     DORA Readiness: 8%, Pipeline Hardening (CIS): 8%
+  # Weighted overall score. Weights come from the W_*_DEFAULT / W_*_BG variables
+  # declared at the top of this script — the same values `--emit-spec` publishes,
+  # so the score and the documented tables cannot drift apart.
   if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
     OVERALL_SCORE=$(( \
-      (SCORE_BUILD * 10 + SCORE_SAFETY * 10 + SCORE_SECRETS * 10 + SCORE_ZERO_DOWNTIME * 8 + SCORE_BRANCH * 8 + SCORE_VERSION * 6 + SCORE_BLUE_GREEN * 8 \
-      + SCORE_SUPPLY_CHAIN * 12 + SCORE_SECURITY_SCAN * 12 + SCORE_DORA_READINESS * 8 + SCORE_HARDENING * 8) / 100 ))
+      (SCORE_BUILD * W_BUILD_BG + SCORE_SAFETY * W_SAFETY_BG + SCORE_SECRETS * W_SECRETS_BG \
+      + SCORE_ZERO_DOWNTIME * W_ZERO_DOWNTIME_BG + SCORE_BRANCH * W_BRANCH_BG \
+      + SCORE_VERSION * W_VERSION_BG + SCORE_BLUE_GREEN * W_BLUE_GREEN_BG \
+      + SCORE_SUPPLY_CHAIN * W_SUPPLY_CHAIN_BG + SCORE_SECURITY_SCAN * W_SECURITY_SCAN_BG \
+      + SCORE_DORA_READINESS * W_DORA_BG + SCORE_HARDENING * W_HARDENING_BG) / 100 ))
   else
     OVERALL_SCORE=$(( \
-      (SCORE_BUILD * 12 + SCORE_SAFETY * 12 + SCORE_SECRETS * 10 + SCORE_ZERO_DOWNTIME * 10 + SCORE_BRANCH * 8 + SCORE_VERSION * 8 \
-      + SCORE_SUPPLY_CHAIN * 12 + SCORE_SECURITY_SCAN * 12 + SCORE_DORA_READINESS * 8 + SCORE_HARDENING * 8) / 100 ))
+      (SCORE_BUILD * W_BUILD_DEFAULT + SCORE_SAFETY * W_SAFETY_DEFAULT + SCORE_SECRETS * W_SECRETS_DEFAULT \
+      + SCORE_ZERO_DOWNTIME * W_ZERO_DOWNTIME_DEFAULT + SCORE_BRANCH * W_BRANCH_DEFAULT \
+      + SCORE_VERSION * W_VERSION_DEFAULT + SCORE_BLUE_GREEN * W_BLUE_GREEN_DEFAULT \
+      + SCORE_SUPPLY_CHAIN * W_SUPPLY_CHAIN_DEFAULT + SCORE_SECURITY_SCAN * W_SECURITY_SCAN_DEFAULT \
+      + SCORE_DORA_READINESS * W_DORA_DEFAULT + SCORE_HARDENING * W_HARDENING_DEFAULT) / 100 ))
   fi
 
   # Calculate industry maturity level (based on industry category scores)
@@ -1345,27 +1446,27 @@ score_stage() {
   print_info ""
   print_info "  Project Standards:"
   if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
-    print_info "    Branch Strategy:    ${SCORE_BRANCH}/100     (weight: 8%)"
-    print_info "    Version Mgmt:       ${SCORE_VERSION}/100     (weight: 6%)"
-    print_info "    Build & Deploy:     ${SCORE_BUILD}/100     (weight: 10%)"
-    print_info "    Secrets:            ${SCORE_SECRETS}/100     (weight: 10%)"
-    print_info "    Zero-Downtime:      ${SCORE_ZERO_DOWNTIME}/100     (weight: 8%)"
-    print_info "    Safety & Rollback:  ${SCORE_SAFETY}/100     (weight: 10%)"
-    print_info "    Blue-Green Deploy:  ${SCORE_BLUE_GREEN}/100     (weight: 8%)"
+    print_info "    Branch Strategy:    ${SCORE_BRANCH}/100     (weight: ${W_BRANCH_BG}%)"
+    print_info "    Version Mgmt:       ${SCORE_VERSION}/100     (weight: ${W_VERSION_BG}%)"
+    print_info "    Build & Deploy:     ${SCORE_BUILD}/100     (weight: ${W_BUILD_BG}%)"
+    print_info "    Secrets:            ${SCORE_SECRETS}/100     (weight: ${W_SECRETS_BG}%)"
+    print_info "    Zero-Downtime:      ${SCORE_ZERO_DOWNTIME}/100     (weight: ${W_ZERO_DOWNTIME_BG}%)"
+    print_info "    Safety & Rollback:  ${SCORE_SAFETY}/100     (weight: ${W_SAFETY_BG}%)"
+    print_info "    Blue-Green Deploy:  ${SCORE_BLUE_GREEN}/100     (weight: ${W_BLUE_GREEN_BG}%)"
   else
-    print_info "    Branch Strategy:    ${SCORE_BRANCH}/100     (weight: 8%)"
-    print_info "    Version Mgmt:       ${SCORE_VERSION}/100     (weight: 8%)"
-    print_info "    Build & Deploy:     ${SCORE_BUILD}/100     (weight: 12%)"
-    print_info "    Secrets:            ${SCORE_SECRETS}/100     (weight: 10%)"
-    print_info "    Zero-Downtime:      ${SCORE_ZERO_DOWNTIME}/100     (weight: 10%)"
-    print_info "    Safety & Rollback:  ${SCORE_SAFETY}/100     (weight: 12%)"
+    print_info "    Branch Strategy:    ${SCORE_BRANCH}/100     (weight: ${W_BRANCH_DEFAULT}%)"
+    print_info "    Version Mgmt:       ${SCORE_VERSION}/100     (weight: ${W_VERSION_DEFAULT}%)"
+    print_info "    Build & Deploy:     ${SCORE_BUILD}/100     (weight: ${W_BUILD_DEFAULT}%)"
+    print_info "    Secrets:            ${SCORE_SECRETS}/100     (weight: ${W_SECRETS_DEFAULT}%)"
+    print_info "    Zero-Downtime:      ${SCORE_ZERO_DOWNTIME}/100     (weight: ${W_ZERO_DOWNTIME_DEFAULT}%)"
+    print_info "    Safety & Rollback:  ${SCORE_SAFETY}/100     (weight: ${W_SAFETY_DEFAULT}%)"
   fi
   print_info ""
   print_info "  Industry Standards:"
-  print_info "    Supply Chain (SLSA):     ${SCORE_SUPPLY_CHAIN}/100     (weight: 12%)"
-  print_info "    Security Scanning (DSOMM): ${SCORE_SECURITY_SCAN}/100     (weight: 12%)"
-  print_info "    DORA Readiness:          ${SCORE_DORA_READINESS}/100     (weight: 8%)"
-  print_info "    Pipeline Hardening (CIS): ${SCORE_HARDENING}/100     (weight: 8%)"
+  print_info "    Supply Chain (SLSA):     ${SCORE_SUPPLY_CHAIN}/100     (weight: ${W_SUPPLY_CHAIN_DEFAULT}%)"
+  print_info "    Security Scanning (DSOMM): ${SCORE_SECURITY_SCAN}/100     (weight: ${W_SECURITY_SCAN_DEFAULT}%)"
+  print_info "    DORA Readiness:          ${SCORE_DORA_READINESS}/100     (weight: ${W_DORA_DEFAULT}%)"
+  print_info "    Pipeline Hardening (CIS): ${SCORE_HARDENING}/100     (weight: ${W_HARDENING_DEFAULT}%)"
   print_info ""
   print_info "  Maturity: ${MATURITY_LEVEL}"
   print_info "  Overall:  ${OVERALL_SCORE}/100"
@@ -1429,6 +1530,26 @@ report_stage() {
   done
   files_json="${files_json}]"
 
+  # Publish the weights actually used, so consumers render the real numbers
+  # instead of assuming a variant.
+  local weight_variant w_branch w_version w_build w_secrets w_zero_downtime
+  local w_safety w_blue_green w_supply_chain w_security_scan w_dora w_hardening
+  if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
+    weight_variant="blue_green"
+    w_branch=$W_BRANCH_BG; w_version=$W_VERSION_BG; w_build=$W_BUILD_BG
+    w_secrets=$W_SECRETS_BG; w_zero_downtime=$W_ZERO_DOWNTIME_BG
+    w_safety=$W_SAFETY_BG; w_blue_green=$W_BLUE_GREEN_BG
+    w_supply_chain=$W_SUPPLY_CHAIN_BG; w_security_scan=$W_SECURITY_SCAN_BG
+    w_dora=$W_DORA_BG; w_hardening=$W_HARDENING_BG
+  else
+    weight_variant="default"
+    w_branch=$W_BRANCH_DEFAULT; w_version=$W_VERSION_DEFAULT; w_build=$W_BUILD_DEFAULT
+    w_secrets=$W_SECRETS_DEFAULT; w_zero_downtime=$W_ZERO_DOWNTIME_DEFAULT
+    w_safety=$W_SAFETY_DEFAULT; w_blue_green=$W_BLUE_GREEN_DEFAULT
+    w_supply_chain=$W_SUPPLY_CHAIN_DEFAULT; w_security_scan=$W_SECURITY_SCAN_DEFAULT
+    w_dora=$W_DORA_DEFAULT; w_hardening=$W_HARDENING_DEFAULT
+  fi
+
   local result
   result=$(cat <<EOF
 {
@@ -1457,6 +1578,20 @@ report_stage() {
       "pipeline_hardening_cis": ${SCORE_HARDENING}
     }
   },
+  "weights": {
+    "variant": "${weight_variant}",
+    "branch_strategy": ${w_branch},
+    "version_management": ${w_version},
+    "build_deploy": ${w_build},
+    "secrets_management": ${w_secrets},
+    "zero_downtime": ${w_zero_downtime},
+    "safety_rollback": ${w_safety},
+    "blue_green": ${w_blue_green},
+    "supply_chain_slsa": ${w_supply_chain},
+    "security_scanning_dsomm": ${w_security_scan},
+    "dora_readiness": ${w_dora},
+    "pipeline_hardening_cis": ${w_hardening}
+  },
   "summary": {
     "total_checks": ${TOTAL_CHECKS},
     "passed": ${PASSED_CHECKS},
@@ -1479,8 +1614,8 @@ report_stage() {
 EOF
 )
 
-  echo "$result" > "$OUTPUT_FILE"
-  echo "$result"
+  echo "$result" > "$OUTPUT_FILE"   # file stays JSON for programmatic consumers
+  log_json "$result"                # stdout = TOON in AI context, JSON otherwise
 
   print_info "Report written to: $OUTPUT_FILE"
 }

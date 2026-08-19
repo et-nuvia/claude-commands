@@ -67,29 +67,25 @@ if [[ "$IS_PLAYWRIGHT" == "true" ]]; then
   # Playwright with JSON reporter usually writes to stdout or a file
   # If we added --reporter=json, it goes to stdout.
   # We need to separate the JSON from potential other logs.
-  if ! $TIMEOUT_CMD "$TIMEOUT" bash -c "$FINAL_COMMAND" > "$JSON_REPORT" 2> "$RAW_OUTPUT"; then
-    EXIT_CODE=$?
-    if [[ $EXIT_CODE -eq 124 ]]; then
-      TEST_STATUS="timeout"
-    else
-      TEST_STATUS="failed"
-    fi
-  else
+  EXIT_CODE=0
+  $TIMEOUT_CMD "$TIMEOUT" bash -c "$FINAL_COMMAND" > "$JSON_REPORT" 2> "$RAW_OUTPUT" || EXIT_CODE=$?
+  if [[ $EXIT_CODE -eq 0 ]]; then
     TEST_STATUS="passed"
-    EXIT_CODE=0
+  elif [[ $EXIT_CODE -eq 124 ]]; then
+    TEST_STATUS="timeout"
+  else
+    TEST_STATUS="failed"
   fi
 else
   # Generic command
-  if ! $TIMEOUT_CMD "$TIMEOUT" bash -c "$FINAL_COMMAND" > "$RAW_OUTPUT" 2>&1; then
-    EXIT_CODE=$?
-    if [[ $EXIT_CODE -eq 124 ]]; then
-      TEST_STATUS="timeout"
-    else
-      TEST_STATUS="failed"
-    fi
-  else
+  EXIT_CODE=0
+  $TIMEOUT_CMD "$TIMEOUT" bash -c "$FINAL_COMMAND" > "$RAW_OUTPUT" 2>&1 || EXIT_CODE=$?
+  if [[ $EXIT_CODE -eq 0 ]]; then
     TEST_STATUS="passed"
-    EXIT_CODE=0
+  elif [[ $EXIT_CODE -eq 124 ]]; then
+    TEST_STATUS="timeout"
+  else
+    TEST_STATUS="failed"
   fi
 fi
 

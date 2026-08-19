@@ -7,7 +7,7 @@ set -euo pipefail
 #   ~/.claude/scripts/setup-secrets.sh [--json|--raw] [--full|--section] [options]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output
 #
 # Section Flags:
@@ -124,7 +124,8 @@ load_project_config() {
 
     # Auto-detect backend
     if [[ "$SECRETS_BACKEND" == "__MISSING__" || "$SECRETS_BACKEND" == "__INVALID__" || "$SECRETS_BACKEND" == "__BLANK__" ]]; then
-        if [[ "$(uname -s)" == "Darwin" ]]; then
+        source "${HOME}/.claude/scripts/lib/platform.sh"
+        if env_is_work; then
             SECRETS_BACKEND="aws"
         else
             SECRETS_BACKEND="infisical"
@@ -170,7 +171,7 @@ authenticate_infisical() {
     log "Authenticating with Infisical at ${INFISICAL_URL}..."
 
     local response
-    response=$(curl -sf -X POST "${INFISICAL_URL}/api/v1/auth/universal-auth/login" \
+    response=$(curl -sf --connect-timeout 5 --max-time 30 -X POST "${INFISICAL_URL}/api/v1/auth/universal-auth/login" \
         -H "Content-Type: application/json" \
         -d "{\"clientId\":\"${CLIENT_ID}\",\"clientSecret\":\"${CLIENT_SECRET}\"}" 2>/dev/null || echo "")
 
@@ -302,13 +303,13 @@ run_validate() {
             for bucket in "${REQUIRED_BUCKETS[@]}"; do
                 checks_total=$((checks_total + 1))
                 local folder_check
-                folder_check=$(curl -sf "${INFISICAL_URL}/api/v1/folders?workspaceId=${PROJECT_ID}&environment=dev&path=/" \
+                folder_check=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v1/folders?workspaceId=${PROJECT_ID}&environment=dev&path=/" \
                     -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
                 local has_folder
                 has_folder=$(echo "$folder_check" | jq -r ".folders[] | select(.name == \"${bucket}\") | .name" 2>/dev/null || echo "")
                 if [[ -n "$has_folder" ]]; then
                     local sec_resp
-                    sec_resp=$(curl -sf "${INFISICAL_URL}/api/v3/secrets/raw?workspaceId=${PROJECT_ID}&environment=dev&secretPath=/${bucket}" \
+                    sec_resp=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v3/secrets/raw?workspaceId=${PROJECT_ID}&environment=dev&secretPath=/${bucket}" \
                         -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
                     local sc
                     sc=$(echo "$sec_resp" | jq '.secrets | length' 2>/dev/null || echo "0")
@@ -402,7 +403,7 @@ run_create_project() {
     # Check if project already exists
     if [[ -n "$PROJECT_ID" ]]; then
         local existing
-        existing=$(curl -sf "${INFISICAL_URL}/api/v1/workspace/${PROJECT_ID}" \
+        existing=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v1/workspace/${PROJECT_ID}" \
             -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
         if [[ -n "$existing" ]]; then
             local existing_name
@@ -431,7 +432,7 @@ run_create_project() {
         _exit_with_context "error" "No existing projects in projects.json to derive org ID"
     fi
 
-    ORG_ID=$(curl -sf "${INFISICAL_URL}/api/v1/workspace/${ref_project_id}" \
+    ORG_ID=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v1/workspace/${ref_project_id}" \
         -H "Authorization: Bearer ${TOKEN}" 2>/dev/null | jq -r '.workspace.orgId // ""' || echo "")
     if [[ -z "$ORG_ID" || "$ORG_ID" == "null" ]]; then
         _exit_with_context "error" "Could not determine organization ID"
@@ -440,7 +441,7 @@ run_create_project() {
     log "Creating project '${PROJECT_NAME}' in org ${ORG_ID}..."
 
     local create_response
-    create_response=$(curl -sf -X POST "${INFISICAL_URL}/api/v2/workspace" \
+    create_response=$(curl -sf --connect-timeout 5 --max-time 30 -X POST "${INFISICAL_URL}/api/v2/workspace" \
         -H "Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/json" \
         -d "{\"projectName\":\"${PROJECT_NAME}\",\"organizationId\":\"${ORG_ID}\"}" 2>/dev/null || echo "")
@@ -460,7 +461,7 @@ run_create_project() {
 
     # Add machine identities
     local identities
-    identities=$(curl -sf "${INFISICAL_URL}/api/v2/organizations/${ORG_ID}/identity-memberships" \
+    identities=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v2/organizations/${ORG_ID}/identity-memberships" \
         -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
 
     local identity_names=""
@@ -470,7 +471,7 @@ run_create_project() {
             id=$(echo "$line" | jq -r '.identity.id' 2>/dev/null || echo "")
             name=$(echo "$line" | jq -r '.identity.name' 2>/dev/null || echo "")
             if [[ -n "$id" && "$id" != "null" ]]; then
-                curl -sf -X POST "${INFISICAL_URL}/api/v2/workspace/${PROJECT_ID}/identity-memberships/${id}" \
+                curl -sf --connect-timeout 5 --max-time 30 -X POST "${INFISICAL_URL}/api/v2/workspace/${PROJECT_ID}/identity-memberships/${id}" \
                     -H "Authorization: Bearer ${TOKEN}" \
                     -H "Content-Type: application/json" \
                     -d '{"role":"member"}' >/dev/null 2>&1 || true
@@ -510,7 +511,7 @@ run_create_folders() {
         for env in dev prod; do
             for bucket in "${REQUIRED_BUCKETS[@]}"; do
                 local result
-                result=$(curl -sf -X POST "${INFISICAL_URL}/api/v1/folders" \
+                result=$(curl -sf --connect-timeout 5 --max-time 30 -X POST "${INFISICAL_URL}/api/v1/folders" \
                     -H "Authorization: Bearer ${TOKEN}" \
                     -H "Content-Type: application/json" \
                     -d "{\"workspaceId\":\"${PROJECT_ID}\",\"environment\":\"${env}\",\"name\":\"${bucket}\",\"path\":\"/\"}" 2>/dev/null || echo "")
@@ -567,7 +568,7 @@ run_populate() {
 
         for bucket in "${REQUIRED_BUCKETS[@]}"; do
             local secrets_response
-            secrets_response=$(curl -sf "${INFISICAL_URL}/api/v3/secrets/raw?workspaceId=${PROJECT_ID}&environment=dev&secretPath=/${bucket}" \
+            secrets_response=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v3/secrets/raw?workspaceId=${PROJECT_ID}&environment=dev&secretPath=/${bucket}" \
                 -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
             local secret_count
             secret_count=$(echo "$secrets_response" | jq '.secrets | length' 2>/dev/null || echo "0")
@@ -636,6 +637,9 @@ run_local_setup() {
             ["infisical_project_id"]="$PROJECT_ID"
         )
 
+        local prev_umask
+        prev_umask=$(umask)
+        umask 077
         for filename in "${!files[@]}"; do
             local value="${files[$filename]}"
             if [[ -f "${secrets_dir}/${filename}" ]]; then
@@ -660,6 +664,7 @@ run_local_setup() {
         else
             existing_files+=("mysql_root_password")
         fi
+        umask "$prev_umask"
 
         # Check .gitignore
         local gitignore_ok=false
@@ -730,7 +735,7 @@ run_verify() {
         # Test connectivity
         if [[ -n "$TOKEN" && -n "$PROJECT_ID" ]]; then
             local test_response
-            test_response=$(curl -sf "${INFISICAL_URL}/api/v1/workspace/${PROJECT_ID}" \
+            test_response=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v1/workspace/${PROJECT_ID}" \
                 -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
             [[ -z "$test_response" ]] && issues+=("\"Cannot connect to Infisical project ${PROJECT_ID}\"")
         fi
@@ -772,7 +777,7 @@ run_full() {
         local folders_missing=false
         for bucket in "${REQUIRED_BUCKETS[@]}"; do
             local check
-            check=$(curl -sf "${INFISICAL_URL}/api/v1/folders?workspaceId=${PROJECT_ID}&environment=dev&path=/" \
+            check=$(curl -sf --connect-timeout 5 --max-time 30 "${INFISICAL_URL}/api/v1/folders?workspaceId=${PROJECT_ID}&environment=dev&path=/" \
                 -H "Authorization: Bearer ${TOKEN}" 2>/dev/null || echo "")
             local has_it
             has_it=$(echo "$check" | jq -r ".folders[] | select(.name == \"${bucket}\") | .name" 2>/dev/null || echo "")
@@ -785,7 +790,7 @@ run_full() {
         if [[ "$folders_missing" == "true" ]]; then
             for env in dev prod; do
                 for bucket in "${REQUIRED_BUCKETS[@]}"; do
-                    curl -sf -X POST "${INFISICAL_URL}/api/v1/folders" \
+                    curl -sf --connect-timeout 5 --max-time 30 -X POST "${INFISICAL_URL}/api/v1/folders" \
                         -H "Authorization: Bearer ${TOKEN}" \
                         -H "Content-Type: application/json" \
                         -d "{\"workspaceId\":\"${PROJECT_ID}\",\"environment\":\"${env}\",\"name\":\"${bucket}\",\"path\":\"/\"}" >/dev/null 2>&1 || true
@@ -796,10 +801,11 @@ run_full() {
 
         # 3. Local setup (inline, don't exit)
         mkdir -p "${PROJECT_ROOT}/.secrets"
-        echo -n "${INFISICAL_URL}" > "${PROJECT_ROOT}/.secrets/infisical_url"
-        echo -n "${CLIENT_ID}" > "${PROJECT_ROOT}/.secrets/infisical_client_id"
-        echo -n "${CLIENT_SECRET}" > "${PROJECT_ROOT}/.secrets/infisical_client_secret"
-        echo -n "${PROJECT_ID}" > "${PROJECT_ROOT}/.secrets/infisical_project_id"
+        ( umask 077
+          printf '%s' "${INFISICAL_URL}" > "${PROJECT_ROOT}/.secrets/infisical_url"
+          printf '%s' "${CLIENT_ID}" > "${PROJECT_ROOT}/.secrets/infisical_client_id"
+          printf '%s' "${CLIENT_SECRET}" > "${PROJECT_ROOT}/.secrets/infisical_client_secret"
+          printf '%s' "${PROJECT_ID}" > "${PROJECT_ROOT}/.secrets/infisical_project_id" )
         [[ ! -f "${PROJECT_ROOT}/.secrets/mysql_root_password" ]] && \
             openssl rand -base64 24 | tr -d '\n' > "${PROJECT_ROOT}/.secrets/mysql_root_password"
         [[ ! -f "${PROJECT_ROOT}/.env" ]] && echo "ENVIRONMENT=dev" > "${PROJECT_ROOT}/.env"

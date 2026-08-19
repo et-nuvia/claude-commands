@@ -58,7 +58,7 @@ if [[ -z "$branch" ]]; then
 fi
 
 # 2. Check it's not a default/staging/production branch
-default_branch=$(get_default_branch 2>/dev/null || echo "main")
+default_branch=$(get_default_branch_interactive 2>/dev/null || echo "main")
 
 # Also check PROJECT.yaml for staging/production branch names
 staging_branch=$(yaml_get '.ci.branches.staging // ""' PROJECT.yaml)
@@ -81,7 +81,9 @@ fi
 task_id=$(echo "$task_id" | tr 'a-f' 'A-F')
 
 # 4. Find TSK document
-task_doc=$(find_primary "$task_id")
+# `|| true`: find_primary returns non-zero on no match, which under set -e
+# would kill the script here — before the error JSON below can be emitted
+task_doc=$(find_primary "$task_id" || true)
 if [[ -z "$task_doc" ]]; then
     output_error "No TSK/INC document found for task $task_id — create one with /task-capture"
 fi

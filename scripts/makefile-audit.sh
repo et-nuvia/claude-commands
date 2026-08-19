@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# makefile-audit.sh - Deterministic Makefile implementation audit with optional auto-fix
-# Usage: ./makefile-audit.sh --stage <stage> [--quick] [--fix] [--full]
+# makefile-audit.sh - Deterministic Makefile implementation audit
+# Usage: ./makefile-audit.sh --stage <stage> [--quick]
 # Stages: scan, score, report, all (default)
-# Flags:  --fix   Apply auto-fixable improvements after audit
-#         --full  Run full audit (--stage all) then apply fixes
 #
 # Audits project Makefiles against the standards in:
 #   ~/.claude/docs/reference/makefile.md
@@ -19,12 +17,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/lib"
 source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/project-config.sh"
+source "${LIB_DIR}/output-framework.sh"  # log_json: TOON for AI callers
 
 # Configuration
 STAGE="all"
 QUICK_MODE=false
-FIX_MODE=false
-FULL_MODE=false
 OUTPUT_FILE="/tmp/makefile-audit-result.json"
 
 # Parse arguments
@@ -33,21 +30,13 @@ while [[ $# -gt 0 ]]; do
     --stage)    STAGE="$2"; shift 2 ;;
     --quick)    QUICK_MODE=true; shift ;;
     --output)   OUTPUT_FILE="$2"; shift 2 ;;
-    --fix)      FIX_MODE=true; shift ;;
-    --full)     FULL_MODE=true; shift ;;
     *)
       print_error "Unknown argument: $1"
-      echo "Usage: makefile-audit.sh --stage <scan|score|report|all> [--quick] [--fix] [--full] [--output FILE]" >&2
+      echo "Usage: makefile-audit.sh --stage <scan|score|report|all> [--quick] [--output FILE]" >&2
       exit 2
       ;;
   esac
 done
-
-# --full implies audit (stage all) + fix
-if [[ "$FULL_MODE" == "true" ]]; then
-  STAGE="all"
-  FIX_MODE=true
-fi
 
 # Require PROJECT.yaml
 require_project_config
@@ -126,7 +115,7 @@ file_has_pattern() {
 count_pattern() {
   local file="$1"
   local pattern="$2"
-  grep -cE "$pattern" "$file" 2>/dev/null || echo 0
+  grep -cE "$pattern" "$file" 2>/dev/null || true
 }
 
 #============================================================================
@@ -186,7 +175,7 @@ scan_stage() {
       record_check "structure" ".PHONY declarations (${mf})" "fail" "Missing .PHONY declarations"
     fi
 
-    if file_has_pattern "$mf" '^\.DEFAULT_GOAL\s*:=\s*help'; then
+    if file_has_pattern "$mf" '^\.DEFAULT_GOAL[[:space:]]*:=[[:space:]]*help'; then
       record_check "structure" ".DEFAULT_GOAL := help (${mf})" "pass" "Default target is help"
     else
       record_check "structure" ".DEFAULT_GOAL := help (${mf})" "warn" "Missing .DEFAULT_GOAL := help"
@@ -199,9 +188,11 @@ scan_stage() {
 
   for mf in "${MAKEFILES_FOUND[@]}"; do
     # Check for awk-based help (correct) vs grep-based (old)
-    if file_has_pattern "$mf" "awk.*a-zA-Z0-9_-.*## "; then
+    # The awk help recipe may be split across backslash-continued lines, so match
+    # its components independently rather than on a single physical line.
+    if file_has_pattern "$mf" "awk" && file_has_pattern "$mf" 'a-zA-Z0-9_-.*## '; then
       record_check "help" "Awk-based help recipe (${mf})" "pass" "Uses awk with digit support"
-    elif file_has_pattern "$mf" "awk.*a-zA-Z_-.*## "; then
+    elif file_has_pattern "$mf" "awk" && file_has_pattern "$mf" 'a-zA-Z_-.*## '; then
       record_check "help" "Awk-based help recipe (${mf})" "warn" "Awk help missing digits in char class [a-zA-Z_-] — targets with numbers (e.g. test-e2e) won't show"
     elif file_has_pattern "$mf" "grep.*## "; then
       record_check "help" "Awk-based help recipe (${mf})" "fail" "Uses old grep-based help — does not support argument annotations"
@@ -300,17 +291,25 @@ scan_stage() {
   print_info ""
   print_info "Category: JSON Output"
 
+  # FORMAT support = either in-Makefile branching (ifdef/ifeq) OR the runner-script
+  # pattern where FORMAT is defaulted (FORMAT ?=) and forwarded inline to scripts
+  # (FORMAT=$(FORMAT) ./scripts/run-*.sh). Both keep JSON output AI-consumable.
+  local FORMAT_SUPPORT='ifdef FORMAT|ifeq.*FORMAT|FORMAT[[:space:]]*[?]=|FORMAT=[$][(]FORMAT[)]'
   for mf in "${MAKEFILES_FOUND[@]}"; do
     if file_has_pattern "$mf" 'ifdef FORMAT|ifeq.*FORMAT'; then
       record_check "json_output" "FORMAT branching (${mf})" "pass" "Has FORMAT-based branching"
+    elif file_has_pattern "$mf" 'FORMAT[[:space:]]*[?]=' && file_has_pattern "$mf" 'FORMAT=[$][(]FORMAT[)]'; then
+      record_check "json_output" "FORMAT branching (${mf})" "pass" "Forwards FORMAT inline to runner scripts / sub-makes"
     else
       record_check "json_output" "FORMAT branching (${mf})" "warn" "No FORMAT=json support"
     fi
   done
 
   if [[ -f "Makefile" ]]; then
-    if file_has_pattern "Makefile" '_PASS\s*=|_PASS='; then
+    if file_has_pattern "Makefile" '_PASS[[:space:]]*='; then
       record_check "json_output" "_PASS variable (root)" "pass" "Forwards FORMAT/FILES/FILTER via _PASS"
+    elif file_has_pattern "Makefile" 'FORMAT=[$][(]FORMAT[)]'; then
+      record_check "json_output" "_PASS variable (root)" "pass" "Forwards FORMAT inline to sub-makes (FILES/FILTER via env inheritance)"
     else
       record_check "json_output" "_PASS variable (root)" "warn" "No _PASS variable — args may not forward to sub-makes"
     fi
@@ -320,17 +319,21 @@ scan_stage() {
     local mf="${comp}/Makefile"
     [[ ! -f "$mf" ]] && continue
 
-    if file_has_pattern "$mf" '_SCRIPT_FLAGS\s*=|_SCRIPT_FLAGS='; then
+    if file_has_pattern "$mf" '_SCRIPT_FLAGS[[:space:]]*='; then
       record_check "json_output" "_SCRIPT_FLAGS variable (${comp})" "pass" "Translates make vars to script flags"
-    elif file_has_pattern "$mf" 'ifdef FORMAT'; then
+    elif file_has_pattern "$mf" 'FORMAT=[$][(]FORMAT[)].*scripts/(run|test)-'; then
+      record_check "json_output" "_SCRIPT_FLAGS variable (${comp})" "pass" "Passes FORMAT to runner scripts inline"
+    elif file_has_pattern "$mf" "$FORMAT_SUPPORT"; then
       record_check "json_output" "_SCRIPT_FLAGS variable (${comp})" "warn" "Has FORMAT support but no _SCRIPT_FLAGS"
     else
       record_check "json_output" "_SCRIPT_FLAGS variable (${comp})" "skip" "No FORMAT support"
     fi
 
-    if file_has_pattern "$mf" '_PASS\s*=|_PASS='; then
+    if file_has_pattern "$mf" '_PASS[[:space:]]*='; then
       record_check "json_output" "_PASS variable (${comp})" "pass" "Forwards args to sub-makes"
-    elif file_has_pattern "$mf" 'ifdef FORMAT'; then
+    elif file_has_pattern "$mf" 'FORMAT=[$][(]FORMAT[)]'; then
+      record_check "json_output" "_PASS variable (${comp})" "pass" "Forwards FORMAT inline (FILES/FILTER via env inheritance)"
+    elif file_has_pattern "$mf" "$FORMAT_SUPPORT"; then
       record_check "json_output" "_PASS variable (${comp})" "warn" "Has FORMAT support but no _PASS"
     else
       record_check "json_output" "_PASS variable (${comp})" "skip" "No FORMAT support"
@@ -344,24 +347,25 @@ scan_stage() {
   # Check for runner scripts
   local has_runners=false
   if [[ -d "scripts" ]]; then
+    # Wiki spec: runner scripts use the run-<tool>.sh naming convention.
     local runner_count=0
-    for pattern in test-jest test-playwright test-pytest test-newman test-bats test-aggregate; do
-      if [[ -f "scripts/${pattern}.sh" ]]; then
+    for tool in jest playwright pytest newman bats aggregate eslint; do
+      if [[ -f "scripts/run-${tool}.sh" ]]; then
         runner_count=$((runner_count + 1))
         has_runners=true
       fi
     done
 
     if [[ $runner_count -gt 0 ]]; then
-      record_check "test_abstraction" "Runner scripts exist" "pass" "Found ${runner_count} runner script(s) in scripts/"
+      record_check "test_abstraction" "Runner scripts exist" "pass" "Found ${runner_count} run-<tool>.sh runner script(s) in scripts/"
     else
-      record_check "test_abstraction" "Runner scripts exist" "warn" "No test runner scripts in scripts/"
+      record_check "test_abstraction" "Runner scripts exist" "warn" "No run-<tool>.sh runner scripts in scripts/"
     fi
 
-    if [[ -f "scripts/test-aggregate.sh" ]]; then
-      record_check "test_abstraction" "Aggregation script" "pass" "test-aggregate.sh exists"
+    if [[ -f "scripts/run-aggregate.sh" ]]; then
+      record_check "test_abstraction" "Aggregation script" "pass" "run-aggregate.sh exists"
     else
-      record_check "test_abstraction" "Aggregation script" "warn" "No test-aggregate.sh — aggregator targets may not produce standard JSON"
+      record_check "test_abstraction" "Aggregation script" "warn" "No run-aggregate.sh — aggregator targets may not produce standard JSON"
     fi
   else
     record_check "test_abstraction" "Scripts directory" "warn" "No scripts/ directory"
@@ -372,28 +376,160 @@ scan_stage() {
     local mf="${comp}/Makefile"
     [[ ! -f "$mf" ]] && continue
 
-    if file_has_pattern "$mf" 'scripts/test-.*\.sh'; then
+    if file_has_pattern "$mf" '(scripts/|SCRIPTS_DIR[)}]/)run-.*\.sh'; then
       record_check "test_abstraction" "Runner script usage (${comp})" "pass" "Calls runner scripts in FORMAT mode"
-    elif file_has_pattern "$mf" 'ifdef FORMAT'; then
+    elif file_has_pattern "$mf" "$FORMAT_SUPPORT"; then
       record_check "test_abstraction" "Runner script usage (${comp})" "warn" "Has FORMAT support but calls tools directly instead of runner scripts"
     else
       record_check "test_abstraction" "Runner script usage (${comp})" "skip" "No FORMAT support"
     fi
   done
 
-  # Check aggregation pattern in Makefiles (tmpdir + test-aggregate.sh)
+  # Check aggregation pattern in Makefiles (tmpdir + aggregate runner script)
   for mf in "${MAKEFILES_FOUND[@]}"; do
-    if file_has_pattern "$mf" 'mktemp.*-d.*test-aggregate'; then
-      record_check "test_abstraction" "Aggregation pattern (${mf})" "pass" "Uses tmpdir + test-aggregate.sh for combining results"
-    elif file_has_pattern "$mf" 'test-aggregate'; then
-      record_check "test_abstraction" "Aggregation pattern (${mf})" "pass" "References test-aggregate.sh"
-    elif file_has_pattern "$mf" 'ifdef FORMAT'; then
+    if file_has_pattern "$mf" 'mktemp.*-d.*run-aggregate'; then
+      record_check "test_abstraction" "Aggregation pattern (${mf})" "pass" "Uses tmpdir + run-aggregate.sh for combining results"
+    elif file_has_pattern "$mf" 'run-aggregate'; then
+      record_check "test_abstraction" "Aggregation pattern (${mf})" "pass" "References run-aggregate.sh"
+    elif file_has_pattern "$mf" "$FORMAT_SUPPORT"; then
       # Only check if this Makefile has aggregate targets (calls sub-targets)
       if file_has_pattern "$mf" 'MAKE.*test-'; then
         record_check "test_abstraction" "Aggregation pattern (${mf})" "warn" "Calls sub-test-targets but doesn't aggregate JSON results"
       fi
     fi
   done
+
+  # Runner-script hygiene for docker-based local runners (wiki: patterns/
+  # makefile-hierarchy.md). Only applies when runner scripts drive docker.
+  local docker_runners=()
+  if [[ -d "scripts" ]]; then
+    for rs in scripts/run-*.sh scripts/ensure-test-image.sh scripts/test-image.sh; do
+      [[ -f "$rs" ]] || continue
+      if file_has_pattern "$rs" 'docker (run|build)'; then
+        docker_runners+=("$rs")
+      fi
+    done
+  fi
+
+  if [[ ${#docker_runners[@]} -gt 0 ]]; then
+    # (1) Per-worktree test image tag: a shared tag with per-checkout freshness
+    # stamps makes sibling worktrees invalidate each other (rebuild ping-pong).
+    if [[ -f "scripts/test-image.sh" ]] || [[ -f "scripts/test-image-name.sh" ]] || { [[ -f "scripts/ensure-test-image.sh" ]] && file_has_pattern "scripts/ensure-test-image.sh" 'cksum.*IMG|IMG=.*cksum|test-image-name'; }; then
+      record_check "test_abstraction" "Per-worktree test image tag" "pass" "Test image tag keyed to checkout path"
+    else
+      record_check "test_abstraction" "Per-worktree test image tag" "warn" "Docker test runners appear to share one image tag across worktrees — concurrent worktrees force rebuild ping-pong. Key the tag to the checkout path (wiki: makefile-hierarchy.md)"
+    fi
+
+    # (2) Jest positional patterns must precede array options: yargs array
+    # options (--testPathIgnorePatterns) swallow a following *positional*, so a
+    # bare FILES positional after them silently stops scoping and the full suite
+    # runs. Emitting FILES/FILTER as NAMED flags (--testPathPattern / -t) is
+    # immune to ordering — yargs binds them regardless of position — so treat the
+    # named-flag form as safe even when EXTRA_ARGS trails --testPathIgnorePatterns.
+    if [[ -f "scripts/run-jest.sh" ]]; then
+      local joined_jest
+      joined_jest=$(perl -0pe 's/\\\n/ /g' scripts/run-jest.sh 2>/dev/null || cat scripts/run-jest.sh)
+      if grep -qE 'EXTRA_ARGS\+=\([^)]*--testPathPattern' <<< "$joined_jest"; then
+        record_check "test_abstraction" "Jest args before array options" "pass" "FILES scoped via named --testPathPattern flag (position-independent, immune to array-option swallow)"
+      elif grep -qE 'testPathIgnorePatterns[^)]*("\$\{EXTRA_ARGS\[@\]\}"|\$FILES|\$\{FILES\})' <<< "$joined_jest"; then
+        record_check "test_abstraction" "Jest args before array options" "fail" "run-jest.sh passes FILES/EXTRA_ARGS after --testPathIgnorePatterns as a bare positional — the array option swallows it and FILES/FILTER silently don't scope; emit FILES as --testPathPattern instead (wiki: makefile-hierarchy.md)"
+      else
+        record_check "test_abstraction" "Jest args before array options" "pass" "Positional patterns precede array options in run-jest.sh"
+      fi
+    fi
+
+    # (3) Interrupt cleanup: docker run --rm only removes the container on
+    # normal exit; Ctrl+C leaks it and leaked runs snowball VM load.
+    for rs in "${docker_runners[@]}"; do
+      file_has_pattern "$rs" 'docker run' || continue
+      if file_has_pattern "$rs" 'cidfile' && file_has_pattern "$rs" '^\s*trap |trap ['\''"]'; then
+        record_check "test_abstraction" "Container cleanup on interrupt (${rs})" "pass" "Uses --cidfile + trap cleanup"
+      else
+        record_check "test_abstraction" "Container cleanup on interrupt (${rs})" "warn" "docker run without --cidfile + trap — interrupted runs leak containers (wiki: makefile-hierarchy.md)"
+      fi
+    done
+
+    # (4) OOM-kill detection: a containerized runner is the first casualty when
+    # the Docker VM runs out of memory. SIGKILL means the tool emits NOTHING and
+    # the runner exits 137 (128+9; 139 = 128+11 SIGSEGV from the same pressure).
+    # For tools that are silent when clean — tsc --noEmit, eslint — an OOM is
+    # therefore indistinguishable from a pass to any caller judging by output,
+    # which is a green check on code that was never analysed. Prefer ONE shared
+    # guard sourced by every runner over per-runner copies.
+    local oom_guard_lib=""
+    for candidate in scripts/lib/oom-guard.sh scripts/oom-guard.sh scripts/lib/docker-guard.sh; do
+      [[ -f "$candidate" ]] && { oom_guard_lib="$candidate"; break; }
+    done
+
+    if [[ -n "$oom_guard_lib" ]]; then
+      # A guard that unconditionally runs `set -e` switches errexit ON in a caller
+      # that had it off, so its own non-zero return aborts that caller mid-script
+      # — empty output, exit 137, i.e. the very silent failure it exists to
+      # prevent. Require the save/restore form.
+      if file_has_pattern "$oom_guard_lib" 'had_errexit|SAVED_ERREXIT|\$-.*\*e\*'; then
+        record_check "test_abstraction" "OOM-kill guard (${oom_guard_lib})" "pass" "Shared guard detects 137/139 and preserves the caller's errexit"
+      else
+        record_check "test_abstraction" "OOM-kill guard (${oom_guard_lib})" "warn" "${oom_guard_lib} detects OOM but may not save/restore the caller's errexit — an unconditional 'set -e' makes the guard itself abort callers silently (wiki: makefile-hierarchy.md)"
+      fi
+
+      for rs in "${docker_runners[@]}"; do
+        file_has_pattern "$rs" 'docker run' || continue
+        if file_has_pattern "$rs" 'guard_oom|oom-guard'; then
+          record_check "test_abstraction" "OOM guard wired (${rs})" "pass" "Routes docker run through the shared OOM guard"
+        else
+          record_check "test_abstraction" "OOM guard wired (${rs})" "warn" "${rs} runs docker without the OOM guard — an exit-137 kill reports as an unexplained failure, or as a PASS for tools that are silent when clean (wiki: makefile-hierarchy.md)"
+        fi
+      done
+    else
+      # No shared lib: accept an inline 137 check, but flag the duplication risk.
+      local inline_oom=0
+      for rs in "${docker_runners[@]}"; do
+        file_has_pattern "$rs" '\b137\b' && inline_oom=$((inline_oom + 1))
+      done
+      if [[ $inline_oom -gt 0 ]]; then
+        record_check "test_abstraction" "OOM-kill guard" "warn" "${inline_oom} runner(s) check exit 137 inline with no shared guard (scripts/lib/oom-guard.sh) — the check will drift between runners (wiki: makefile-hierarchy.md)"
+      else
+        record_check "test_abstraction" "OOM-kill guard" "fail" "No OOM-kill detection in any docker runner: a 137 SIGKILL produces empty output, which reads as CLEAN for silent-on-success tools like tsc --noEmit and eslint — a pass on code that was never checked. Add scripts/lib/oom-guard.sh and route every docker run through it (wiki: makefile-hierarchy.md)"
+      fi
+    fi
+
+    # (5) Labelled auto-reclaim: a reused per-worktree tag leaves DANGLING images
+    # (ten rebuilds = one tag + nine untagged), and a worktree removed without
+    # `worktree-clean` leaks its images forever. Require build-time tim.* labels
+    # (tags address, labels reclaim) plus a post-build sweep. The label filter is
+    # the entire safety boundary — a name-glob prune or `docker builder prune`
+    # would destroy the SHARED layer cache and cold-rebuild every other checkout.
+    local img_helper=""
+    for candidate in scripts/test-image.sh scripts/ensure-test-image.sh; do
+      [[ -f "$candidate" ]] && { img_helper="$candidate"; break; }
+    done
+
+    if [[ -n "$img_helper" ]]; then
+      # No leading '--' in the pattern: grep would parse it as an option.
+      if file_has_pattern "$img_helper" 'label[= ]+tim\.|tim\.worktree'; then
+        record_check "test_abstraction" "Test-image build labels (${img_helper})" "pass" "Builds carry tim.repo/tim.service/tim.worktree labels for label-filtered reclaim"
+      else
+        record_check "test_abstraction" "Test-image build labels (${img_helper})" "warn" "${img_helper} builds test images without tim.* labels — reclaim then has no safe filter and per-worktree images accumulate (wiki: makefile-hierarchy.md#test-image-lifecycle-belongs-to-the-target-not-the-caller)"
+      fi
+
+      if file_has_pattern "$img_helper" 'image prune|docker rmi'; then
+        if file_has_pattern "$img_helper" 'worktree list'; then
+          record_check "test_abstraction" "Test-image auto-reclaim (${img_helper})" "pass" "Post-build dangling sweep plus orphan sweep reconciled against git worktree list"
+        else
+          record_check "test_abstraction" "Test-image auto-reclaim (${img_helper})" "warn" "${img_helper} prunes dangling images but has no orphan sweep — images from removed worktrees are never reclaimed unless worktree-clean is remembered. Reconcile tim.worktree against 'git worktree list --porcelain' (wiki: makefile-hierarchy.md)"
+        fi
+      else
+        record_check "test_abstraction" "Test-image auto-reclaim (${img_helper})" "warn" "${img_helper} never reclaims: a reused per-worktree tag leaves one dangling image per rebuild, and removed worktrees leak theirs. Add a post-build label-filtered 'docker image prune' plus an orphan sweep (wiki: makefile-hierarchy.md)"
+      fi
+
+      # Hard failure: nuking the shared builder cache cold-rebuilds every checkout.
+      if file_has_pattern "$img_helper" 'builder prune|buildx prune'; then
+        record_check "test_abstraction" "Reclaim spares shared layer cache (${img_helper})" "fail" "${img_helper} runs 'docker builder prune' — that destroys the SHARED layer cache and forces every other worktree and the primary checkout into a cold rebuild. Reclaim must be label-filtered image removal only (wiki: makefile-hierarchy.md)"
+      else
+        record_check "test_abstraction" "Reclaim spares shared layer cache (${img_helper})" "pass" "No builder-cache pruning in the image helper"
+      fi
+    fi
+  fi
 
   #--- Category: Seeding Strategy ---
   print_info ""
@@ -402,28 +538,41 @@ scan_stage() {
   if [[ "$QUICK_MODE" == "true" ]]; then
     record_check "seeding" "Seeding checks" "skip" "Skipped in quick mode"
   else
-    # Check for _TEST_DB_SEEDED pattern
+    # Recognize EITHER guard convention: the seed-once guard (_TEST_DB_SEEDED)
+    # or the wiki test-db-reset pattern's reset-once guard (*_TEST_DB_RESET).
+    # Either one satisfies "reset/seed the test DB exactly once per suite".
     local has_seed_guard=false
     for mf in "${MAKEFILES_FOUND[@]}"; do
-      if file_has_pattern "$mf" '_TEST_DB_SEEDED'; then
+      if file_has_pattern "$mf" '_TEST_DB_SEEDED|_TEST_DB_RESET'; then
         has_seed_guard=true
-        record_check "seeding" "Seed guard variable (${mf})" "pass" "Uses _TEST_DB_SEEDED env var"
+        record_check "seeding" "Reset/seed-once guard (${mf})" "pass" "Uses a *_TEST_DB_SEEDED / *_TEST_DB_RESET env-var guard"
       fi
     done
 
     if [[ "$has_seed_guard" == "false" ]]; then
-      # Check if there are any seed targets at all
-      local has_seed_target=false
+      # Does the project have a database at all? Seed/reset/migrate targets are
+      # the tell. A pure unit-test project that mocks the DB has none of these
+      # and legitimately needs no test-DB reset.
+      local has_db_targets=false
       for mf in "${MAKEFILES_FOUND[@]}"; do
-        if file_has_pattern "$mf" 'seed'; then
-          has_seed_target=true
+        if file_has_pattern "$mf" 'seed|reset-db|reset-test-db|migrate'; then
+          has_db_targets=true
         fi
       done
 
-      if [[ "$has_seed_target" == "true" ]]; then
-        record_check "seeding" "Seed-once guard" "warn" "Has seed targets but no _TEST_DB_SEEDED guard — tests may seed multiple times"
+      if [[ "$has_db_targets" == "true" ]]; then
+        # The project has a database. Per the test-db-reset pattern, ANY test
+        # tier that touches a real DB must reset it exactly once per suite
+        # (behind a guard so hierarchical `make` targets don't re-reset). Without
+        # this, tests are not idempotent across runs and the DB accumulates
+        # stale test data from past runs. This is a real defect, not a nit —
+        # DO NOT dismiss it as a false positive just because the seed targets
+        # aren't currently wired as test prerequisites: that missing wiring IS
+        # the gap. (If EVERY test tier mocks the DB, note that explicitly when
+        # accepting this finding.)
+        record_check "seeding" "Reset/seed-once guard" "fail" "Project has a database (seed/reset/migrate targets) but no *_TEST_DB_SEEDED / *_TEST_DB_RESET guard wiring a reset into the test path — tests aren't idempotent and the DB accumulates stale test data. See the test-db-reset pattern."
       else
-        record_check "seeding" "Seed-once guard" "skip" "No seed targets found"
+        record_check "seeding" "Reset/seed-once guard" "skip" "No database targets found — tests appear to mock the DB"
       fi
     fi
 
@@ -643,144 +792,10 @@ report_stage() {
 EOF
 )
 
-  echo "$result" > "$OUTPUT_FILE"
-  echo "$result"
+  echo "$result" > "$OUTPUT_FILE"   # file stays JSON for programmatic consumers
+  log_json "$result"                # stdout = TOON in AI context, JSON otherwise
 
   print_info "Report written to: $OUTPUT_FILE"
-}
-
-#============================================================================
-# Stage: Fix - Apply auto-fixable improvements to discovered Makefiles
-#
-# Auto-fixable issues (ported from makefile-optimize.sh):
-#   - Missing FORMAT ?= human
-#   - Missing MAKEFLAGS += --no-print-directory
-#   - Missing JSON_WRAPPER variable
-#   - Missing targets meta-target
-#
-# Non-auto-fixable (manual, as documented in makefile-optimize.sh):
-#   - Adding ifeq ($(FORMAT),json) branches to existing targets
-#   - Adding missing standard targets (test, lint, format, etc.)
-#   - Adding @ prefix to recipe lines
-#============================================================================
-
-fix_stage() {
-  print_info "Stage: Applying auto-fixes..."
-
-  if [[ ${#MAKEFILES_FOUND[@]} -eq 0 ]]; then
-    print_error "No Makefiles found — run scan first or ensure Makefiles exist"
-    return 1
-  fi
-
-  local fixes_applied=0
-  local fixed_files=()
-
-  for makefile in "${MAKEFILES_FOUND[@]}"; do
-    local modified=false
-
-    # Fix: Add FORMAT ?= human (and companion vars) if missing.
-    # When inserting, we add FORMAT, MAKEFLAGS, and JSON_WRAPPER together as a
-    # cohesive block rather than individually, to avoid partial states.
-    if ! grep -q 'FORMAT ?= human' "$makefile"; then
-      local temp_file
-      temp_file=$(mktemp)
-      if grep -q '^\.PHONY:' "$makefile"; then
-        # Insert the block after the first .PHONY line
-        awk '/^\.PHONY:/{print; print ""; print "# LLM-optimized output support"; print "FORMAT ?= human"; print "MAKEFLAGS += --no-print-directory"; print "JSON_WRAPPER ?= $(HOME)/.claude/scripts/lib/make-json-wrapper.sh"; next}1' "$makefile" > "$temp_file"
-      else
-        {
-          printf '# LLM-optimized output support\n'
-          printf 'FORMAT ?= human\n'
-          printf 'MAKEFLAGS += --no-print-directory\n'
-          printf 'JSON_WRAPPER ?= $(HOME)/.claude/scripts/lib/make-json-wrapper.sh\n'
-          printf '\n'
-          cat "$makefile"
-        } > "$temp_file"
-      fi
-      mv "$temp_file" "$makefile"
-      modified=true
-      fixes_applied=$((fixes_applied + 3))
-      print_success "Fixed: Added FORMAT/MAKEFLAGS/JSON_WRAPPER to ${makefile}"
-    else
-      # FORMAT already exists — patch MAKEFLAGS and JSON_WRAPPER individually if absent
-
-      if ! grep -q 'MAKEFLAGS.*--no-print-directory' "$makefile"; then
-        # macOS sed requires empty string for in-place without backup
-        sed -i'' '/FORMAT ?= human/a\'$'\nMAKEFLAGS += --no-print-directory' "$makefile"
-        modified=true
-        fixes_applied=$((fixes_applied + 1))
-        print_success "Fixed: Added MAKEFLAGS to ${makefile}"
-      fi
-
-      if ! grep -q 'JSON_WRAPPER' "$makefile"; then
-        sed -i'' '/MAKEFLAGS.*--no-print-directory/a\'$'\nJSON_WRAPPER ?= $(HOME)/.claude/scripts/lib/make-json-wrapper.sh' "$makefile"
-        modified=true
-        fixes_applied=$((fixes_applied + 1))
-        print_success "Fixed: Added JSON_WRAPPER to ${makefile}"
-      fi
-    fi
-
-    # Fix: Add targets meta-target if missing.
-    # The targets target emits a JSON list of available targets in FORMAT=json mode
-    # and falls back to `make help` in human mode.
-    if ! grep -qE '^targets:' "$makefile"; then
-      local component_name
-      component_name=$(basename "$(dirname "$(realpath "$makefile")")")
-      [[ "$makefile" == "Makefile" ]] && component_name="root"
-      # Use printf to avoid heredoc tab-stripping issues with Makefile recipe indentation
-      printf '\ntargets: ## List all available targets\nifeq ($(FORMAT),json)\n\t@echo '"'"'{"status":"success","target":"targets","component":"%s","targets":[]}'"'"'\nelse\n\t@$(MAKE) help\nendif\n' "$component_name" >> "$makefile"
-      modified=true
-      fixes_applied=$((fixes_applied + 1))
-      print_success "Fixed: Added targets meta-target to ${makefile}"
-    fi
-
-    [[ "$modified" == "true" ]] && fixed_files+=("$makefile")
-  done
-
-  print_info ""
-  print_info "Auto-fix complete: ${fixes_applied} fix(es) applied to ${#fixed_files[@]} file(s)"
-
-  # Build fixed files JSON array
-  local fixed_json="["
-  local first=true
-  for f in "${fixed_files[@]}"; do
-    if [[ "$first" == "true" ]]; then first=false; else fixed_json="${fixed_json},"; fi
-    fixed_json="${fixed_json}\"${f}\""
-  done
-  fixed_json="${fixed_json}]"
-
-  # Emit a concise JSON summary for fix-only mode; in full mode the caller
-  # already has the audit report and only needs to know what was patched.
-  local fix_result
-  fix_result=$(cat <<EOF
-{
-  "fix_stage": {
-    "fixes_applied": ${fixes_applied},
-    "files_modified": ${fixed_json}
-  }
-}
-EOF
-)
-
-  # Merge fix summary into the existing audit result file if it exists, otherwise emit standalone
-  if [[ -f "$OUTPUT_FILE" ]]; then
-    local merged
-    merged=$(python3 -c "
-import sys, json
-audit = json.load(open('$OUTPUT_FILE'))
-fix = json.load(sys.stdin)
-audit.update(fix)
-print(json.dumps(audit, indent=2))
-" <<< "$fix_result" 2>/dev/null || true)
-    if [[ -n "$merged" ]]; then
-      echo "$merged" > "$OUTPUT_FILE"
-      print_info "Fix summary merged into: $OUTPUT_FILE"
-    fi
-  else
-    echo "$fix_result" > "$OUTPUT_FILE"
-    echo "$fix_result"
-    print_info "Fix summary written to: $OUTPUT_FILE"
-  fi
 }
 
 #============================================================================
@@ -812,11 +827,6 @@ main() {
       exit 2
       ;;
   esac
-
-  # Apply fixes after audit if requested
-  if [[ "$FIX_MODE" == "true" ]]; then
-    fix_stage
-  fi
 }
 
 main

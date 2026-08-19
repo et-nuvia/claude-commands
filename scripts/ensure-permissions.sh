@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: requires bash >= 4 (on macOS: brew install bash)" >&2
+  exit 1
+fi
+
 # ensure-permissions.sh — SessionStart hook
 # Ensures project-level .claude/settings.local.json has permissions for:
 #   1. Make targets derived from PROJECT.yaml
@@ -341,19 +346,8 @@ collect_mcp_permissions() {
   echo "mcp__codebase-memory-mcp__search_code"
   echo "mcp__codebase-memory-mcp__search_graph"
   echo "mcp__codebase-memory-mcp__query_graph"
-  echo "mcp__asana__list_workspaces"
-  echo "mcp__asana__list_projects"
-  echo "mcp__asana__list_sections"
-  echo "mcp__asana__list_tasks"
-  echo "mcp__asana__get_task"
-  echo "mcp__asana__get_custom_fields"
-  echo "mcp__asana__create_task"
-  echo "mcp__asana__update_task"
-  echo "mcp__asana__update_custom_field"
-  echo "mcp__asana__add_comment"
-  echo "mcp__asana__search_tasks"
-  echo "mcp__asana__move_task_to_section"
-  echo "mcp__asana__complete_task"
+  # Asana: handled by ~/.claude/scripts/asana.sh shim (auto-allowed by the
+  # allow-claude-scripts.sh hook) — the asana MCP was retired.
 }
 
 # Collect file access permissions for ~/.claude/ and /tmp/

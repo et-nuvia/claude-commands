@@ -7,7 +7,7 @@ set -euo pipefail
 #   ~/.claude/scripts/infra-plan.sh [--json|--raw] [--full|--section] [options]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):

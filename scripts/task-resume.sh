@@ -38,6 +38,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source utilities
 source "${SCRIPT_DIR}/doc-utils.sh"
 source "${SCRIPT_DIR}/get-default-branch.sh"
+source "${SCRIPT_DIR}/lib/asana-sync.sh"
+source "${SCRIPT_DIR}/lib/prg-sync.sh"
+# Worktree helpers (get_worktree_path / create_task_worktree) — task isolation
+# defaults to worktrees, matching task-start. Defensive: never hard-fail if absent.
+source "${SCRIPT_DIR}/lib/worktree-utils.sh" 2>/dev/null || true
 
 # Colors for raw mode
 RED='\033[0;31m'
@@ -65,12 +70,11 @@ NEW_DOC_FILENAME=""
 NEW_DOC_TYPE=""
 PRESERVED_BRANCH=""
 BRANCH_RESTORED=false
+USE_WORKTREE=true   # worktree isolation is the default (matches task-start); --no-worktree forces plain branch mode
+WORKTREE_PATH=""
 MOVED_COUNT=0
 ASANA_GID=""
 SHOULD_SYNC_ASANA=false
-# Promoted to module scope so --full mode's terminal JSON block (which runs
-# outside section_setup) can reference the branch under `set -u`.
-BRANCH_NAME=""
 DOCS_DIR="$(find_docs_dir 2>/dev/null || echo "docs")"
 
 #------------------------------------------------------------------------------
@@ -428,7 +432,7 @@ section_precheck() {
   "task_file": "$SELECTED_TASK",
   "asana_gid": "${ASANA_GID:-null}",
   "should_sync_asana": $SHOULD_SYNC_ASANA,
-  "hint": "If should_sync_asana is true, flip Asana to 'In Progress' BEFORE running --reopen. Failed Asana sync after --reopen leaves docs in active/ while Asana still shows Completed.",
+  "hint": "Asana sync now happens automatically at the start of --reopen (status, completed flag, resume comment) and --reopen aborts if it fails. should_sync_asana is informational.",
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
@@ -458,22 +462,23 @@ section_reopen() {
     log_info "Task: $TASK_ID - $TASK_TITLE"
     log_info "Previous status: $PREVIOUS_STATUS"
 
-    # Determine range folder
-    RANGE_FOLDER=$(basename "$(dirname "$SELECTED_TASK")")
-
-    # Read external-sync metadata BEFORE mutating local state. Previously,
-    # docs were moved completed/ -> active/ first, then Asana GID + backend
-    # config were inspected. If sync metadata was missing or misconfigured,
-    # docs ended up orphaned in active/ with no matching external state, and
-    # a retry skipped the (already-done) move so the inconsistency was
-    # invisible. Surface the requirement up front instead.
+    # Sync Asana inline BEFORE moving docs (divergence guard: never leave
+    # docs in active/ while Asana still shows Completed). Aborts on failure.
+    ASANA_SYNCED=false
     ASANA_GID=$(grep -m1 "^- Asana GID:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
-    if [[ -f "PROJECT.yaml" ]] && [[ "$(yaml_get '.task_management.backend' PROJECT.yaml)" == "asana" ]]; then
-        SHOULD_SYNC_ASANA=true
-        if [[ -z "$ASANA_GID" ]]; then
-            log_warn "Asana backend configured but task doc has no Asana GID — LLM will need to relink"
+    if [[ -f "PROJECT.yaml" ]] && [[ "$(yaml_get '.task_management.backend' PROJECT.yaml)" == "asana" ]] && [[ -n "$ASANA_GID" ]]; then
+        if asana_sync_status_field "$ASANA_GID" "In progress" && \
+           asana_sync_completed "$ASANA_GID" "false"; then
+            asana_sync_comment "$ASANA_GID" "Task resumed: ${INPUT_TEXT}" || true
+            ASANA_SYNCED=true
+            log_info "Asana synced: status 'In progress', task reopened"
+        else
+            output_json_error "reopen" "Automatic Asana sync failed for GID ${ASANA_GID}. Fix connectivity/token, or sync manually (~/.claude/scripts/asana.sh update-custom-field ${ASANA_GID} --field Status --value 'In progress'; update-task ${ASANA_GID} --completed false), then re-run --reopen"
         fi
     fi
+
+    # Determine range folder
+    RANGE_FOLDER=$(basename "$(dirname "$SELECTED_TASK")")
 
     # Move documents if in completed/
     if [[ "$PREVIOUS_STATUS" == "completed" ]]; then
@@ -505,6 +510,16 @@ section_reopen() {
         SELECTED_TASK="$DOCS_DIR/active/$RANGE_FOLDER/$(basename "$SELECTED_TASK")"
     fi
 
+    # Extract Asana GID if present
+    if [[ -f "$SELECTED_TASK" ]]; then
+        ASANA_GID=$(grep -m1 "^- Asana GID:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
+
+        # Check if PROJECT.yaml has Asana configured (false if already synced inline)
+        if [[ "$ASANA_SYNCED" != "true" ]] && [[ -f "PROJECT.yaml" ]] && [[ "$(yaml_get '.task_management.backend' PROJECT.yaml)" == "asana" ]]; then
+            SHOULD_SYNC_ASANA=true
+        fi
+    fi
+
     # Check for preserved branch (on-hold tasks)
     if [[ "$PREVIOUS_STATUS" == "on-hold" ]]; then
         PRESERVED_BRANCH=$(grep -m1 "^\*\*Preserved Branch\*\*:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
@@ -512,6 +527,28 @@ section_reopen() {
         if [[ -n "$PRESERVED_BRANCH" ]]; then
             log_info "Preserved branch: $PRESERVED_BRANCH"
         fi
+    fi
+
+    # ── Program (PRG) tracking ────────────────────────────────────────────
+    # Reopening a TSK invalidates its program's completion. If a completed PRG
+    # owns this task, bring it back to active/ first, then reset the workstream
+    # to In progress. Order matters: prg_sync_task only searches active/.
+    # No-op for tasks in no program.
+    PRG_REOPENED=""
+    PRG_REOPENED=$(prg_reopen_for_task "$TASK_ID" 2>/dev/null || echo "")
+    if [[ -n "$PRG_REOPENED" ]]; then
+        log_info "Program reopened: $(basename "$PRG_REOPENED") moved back to active/"
+    fi
+    # --force is required here: the workstream is very likely "Done", and the
+    # monotonic guard exists precisely to stop that being walked backwards by an
+    # out-of-order hook. A reopen is the one legitimate regression, so it must
+    # override the guard explicitly rather than be silently dropped.
+    local _prg_reopen_path
+    _prg_reopen_path=$(prg_find_for_task "$TASK_ID" 2>/dev/null || echo "")
+    if [[ -n "$_prg_reopen_path" ]]; then
+        prg_set_status "$_prg_reopen_path" "$TASK_ID" "In progress" --force 2>/dev/null || true
+        prg_append_status_log "$_prg_reopen_path" "${TASK_ID}: reopened → In progress" 2>/dev/null || true
+        prg_stage_for_commit "$_prg_reopen_path"
     fi
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
@@ -523,6 +560,7 @@ section_reopen() {
   "task_title": "$TASK_TITLE",
   "task_slug": "$TASK_SLUG",
   "previous_status": "$PREVIOUS_STATUS",
+  "prg_reopened": "${PRG_REOPENED:-}",
   "task_file": "$SELECTED_TASK",
   "moved_count": $MOVED_COUNT,
   "range_folder": "$RANGE_FOLDER",
@@ -633,40 +671,60 @@ section_setup() {
         PRESERVED_BRANCH=$(grep -m1 "^\*\*Preserved Branch\*\*:" "$SELECTED_TASK" | sed 's/.*: *//' || echo "")
     fi
 
-    # Determine branch name. Use module-scope BRANCH_NAME so --full mode's
-    # terminal JSON block (outside this function) can reference it under set -u.
+    # Determine branch name
+    local branch_name=""
     if [[ -n "$PRESERVED_BRANCH" ]] && git rev-parse --verify "$PRESERVED_BRANCH" >/dev/null 2>&1; then
-        BRANCH_NAME="$PRESERVED_BRANCH"
+        branch_name="$PRESERVED_BRANCH"
         BRANCH_RESTORED=true
-        log_success "Branch restored: $BRANCH_NAME"
+        log_success "Branch restored: $branch_name"
     else
-        BRANCH_NAME="feature/${TASK_ID}-${TASK_SLUG}"
+        branch_name="feature/${TASK_ID}-${TASK_SLUG}"
 
         # Check if branch exists
-        if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
-            log_info "Branch exists: $BRANCH_NAME"
+        if git rev-parse --verify "$branch_name" >/dev/null 2>&1; then
+            log_info "Branch exists: $branch_name"
         else
-            log_info "Branch will be created: $BRANCH_NAME"
+            log_info "Branch will be created: $branch_name"
         fi
     fi
-    local branch_name="$BRANCH_NAME"
 
-    # Worktree detection/recreation (DSN Decision 15)
-    # Check if there's an existing worktree for this task, or recreate from branch
+    # Worktree/branch materialization (DSN Decision 15).
+    # Worktree isolation is the default (matches task-start); --no-worktree forces
+    # plain branch mode. Both are first-class. Previously this only handled an
+    # existing worktree or recreated one from an existing branch, and did nothing
+    # for a never-started task — leaving neither branch nor worktree created.
+    local wt_path=""
     if declare -f get_worktree_path &>/dev/null; then
-        local wt_path
         wt_path=$(get_worktree_path "$TASK_ID" 2>/dev/null || echo "")
+    fi
+
+    if [[ -n "$wt_path" ]] && [[ -d "$wt_path" ]]; then
+        # Existing worktree — resume into it
+        cd "$wt_path" || log_warn "Failed to cd into worktree: $wt_path"
+        WORKTREE_PATH="$wt_path"
+        log_success "Resumed worktree: $wt_path"
+    elif [[ "$USE_WORKTREE" == "true" ]] && declare -f create_task_worktree &>/dev/null; then
+        # No worktree yet — create one. create_task_worktree uses `add -b` for a
+        # new branch and falls back to an existing branch, covering both the
+        # never-started and preserved-branch cases.
+        wt_path=$(create_task_worktree "$TASK_ID" "$branch_name" 2>/dev/null || echo "")
         if [[ -n "$wt_path" ]] && [[ -d "$wt_path" ]]; then
-            # Worktree exists — cd into it
             cd "$wt_path" || log_warn "Failed to cd into worktree: $wt_path"
-            log_success "Resumed worktree: $wt_path"
-        elif [[ -n "$branch_name" ]] && git rev-parse --verify "$branch_name" >/dev/null 2>&1; then
-            # Worktree missing but branch exists — recreate
-            wt_path=$(create_task_worktree "$TASK_ID" "$branch_name" 2>/dev/null || echo "")
-            if [[ -n "$wt_path" ]] && [[ -d "$wt_path" ]]; then
-                cd "$wt_path" || log_warn "Failed to cd into recreated worktree: $wt_path"
-                log_success "Recreated worktree from preserved branch: $wt_path"
-            fi
+            WORKTREE_PATH="$wt_path"
+            log_success "Created worktree: $wt_path"
+        else
+            log_warn "Worktree creation failed — falling back to branch mode"
+            USE_WORKTREE=false
+        fi
+    fi
+
+    # Branch mode (--no-worktree, or worktree unavailable/failed): ensure the
+    # branch actually exists and is checked out in the main checkout.
+    if [[ -z "$WORKTREE_PATH" ]]; then
+        if git rev-parse --verify "$branch_name" >/dev/null 2>&1; then
+            git checkout "$branch_name" >/dev/null 2>&1 || log_warn "Failed to checkout branch: $branch_name"
+        else
+            git checkout -b "$branch_name" >/dev/null 2>&1 || log_warn "Failed to create branch: $branch_name"
         fi
     fi
 
@@ -682,7 +740,7 @@ section_setup() {
 
     # Determine parent branch — default branch as fallback for resumed tasks
     local parent_branch
-    parent_branch=$(get_default_branch 2>/dev/null || echo "main")
+    parent_branch=$(get_default_branch_interactive 2>/dev/null || echo "main")
 
     # Write .current-task in JSON format
     write_current_task "$TASK_ID" "$branch_name" "$parent_branch" "${SELECTED_TASK}" "$tracker_backend" "$tracker_id"
@@ -696,6 +754,7 @@ section_setup() {
   "branch_name": "$branch_name",
   "branch_restored": $BRANCH_RESTORED,
   "preserved_branch": "${PRESERVED_BRANCH:-null}",
+  "worktree_path": "${WORKTREE_PATH:-null}",
   "asana_gid": "${ASANA_GID:-null}",
   "current_task_written": true,
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -705,6 +764,7 @@ EOF
         log_success "Environment setup ready"
         echo "  Branch: $branch_name"
         echo "  Restored: $BRANCH_RESTORED"
+        [[ -n "$WORKTREE_PATH" ]] && echo "  Worktree: $WORKTREE_PATH" || echo "  Mode: branch (no worktree)"
     fi
 }
 
@@ -721,6 +781,7 @@ Resume a completed or on-hold task with new input.
 Options:
   --json          JSON output (default for sections)
   --raw           Verbose colored output (for debugging)
+  --no-worktree   Force plain branch mode (default: create/restore a worktree)
 
 Sections:
   --search <input_text>             Find matching tasks
@@ -750,6 +811,10 @@ main() {
                 ;;
             --raw)
                 OUTPUT_MODE="raw"
+                shift
+                ;;
+            --no-worktree)
+                USE_WORKTREE=false
                 shift
                 ;;
             --search|--precheck|--reopen|--document|--setup|--full)
@@ -851,7 +916,7 @@ main() {
   "doc_type": "$NEW_DOC_TYPE",
   "input_source": "$INPUT_SOURCE",
   "input_text": $(echo "$INPUT_TEXT" | jq -Rs .),
-  "branch_name": "$BRANCH_NAME",
+  "branch_name": "$branch_name",
   "branch_restored": $BRANCH_RESTORED,
   "asana_gid": "${ASANA_GID:-null}",
   "should_sync_asana": $SHOULD_SYNC_ASANA,

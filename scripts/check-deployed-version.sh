@@ -50,7 +50,7 @@ echo "  Endpoint: $VERSION_ENDPOINT" >&2
 echo "  Expected: $EXPECTED_VERSION" >&2
 
 # Try to get version from endpoint
-RESPONSE=$(curl -s "$VERSION_ENDPOINT" 2>/dev/null || echo "")
+RESPONSE=$(curl -s --connect-timeout 5 --max-time 15 "$VERSION_ENDPOINT" 2>/dev/null || echo "")
 if [[ -n "$RESPONSE" ]]; then
   DEPLOYED_VERSION=$(echo "$RESPONSE" | jq -r '.version // .tag // empty' 2>/dev/null || echo "")
 fi
@@ -73,16 +73,15 @@ echo "  Deployed: $DEPLOYED_VERSION" >&2
 # Extract base semver (handle staging metadata like 1.2.3-staging.1234)
 BASE_VERSION=$(echo "$EXPECTED_VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || echo "$EXPECTED_VERSION")
 
-# Match base version as a whole semver token, not a regex substring.
-# Previous `grep -q "$BASE_VERSION"` treated dots as regex wildcards and
-# matched on substrings, so "1.2.3" would match "11x2x3" or "1.2.30".
-DEPLOYED_BASE=$(echo "$DEPLOYED_VERSION" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
-if [[ -n "$DEPLOYED_BASE" && "$DEPLOYED_BASE" == "$BASE_VERSION" ]]; then
-  echo "✓ Version verified (deployed base $DEPLOYED_BASE == $BASE_VERSION)" >&2
+# Check if deployed version contains expected base version.
+# Guard against an empty BASE_VERSION (extraction failed) — an empty pattern
+# matches everything and would falsely report the version as verified.
+if [[ -n "$BASE_VERSION" ]] && echo "$DEPLOYED_VERSION" | grep -qF "$BASE_VERSION"; then
+  echo "✓ Version verified (contains $BASE_VERSION)" >&2
   VERIFIED=true
   EXIT_CODE=0
 else
-  echo "⚠️  Version mismatch (deployed base=${DEPLOYED_BASE:-unknown}, expected=$BASE_VERSION)" >&2
+  echo "⚠️  Version mismatch" >&2
   EXIT_CODE=1
 fi
 

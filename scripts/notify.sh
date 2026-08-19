@@ -59,7 +59,8 @@ get_webhook_url() {
 
         if [[ -n "${bucket}" && "${bucket}" != "null" ]]; then
             # Fetch from secrets manager based on environment
-            if [[ "$(uname -s)" == "Darwin" ]]; then
+            source "${HOME}/.claude/scripts/lib/platform.sh"
+            if env_is_work; then
                 # AWS Secrets Manager (work)
                 local app_name
                 app_name=$(yq '.name' PROJECT.yaml 2>/dev/null)
@@ -115,7 +116,8 @@ get_email_credentials() {
     bucket=$(get_email_config "secret_bucket")
     bucket="${bucket:-notifications}"
 
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    source "${HOME}/.claude/scripts/lib/platform.sh"
+    if env_is_work; then
         # AWS - credentials are implicit via IAM
         echo "aws"
     else

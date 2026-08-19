@@ -24,8 +24,16 @@ set -euo pipefail
 #   "failures": [
 #     {"suite": "test_validate_project.py", "test": "test_bad_syntax", "message": "AssertionError: ..."}
 #   ],
-#   "warning_messages": []
+#   "warning_messages": [],
+#   "exit_code": 0,
+#   "next_action": "display_summary|fix_failures|fix_error"
 # }
+#
+# Accuracy contract: the pytest exit code is authoritative. A non-zero exit never
+# yields status "pass", even when no "N failed" summary line was printed.
+# Pytest exit codes: 0 ok, 1 tests failed, 2 interrupted/collection error,
+# 3 internal error, 4 usage error, 5 no tests collected.
+# JSON mode still exits 0 (callers parse `status`).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_DIR="${SCRIPT_DIR}/tests"
@@ -65,7 +73,7 @@ fi
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     if [[ "$FORMAT" == "json" ]]; then
-        echo '{"status":"pass","suites":0,"tests":0,"passed":0,"failed":0,"skipped":0,"warnings":0,"duration_seconds":0,"failures":[],"warning_messages":["No Python test files found"]}'
+        echo '{"status":"pass","suites":0,"tests":0,"passed":0,"failed":0,"skipped":0,"warnings":1,"duration_seconds":0,"failures":[],"warning_messages":["No Python test files found"],"exit_code":0,"next_action":"verify_scope"}'
     else
         echo "No Python test files found in ${TESTS_DIR}" >&2
     fi
@@ -186,30 +194,67 @@ fi
 TOTAL=$((PASSED + FAILED + SKIPPED))
 SUITE_COUNT=${#SUITES_SEEN[@]}
 
+# Pytest exit codes: 0 ok, 1 tests failed, 2 interrupted/collection error,
+# 3 internal error, 4 usage error, 5 no tests collected. The text summary alone
+# is NOT sufficient — a collection error (import error, syntax error in a test
+# file) prints no "N failed" line, so parsing alone would report a false pass.
+declare -a WARNING_MESSAGES=()
+case "$PYTEST_EXIT" in
+    0) ;;
+    1) ;;  # tests failed — already reflected in FAILED
+    2) WARNING_MESSAGES+=("pytest exited 2: collection error or interrupted run — tests may not have executed") ;;
+    3) WARNING_MESSAGES+=("pytest exited 3: internal error") ;;
+    4) WARNING_MESSAGES+=("pytest exited 4: usage error (bad arguments)") ;;
+    5) WARNING_MESSAGES+=("pytest exited 5: no tests were collected") ;;
+    *) WARNING_MESSAGES+=("pytest exited ${PYTEST_EXIT}") ;;
+esac
+
+# A non-zero exit with no parsed failure count still means the run did not
+# succeed — surface the tail of pytest's output so the caller learns why.
+if [[ $PYTEST_EXIT -ne 0 && $FAILED -eq 0 ]]; then
+    error_tail=$(printf '%s' "$PYTEST_OUTPUT" | tail -n 20 | tr '\n' ' ')
+    error_tail="${error_tail:0:300}"
+    FAILURES+=("$(jq -nc --arg s "pytest" --arg t "<invocation>" --arg m "$error_tail" \
+        '{suite: $s, test: $t, message: $m}')")
+fi
+
 # If we couldn't parse suites from output, count from target files
 if [[ $SUITE_COUNT -eq 0 && $TOTAL -gt 0 ]]; then
     SUITE_COUNT=${#TARGETS[@]}
 fi
 
-# Build failures JSON array
+# Truthful status: honour PYTEST_EXIT, not just the text-parsed failure count.
+STATUS="pass"
+NEXT_ACTION="display_summary"
+if [[ $FAILED -gt 0 ]]; then
+    STATUS="fail"
+    NEXT_ACTION="fix_failures"
+elif [[ $PYTEST_EXIT -ne 0 ]]; then
+    STATUS="fail"
+    NEXT_ACTION="fix_error"
+fi
+
+WARNINGS_JSON="[]"
+if [[ ${#WARNING_MESSAGES[@]} -gt 0 ]]; then
+    WARNINGS_JSON=$(printf '%s\n' "${WARNING_MESSAGES[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+fi
+
+# Rebuild the failures array — a collection-error entry may have been appended.
 FAILURES_JSON="[]"
 if [[ ${#FAILURES[@]} -gt 0 ]]; then
     FAILURES_JSON=$(printf '%s\n' "${FAILURES[@]}" | jq -s '.')
 fi
 
-STATUS="pass"
-if [[ $FAILED -gt 0 ]]; then
-    STATUS="fail"
-fi
-
 jq -nc \
     --arg status "$STATUS" \
+    --arg next_action "$NEXT_ACTION" \
+    --argjson exit_code "$PYTEST_EXIT" \
+    --argjson warning_messages "$WARNINGS_JSON" \
     --argjson suites "$SUITE_COUNT" \
     --argjson tests "$TOTAL" \
     --argjson passed "$PASSED" \
     --argjson failed "$FAILED" \
     --argjson skipped "$SKIPPED" \
-    --argjson warnings 0 \
     --argjson duration "$DURATION" \
     --argjson failures "$FAILURES_JSON" \
     '{
@@ -219,10 +264,12 @@ jq -nc \
         passed: $passed,
         failed: $failed,
         skipped: $skipped,
-        warnings: $warnings,
+        warnings: ($warning_messages | length),
         duration_seconds: $duration,
         failures: $failures,
-        warning_messages: []
+        warning_messages: $warning_messages,
+        exit_code: $exit_code,
+        next_action: $next_action
     }'
 
 # Always exit 0 in JSON mode — the status field carries pass/fail

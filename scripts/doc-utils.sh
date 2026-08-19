@@ -2,35 +2,58 @@
 # Document utility functions for V4 naming convention (6-char hex Task IDs)
 # Source this file in command scripts: source ~/.claude/scripts/doc-utils.sh
 
-# Source common.sh relative to this file so the repo's own copy is used
-# when scripts are run from the checkout (e.g., tests, dev, agent worktrees)
-# rather than silently falling back to the installed copy under ~/.claude.
-source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+source "${HOME}/.claude/scripts/common.sh"
 
 # Find project docs directory
 # Priority: 1) PROJECT.yaml docs_dir field  2) Auto-detect from directory structure
 find_docs_dir() {
     local project_root="$PWD"
 
-    # Find project root (directory containing PROJECT.yaml or .git)
-    local search_dir="$PWD"
-    local levels=0
-    while [[ "$search_dir" != "/" ]] && [[ $levels -lt 5 ]]; do
-        if [[ -f "$search_dir/PROJECT.yaml" ]] || [[ -d "$search_dir/.git" ]]; then
-            project_root="$search_dir"
-            break
-        fi
-        search_dir=$(dirname "$search_dir")
-        ((levels++))
-    done
+    # Prefer git's view of the project root — this is worktree-aware
+    # (`git rev-parse --show-toplevel` returns the worktree path, not the
+    # main repo path, when invoked from inside a worktree). Falls back to
+    # a manual walk for non-git directories.
+    local git_toplevel
+    git_toplevel=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    if [[ -n "$git_toplevel" ]]; then
+        project_root="$git_toplevel"
+    else
+        # Find project root (directory containing PROJECT.yaml or .git).
+        # Accept .git as file OR directory — .git is a file in worktrees.
+        local search_dir="$PWD"
+        local levels=0
+        while [[ "$search_dir" != "/" ]] && [[ $levels -lt 5 ]]; do
+            if [[ -f "$search_dir/PROJECT.yaml" ]] || [[ -e "$search_dir/.git" ]]; then
+                project_root="$search_dir"
+                break
+            fi
+            search_dir=$(dirname "$search_dir")
+            ((levels++))
+        done
+    fi
 
-    # Priority 1: Read docs_dir from PROJECT.yaml
+    # Priority 1: Read docs_dir from PROJECT.yaml. Check the worktree first,
+    # then the main repo (worktrees may not have PROJECT.yaml on their branch).
+    local pyaml_file=""
     if [[ -f "$project_root/PROJECT.yaml" ]]; then
+        pyaml_file="$project_root/PROJECT.yaml"
+    else
+        local common_dir main_root
+        common_dir=$(git rev-parse --git-common-dir 2>/dev/null || true)
+        if [[ -n "$common_dir" ]]; then
+            # --git-common-dir points at the shared .git directory; its parent is the main worktree
+            main_root=$(cd "$(dirname "$common_dir")" 2>/dev/null && pwd || true)
+            if [[ -n "$main_root" ]] && [[ -f "$main_root/PROJECT.yaml" ]]; then
+                pyaml_file="$main_root/PROJECT.yaml"
+            fi
+        fi
+    fi
+    if [[ -n "$pyaml_file" ]]; then
         local configured_dir=""
         if command -v yq &>/dev/null; then
-            configured_dir=$(yaml_get '.docs_dir // ""' "$project_root/PROJECT.yaml")
+            configured_dir=$(yaml_get '.docs_dir // ""' "$pyaml_file")
         elif command -v grep &>/dev/null; then
-            configured_dir=$(grep '^docs_dir:' "$project_root/PROJECT.yaml" 2>/dev/null | sed 's/^docs_dir:[[:space:]]*//' | sed 's/[[:space:]]*#.*//' | tr -d '"'"'" || true)
+            configured_dir=$(grep '^docs_dir:' "$pyaml_file" 2>/dev/null | sed 's/^docs_dir:[[:space:]]*//' | sed 's/[[:space:]]*#.*//' | tr -d '"'"'" || true)
         fi
         if [[ -n "$configured_dir" ]] && [[ -d "$project_root/$configured_dir" ]]; then
             echo "$project_root/$configured_dir"
@@ -44,10 +67,16 @@ find_docs_dir() {
         return 0
     fi
 
-    # Priority 3: Walk up from PWD looking for any docs/ directory
+    # Priority 3: Walk up from PWD looking for any docs/ directory.
+    # Never walk past the git toplevel — from a linked worktree that walk
+    # would escape into the main checkout (.worktrees/<id> → main repo) and
+    # documents would silently be created outside the worktree.
     search_dir="$PWD"
     levels=0
     while [[ "$search_dir" != "/" ]] && [[ $levels -lt 5 ]]; do
+        if [[ -n "$git_toplevel" ]] && [[ "$search_dir" != "$git_toplevel" ]] && [[ "$search_dir" != "$git_toplevel"/* ]]; then
+            break
+        fi
         if [[ -d "$search_dir/docs" ]]; then
             echo "$search_dir/docs"
             return 0
@@ -55,6 +84,18 @@ find_docs_dir() {
         search_dir=$(dirname "$search_dir")
         ((levels++))
     done
+
+    # In a linked worktree whose branch has no docs/ yet, anchor new docs at
+    # the worktree root instead of failing — callers mkdir -p as needed.
+    if [[ -n "$git_toplevel" ]]; then
+        local wt_git_dir wt_common_dir
+        wt_git_dir=$(cd "$(git rev-parse --git-dir 2>/dev/null)" 2>/dev/null && pwd || true)
+        wt_common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd || true)
+        if [[ -n "$wt_git_dir" ]] && [[ -n "$wt_common_dir" ]] && [[ "$wt_git_dir" != "$wt_common_dir" ]]; then
+            echo "$git_toplevel/docs"
+            return 0
+        fi
+    fi
 
     return 1
 }
@@ -79,6 +120,34 @@ find_by_id() {
 
 # Backward-compatible alias
 find_by_sequence() { find_by_id "$@"; }
+
+# Pick the NEWEST document from a newline-separated list of paths on stdin.
+#
+# WHY this exists: every caller used to do `... | head -1` on a path list, but
+# `find`/`find_by_id` emit paths in directory order, so `head -1` silently returns
+# the OLDEST document whenever a work item has more than one of a type — e.g. a
+# task with a second PLN gets its first one, and month-partitioned folders make
+# `docs/active/2026-07/` always beat `docs/active/2026-08/`. That produced a
+# wrong-document selection with no error: task-continue.sh loaded a superseded PLN,
+# reported "0 tasks pending", and would have written completions into it.
+#
+# Ranking is on the DATETIME field of the V4 filename (<ID>-<YYMMDDHHMM>-<TYPE>-*),
+# not on the full path and not on the whole basename. Path order encodes the folder
+# (so `completed/` would outrank `active/`), and whole-basename order sorts by work
+# item ID first (so the highest task ID would win instead of the newest document).
+# The datetime field is the only component that actually means "most recent".
+newest_doc() {
+    awk -F/ 'NF { n = split($NF, parts, "-"); if (n >= 2) print parts[2] "\t" $0 }' \
+        | sort -r | cut -f2- | head -1
+}
+
+# Find the newest document of a given type for a Task ID.
+# Usage: find_newest_by_type "A3F2B9" "PLN"
+find_newest_by_type() {
+    local task_id="$1"
+    local doc_type="$2"
+    find_by_id "$task_id" | grep -- "-${doc_type}-" | newest_doc
+}
 
 # Find primary document (INC or TSK) for a Task ID
 # Usage: find_primary "A3F2B9"

@@ -6,11 +6,37 @@ set -euo pipefail
 # Usage:
 #   test-run.sh [--json|--raw] [--full|--detect|--run|--coverage|--parse]
 #   Options: --coverage-flag --verbose --failed --pattern <pat> --file <path>
+#
+# State dir: each invocation gets its own unique TMP_DIR (mktemp -d) so
+# concurrent sessions/worktrees never clobber each other. --full is
+# self-contained (detect+run+parse in one process) and auto-cleans on exit.
+# To chain separate --detect/--run/--parse calls, export TEST_RUN_DIR to a
+# dir you own before each call; the script will reuse it and will NOT
+# auto-delete it (you're responsible for `rm -rf "$TEST_RUN_DIR"` when done).
 
 OUTPUT_MODE="json"; SECTION="full"
 COVERAGE_FLAG=false; VERBOSE_FLAG=false; FAILED_FLAG=false
 TEST_PATTERN=""; TEST_FILE=""
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/yaml.sh
+source "$SCRIPT_DIR/lib/yaml.sh"
+
+# Per-invocation state dir. Each process gets its own unique dir so
+# concurrent sessions/worktrees never clobber each other. When --detect,
+# --run, and --parse are invoked as separate processes (not --full), the
+# caller must pass the dir along via TEST_RUN_DIR so later steps can find
+# the state written by earlier steps; that dir is only cleaned up by the
+# process that created it (i.e. the --full run, or a manually-set --detect
+# run once the caller is done with it).
+_CREATED_TMP_DIR=false
+if [[ -n "${TEST_RUN_DIR:-}" ]]; then
+    TMP_DIR="$TEST_RUN_DIR"
+    mkdir -p "$TMP_DIR"
+else
+    TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/test-run.XXXXXX")
+    _CREATED_TMP_DIR=true
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -32,6 +58,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 log() { [[ "$OUTPUT_MODE" == "raw" ]] && echo "$@" >&2; }
+
+# Only the process that created TMP_DIR cleans it up. When a caller passes
+# TEST_RUN_DIR to chain separate --detect/--run/--parse invocations, cleanup
+# is the caller's responsibility (rm -rf "$TEST_RUN_DIR" once done).
+[[ "$_CREATED_TMP_DIR" == "true" ]] && trap 'rm -rf "$TMP_DIR"' EXIT
 
 #------------------------------------------------------------------------------
 # Make delegation - use Makefile when available
@@ -95,12 +126,10 @@ detect_framework() {
     log "Detecting test framework..."
     local framework="" test_command="" coverage_command="" min_coverage="80"
     if [[ -f "$PROJECT_ROOT/PROJECT.yaml" ]]; then
-        if grep -q "^testing:" "$PROJECT_ROOT/PROJECT.yaml" 2>/dev/null; then
-            test_command=$(grep -A 10 "^testing:" "$PROJECT_ROOT/PROJECT.yaml" | grep "command:" | head -1 | sed 's/.*command:[[:space:]]*"\?\([^"]*\)"\?.*/\1/')
-            coverage_command=$(grep -A 10 "^testing:" "$PROJECT_ROOT/PROJECT.yaml" | grep "coverage_command:" | head -1 | sed 's/.*coverage_command:[[:space:]]*"\?\([^"]*\)"\?.*/\1/')
-            min_coverage=$(grep -A 10 "^testing:" "$PROJECT_ROOT/PROJECT.yaml" | grep "min_coverage:" | head -1 | sed 's/.*min_coverage:[[:space:]]*\([0-9]*\).*/\1/')
-            [[ -n "$test_command" ]] && framework="configured"
-        fi
+        test_command=$(yaml_get '.testing.command' "$PROJECT_ROOT/PROJECT.yaml")
+        coverage_command=$(yaml_get '.testing.coverage_command' "$PROJECT_ROOT/PROJECT.yaml")
+        min_coverage=$(yaml_get_default '.testing.min_coverage' "80" "$PROJECT_ROOT/PROJECT.yaml")
+        [[ -n "$test_command" ]] && framework="configured"
     fi
     if [[ -z "$framework" ]]; then
         [[ -f "$PROJECT_ROOT/requirements.txt" ]] && grep -q "pytest" "$PROJECT_ROOT/requirements.txt" && { framework="pytest"; test_command="pytest"; coverage_command="pytest --cov"; }
@@ -110,19 +139,19 @@ detect_framework() {
         [[ -f "$PROJECT_ROOT/Cargo.toml" ]] && { framework="cargo"; test_command="cargo test"; coverage_command="cargo test"; }
     fi
     [[ -z "$framework" ]] && error_exit "detect" "Could not detect test framework" "No PROJECT.yaml testing config and no recognized test files"
-    mkdir -p /tmp/test-run
-    cat > /tmp/test-run/config.json <<EOF
-{"framework":"$framework","test_command":"$test_command","coverage_command":"$coverage_command","min_coverage":$min_coverage}
+    mkdir -p "$TMP_DIR"
+    cat > "$TMP_DIR/config.json" <<EOF
+{"framework":"$framework","test_command":"$test_command","coverage_command":"$coverage_command","min_coverage":$min_coverage,"tmp_dir":"$TMP_DIR"}
 EOF
-    [[ "$OUTPUT_MODE" == "json" ]] && cat /tmp/test-run/config.json || { log "Detected: $framework"; log "Command: $test_command"; }
+    [[ "$OUTPUT_MODE" == "json" ]] && cat "$TMP_DIR/config.json" || { log "Detected: $framework"; log "Command: $test_command"; }
 }
 
 run_tests() {
     log "Running tests..."
-    [[ ! -f /tmp/test-run/config.json ]] && error_exit "run" "No test config found" "Run --detect first"
-    local framework=$(grep -o '"framework":"[^"]*"' /tmp/test-run/config.json | cut -d'"' -f4)
-    local test_command=$(grep -o '"test_command":"[^"]*"' /tmp/test-run/config.json | cut -d'"' -f4)
-    local coverage_command=$(grep -o '"coverage_command":"[^"]*"' /tmp/test-run/config.json | cut -d'"' -f4)
+    [[ ! -f "$TMP_DIR/config.json" ]] && error_exit "run" "No test config found" "Run --detect first"
+    local framework=$(grep -o '"framework":"[^"]*"' "$TMP_DIR/config.json" | cut -d'"' -f4)
+    local test_command=$(grep -o '"test_command":"[^"]*"' "$TMP_DIR/config.json" | cut -d'"' -f4)
+    local coverage_command=$(grep -o '"coverage_command":"[^"]*"' "$TMP_DIR/config.json" | cut -d'"' -f4)
     local cmd="$test_command"
     [[ "$COVERAGE_FLAG" == "true" ]] && cmd="$coverage_command"
     local running_services=$(docker compose ps --filter "status=running" --format "{{.Service}}" 2>/dev/null || echo "")
@@ -152,19 +181,19 @@ run_tests() {
             ;;
     esac
     local exit_code=0
-    docker compose exec -T "$test_service" sh -c "$full_cmd" > /tmp/test-run/output.txt 2>&1 || exit_code=$?
-    echo "$exit_code" > /tmp/test-run/exit_code.txt
-    [[ "$OUTPUT_MODE" == "json" ]] && output_json "success" "run" "Tests executed" "exit_code" "$exit_code" || { cat /tmp/test-run/output.txt; log "Exit: $exit_code"; }
+    docker compose exec -T "$test_service" sh -c "$full_cmd" > "$TMP_DIR/output.txt" 2>&1 || exit_code=$?
+    echo "$exit_code" > "$TMP_DIR/exit_code.txt"
+    [[ "$OUTPUT_MODE" == "json" ]] && output_json "success" "run" "Tests executed" "exit_code" "$exit_code" || { cat "$TMP_DIR/output.txt"; log "Exit: $exit_code"; }
 }
 
 parse_results() {
     log "Parsing test results..."
-    [[ ! -f /tmp/test-run/config.json ]] && error_exit "parse" "No test config found" "Run --detect first"
-    [[ ! -f /tmp/test-run/output.txt ]] && error_exit "parse" "No test output found" "Run --run first"
-    local framework=$(grep -o '"framework":"[^"]*"' /tmp/test-run/config.json | cut -d'"' -f4)
-    local min_coverage=$(grep -o '"min_coverage":[0-9]*' /tmp/test-run/config.json | cut -d':' -f2)
-    local exit_code=$(cat /tmp/test-run/exit_code.txt)
-    local output=$(cat /tmp/test-run/output.txt)
+    [[ ! -f "$TMP_DIR/config.json" ]] && error_exit "parse" "No test config found" "Run --detect first"
+    [[ ! -f "$TMP_DIR/output.txt" ]] && error_exit "parse" "No test output found" "Run --run first"
+    local framework=$(grep -o '"framework":"[^"]*"' "$TMP_DIR/config.json" | cut -d'"' -f4)
+    local min_coverage=$(grep -o '"min_coverage":[0-9]*' "$TMP_DIR/config.json" | cut -d':' -f2)
+    local exit_code=$(cat "$TMP_DIR/exit_code.txt")
+    local output=$(cat "$TMP_DIR/output.txt")
     local total_tests=0 passed_tests=0 failed_tests=0 skipped_tests=0 duration="0s" coverage_pct="0"
     case "$framework" in
         pytest)
@@ -173,7 +202,7 @@ parse_results() {
             echo "$output" | grep -q "skipped" && skipped_tests=$(echo "$output" | grep -o "[0-9]* skipped" | grep -o "[0-9]*" || echo "0")
             total_tests=$((passed_tests + failed_tests + skipped_tests))
             duration=$(echo "$output" | grep -o "in [0-9.]*s" | grep -o "[0-9.]*s" | head -1 || echo "0s")
-            echo "$output" | grep -q "TOTAL" && coverage_pct=$(echo "$output" | grep "TOTAL" | awk '{print $(NF)}' | tr -d '%' || echo "0")
+            echo "$output" | grep -q "TOTAL" && coverage_pct=$(echo "$output" | grep "TOTAL" | grep -oE '[0-9]+(\.[0-9]+)?%' | tail -1 | tr -d '%' || echo "0")
             ;;
         jest|vitest)
             echo "$output" | grep -q "Tests:" && { passed_tests=$(echo "$output" | grep "Tests:" | grep -o "[0-9]* passed" | grep -o "[0-9]*" || echo "0"); failed_tests=$(echo "$output" | grep "Tests:" | grep -o "[0-9]* failed" | grep -o "[0-9]*" || echo "0"); total_tests=$(echo "$output" | grep "Tests:" | grep -o "[0-9]* total" | grep -o "[0-9]*" || echo "0"); }
@@ -187,7 +216,7 @@ parse_results() {
     local status="success" message="All tests passed"
     [[ $exit_code -ne 0 || $failed_tests -gt 0 ]] && { status="error"; message="$failed_tests test(s) failed"; }
     [[ $skipped_tests -gt 0 && "$status" == "success" ]] && { status="error"; message="$skipped_tests test(s) skipped - not allowed"; }
-    [[ "$COVERAGE_FLAG" == "true" && "$status" == "success" ]] && [[ $(echo "$coverage_pct < $min_coverage" | bc -l 2>/dev/null || echo "1") -eq 1 ]] && { status="error"; message="Coverage ${coverage_pct}% below minimum ${min_coverage}%"; }
+    [[ "$COVERAGE_FLAG" == "true" && "$status" == "success" ]] && [[ $(awk -v a="$coverage_pct" -v b="$min_coverage" 'BEGIN{print (a<b)?1:0}') -eq 1 ]] && { status="error"; message="Coverage ${coverage_pct}% below minimum ${min_coverage}%"; }
     local next_action; [[ "$status" == "success" ]] && next_action="display_summary" || next_action="fix_error"
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         cat <<EOF

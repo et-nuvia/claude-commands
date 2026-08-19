@@ -35,6 +35,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Warn if the cron daemon isn't actually running to execute the entry we just
+# installed. macOS cron is launchd-managed and always available, so only
+# check on Linux (WSL commonly ships cron installed but not started).
+check_cron_daemon() {
+    source "${HOME}/.claude/scripts/lib/platform.sh"
+    env_is_darwin && return 0
+    if pgrep -x cron >/dev/null 2>&1 || pgrep -x crond >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "warning: cron daemon does not appear to be running — the entry won't fire until it is" >&2
+    echo "  start it now:      sudo service cron start" >&2
+    echo "  persist on WSL:    add to /etc/wsl.conf:" >&2
+    echo "                       [boot]" >&2
+    echo "                       command=\"service cron start\"" >&2
+}
+
 if ! command -v crontab >/dev/null 2>&1; then
     echo "crontab not installed; cannot manage cron entries" >&2
     exit 1
@@ -91,6 +107,7 @@ case "$ACTION" in
         echo "installed cron entry:"
         echo "  $desired_line"
         echo "logs: $LOG_FILE"
+        check_cron_daemon
         exit 0
         ;;
 esac

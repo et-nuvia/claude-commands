@@ -267,8 +267,21 @@ while [[ $(date +%s) -lt $MONITORING_END ]]; do
         NEXT_REFRESH=$(echo "$HEALTH_RESPONSE" | jq -r '.next_refresh_at // "unknown"')
 
         if [[ "$SECRETS_LOADED" != "unknown" && $BUCKETS_LOADED -gt 0 ]]; then
-            # Calculate time since last load
-            LOADED_EPOCH=$(date -d "$SECRETS_LOADED" +%s 2>/dev/null || echo 0)
+            # Calculate time since last load. Try GNU `date -d` first, then
+            # BSD/macOS `date -j -f` with common ISO8601 formats; if all
+            # parsing fails, treat as unknown rather than defaulting to
+            # epoch 0 (which would falsely report a healthy result).
+            LOADED_EPOCH=$(date -d "$SECRETS_LOADED" +%s 2>/dev/null \
+                || date -j -f "%Y-%m-%dT%H:%M:%S%z" "$SECRETS_LOADED" +%s 2>/dev/null \
+                || date -j -f "%Y-%m-%dT%H:%M:%S" "$SECRETS_LOADED" +%s 2>/dev/null \
+                || echo "")
+
+            if [[ -z "$LOADED_EPOCH" ]]; then
+                log_error "health_check_${CHECK_COUNT}" "${IP}: Unable to parse secrets_loaded_at timestamp '${SECRETS_LOADED}'"
+                CHECK_FAILURES=$((CHECK_FAILURES + 1))
+                continue
+            fi
+
             NOW_EPOCH=$(date +%s)
             SECONDS_SINCE=$((NOW_EPOCH - LOADED_EPOCH))
             MINUTES_SINCE=$((SECONDS_SINCE / 60))

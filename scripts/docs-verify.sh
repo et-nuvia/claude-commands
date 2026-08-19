@@ -59,7 +59,7 @@ Usage: $0 [--json|--raw] [--full|--analyze|--verify|--test-examples] [--scope-pa
 Verify documentation matches code behavior.
 
 Options:
-  --json              Output structured JSON (default)
+  --json              Structured output (default; TOON for AI callers, JSON otherwise)
   --raw               Output verbose debugging information
   --full              Run all verification sections
   --analyze           Analyze code changes

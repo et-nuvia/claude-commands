@@ -54,28 +54,96 @@ fi
 
 # Resolve project directory
 PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
-COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
+BASE_COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
 
-if [[ ! -f "$COMPOSE_FILE" ]]; then
-    echo "Error: docker-compose.yml not found at ${COMPOSE_FILE}" >&2
+if [[ ! -f "$BASE_COMPOSE_FILE" ]]; then
+    echo "Error: docker-compose.yml not found at ${BASE_COMPOSE_FILE}" >&2
     exit 1
+fi
+
+# Build the compose -f arg list. Passing -f explicitly DISABLES docker compose's
+# automatic merge of docker-compose.override.yml, so re-add it ourselves when
+# present — otherwise dev-only override settings (port maps, secret file paths,
+# bind mounts) are silently dropped and `up -d` can fail or start the wrong config.
+#
+# An INHERITED COMPOSE_FILE (colon-separated) wins: projects that give each git
+# worktree its own stack export it to add a per-worktree layer, and rebuilding the
+# list from PROJECT_DIR here would silently drop that layer and target the wrong
+# stack.
+COMPOSE_ARGS=()
+if [[ -n "${COMPOSE_FILE:-}" ]]; then
+    IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -r -a _inherited <<< "$COMPOSE_FILE"
+    for f in "${_inherited[@]}"; do
+        [[ -n "$f" ]] && COMPOSE_ARGS+=(-f "$f")
+    done
+fi
+if [[ ${#COMPOSE_ARGS[@]} -eq 0 ]]; then
+    COMPOSE_ARGS=(-f "$BASE_COMPOSE_FILE")
+    for override in "${PROJECT_DIR}/docker-compose.override.yml" "${PROJECT_DIR}/docker-compose.override.yaml"; do
+        if [[ -f "$override" ]]; then
+            COMPOSE_ARGS+=(-f "$override")
+            break
+        fi
+    done
 fi
 
 #------------------------------------------------------------------------------
 # Extract explicit container_name from compose file for a service
 #------------------------------------------------------------------------------
 find_explicit_name() {
-    # Parse YAML: find the service block, extract container_name value
-    awk -v svc="  ${SERVICE}:" '
-        $0 ~ "^"svc"$" || $0 ~ "^"svc" " {found=1; next}
-        found && /^  [^ ]/ {exit}
-        found && /^\s+container_name:/ {
-            gsub(/.*container_name:\s*/, "")
+    # Strategy A: ask docker compose itself for the resolved config (handles
+    # multi-file merges/overrides and any indent width correctly)
+    if command -v jq >/dev/null 2>&1; then
+        local name
+        name=$(docker compose "${COMPOSE_ARGS[@]}" config --format json 2>/dev/null | \
+            jq -r --arg svc "$SERVICE" '.services[$svc].container_name // empty' 2>/dev/null) || name=""
+        if [[ -n "$name" ]]; then
+            echo "$name"
+            return 0
+        fi
+    fi
+
+    # Fallback: parse YAML directly. Indent-flexible — records the indent
+    # width of the matched service key and treats any line at that width
+    # or shallower as the end of the service block (compose files use
+    # varying indent widths, not always exactly 2 spaces).
+    awk -v svc="${SERVICE}:" '
+        function indent_of(s) { match(s, /^[[:space:]]*/); return RLENGTH }
+        {
+            cur_indent = indent_of($0)
+            trimmed = $0
+            sub(/^[[:space:]]+/, "", trimmed)
+        }
+        !found && trimmed == svc || (!found && trimmed ~ "^"svc"[[:space:]]") {
+            found = 1
+            svc_indent = cur_indent
+            next
+        }
+        found && cur_indent <= svc_indent && trimmed != "" {exit}
+        found && trimmed ~ /^container_name:/ {
+            gsub(/.*container_name:[[:space:]]*/, "")
             gsub(/["'"'"' ]/, "")
             print
             exit
         }
-    ' "$COMPOSE_FILE"
+    ' "$BASE_COMPOSE_FILE" | expand_env_refs
+}
+
+# container_name values are commonly written as `${COMPOSE_PROJECT_NAME:-praxis}-mysql`.
+# The `docker compose config` path above expands those for us; this raw-YAML
+# fallback does not, and would otherwise return a literal `${...}` string that
+# matches no container. Expand ${VAR} / ${VAR:-default} refs the way compose does.
+# Only plain variable references are expanded — anything with command
+# substitution or backticks is passed through untouched rather than evaluated.
+expand_env_refs() {
+    local line
+    while IFS= read -r line; do
+        if [[ "$line" == *'$('* || "$line" == *'`'* || "$line" == *'"'* ]]; then
+            printf '%s\n' "$line"
+        else
+            eval "printf '%s\n' \"${line}\""
+        fi
+    done
 }
 
 #------------------------------------------------------------------------------
@@ -100,15 +168,22 @@ resolve_container() {
 
     # Strategy 2: Ask docker compose directly
     local compose_name
-    compose_name=$(docker compose -f "$COMPOSE_FILE" ps --format '{{.Name}}' "$SERVICE" 2>/dev/null | head -1)
+    compose_name=$(docker compose "${COMPOSE_ARGS[@]}" ps --format '{{.Name}}' "$SERVICE" 2>/dev/null | head -1)
     if [[ -n "$compose_name" ]] && is_running "$compose_name"; then
         echo "$compose_name"
         return 0
     fi
 
     # Strategy 3: Try auto-generated pattern <project>-<service>-N
+    # An explicit COMPOSE_PROJECT_NAME is authoritative — deriving the name from
+    # basename "$PROJECT_DIR" is wrong for git worktrees (dir `92E0E1` vs project
+    # `praxis-<hash>`) and for any project that sets `name:` in its compose file.
     local project_name
-    project_name=$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+    if [[ -n "${COMPOSE_PROJECT_NAME:-}" ]]; then
+        project_name="$COMPOSE_PROJECT_NAME"
+    else
+        project_name=$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+    fi
     for n in 1 2 3; do
         local guess="${project_name}-${SERVICE}-${n}"
         if is_running "$guess"; then
@@ -130,7 +205,7 @@ if CONTAINER=$(resolve_container); then
     docker exec "$CONTAINER" "${EXEC_CMD[@]}"
 else
     echo "Service '${SERVICE}' not running, starting..." >&2
-    docker compose -f "$COMPOSE_FILE" up -d "$SERVICE" >&2
+    docker compose "${COMPOSE_ARGS[@]}" up -d "$SERVICE" >&2
 
     # Wait for the container to be running (up to 30s)
     for _ in $(seq 1 30); do

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: requires bash >= 4 (on macOS: brew install bash)" >&2
+  exit 1
+fi
+
 # Training Video Impact Analysis
 # Analyzes code changes to determine which training videos need updating
 # Usage: ./scripts/training-video-analysis.sh --from-version <ver> --to-version <ver>

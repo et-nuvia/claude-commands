@@ -7,7 +7,7 @@
 #   ~/.claude/scripts/plan-progress.sh [--json|--raw] [--file <path>] [--mark-complete "<item>" ...]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Workflow:
@@ -17,13 +17,38 @@
 
 set -euo pipefail
 
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: requires bash >= 4 (on macOS: brew install bash)" >&2
+  exit 1
+fi
+
 # Portable sed -i (macOS requires '' arg, GNU does not)
 sed_i() {
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    source "${HOME}/.claude/scripts/lib/platform.sh"
+    if env_is_darwin; then
         sed -i '' "$@"
     else
         sed -i "$@"
     fi
+}
+
+# Trim leading/trailing whitespace.
+#
+# This replaces the `| xargs` idiom that used to be used for trimming throughout
+# this script. `xargs` is a WORD SPLITTER, not a trimmer: it parses quotes, so any
+# field containing an apostrophe or a lone double quote aborted the whole script
+# with "xargs: unterminated quote" and exit 1. PLN prose is full of them —
+# "the runner's own claim", "the repo's root commit" — so `--task-detail` failed
+# on ordinary plans and the caller had to fall back to reading the PLN by hand.
+# xargs also collapsed internal whitespace and ate backslashes, silently
+# corrupting field values it did not outright reject.
+#
+# Pure bash, no subprocess, safe for every byte a PLN can contain.
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
 }
 
 # Global variables
@@ -39,6 +64,7 @@ CHALLENGES_NOTE=""
 DO_DIFFERENTLY=""
 PATTERNS=""
 EXTRACT_ENTRIES=false
+TASK_DETAIL=""
 
 # Source utilities
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -112,7 +138,7 @@ find_pln() {
             docs_dir=$(find_docs_dir 2>/dev/null) || true
             if [[ -n "$docs_dir" ]]; then
                 local pln
-                pln=$(find "$docs_dir/active" -name "${seq}-*-PLN-*.md" 2>/dev/null | head -1)
+                pln=$(find "$docs_dir/active" -name "${seq}-*-PLN-*.md" 2>/dev/null | newest_doc)
                 if [[ -n "$pln" ]]; then
                     echo "$pln"
                     return 0
@@ -126,7 +152,9 @@ find_pln() {
     docs_dir=$(find_docs_dir 2>/dev/null) || true
     if [[ -n "$docs_dir" ]]; then
         local pln
-        pln=$(find "$docs_dir/active" -name "*-PLN-*.md" 2>/dev/null | sort -r | head -1)
+        # `sort -r | head -1` ranked by full path, so this picked the last month folder
+        # rather than the newest document; newest_doc ranks by the filename datetime.
+        pln=$(find "$docs_dir/active" -name "*-PLN-*.md" 2>/dev/null | newest_doc)
         if [[ -n "$pln" ]]; then
             echo "$pln"
             return 0
@@ -134,6 +162,193 @@ find_pln() {
     fi
 
     return 1
+}
+
+#------------------------------------------------------------------------------
+# Dependency graph → ready set
+#------------------------------------------------------------------------------
+
+# Build the subtask dependency graph and return the set of pending subtasks whose
+# dependencies are all satisfied — i.e. the items that may be dispatched RIGHT NOW,
+# in parallel, without violating ordering.
+#
+# Why this lives in the script and not the command prompt: deciding "can 1.2 and 1.3
+# run together?" is a graph reachability question over declared edges. An LLM asked to
+# eyeball it either gets it wrong or (far more common) plays safe and serializes
+# everything, which is why parallel dispatch was effectively dead. Computed here it is
+# deterministic and free.
+#
+# Args: $1 = PLN file, $2 = current phase heading text (may be empty)
+# Echoes a JSON fragment: "ready_items": [...], "ready_count": N, "deps_declared": bool
+compute_ready_items() {
+    local file="$1"
+    local current_phase="${2:-}"
+
+    local -a t_ids=() t_status=() t_phase=() t_deps=() t_text=()
+    local -A resolved=()          # task_id → 1 when done/skipped
+    local -A phase_total=() phase_open=()
+
+    local in_phase="" cur_id="" cur_status="" cur_text="" seen_blank=0
+    local phase_num=""
+
+    # Single pass: collect one record per "#### Task N.M:" heading plus its
+    # Dependencies field. Field extraction stops at the first blank line, matching
+    # the config extractor's contract (see task-PLN.md).
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^#{2,3}[[:space:]]+(.+) ]]; then
+            local ph="${BASH_REMATCH[1]}"
+            if [[ "$ph" =~ ^([Pp]hase|[Ss]tep|[Ss]tage|[Pp]art)[[:space:]:]*([0-9]+) ]]; then
+                in_phase="$ph"
+                phase_num="${BASH_REMATCH[2]}"
+            elif [[ "$ph" =~ ^([Pp]hase|[Ss]tep|[Ss]tage|[Pp]art)([[:space:]]|:) ]]; then
+                in_phase="$ph"
+                phase_num=""
+            else
+                in_phase=""
+                phase_num=""
+            fi
+            cur_id=""
+            continue
+        fi
+
+        if [[ "$line" =~ ^####[[:space:]]+Task[[:space:]]+([0-9]+(\.[0-9]+)*):[[:space:]]*\[(.)\][[:space:]]*(.*) ]]; then
+            cur_id="${BASH_REMATCH[1]}"
+            cur_status="${BASH_REMATCH[3]}"
+            cur_text="${BASH_REMATCH[4]}"
+            seen_blank=0
+            t_ids+=("$cur_id")
+            t_status+=("$cur_status")
+            t_phase+=("$in_phase")
+            t_text+=("$cur_text")
+            t_deps+=("")            # filled in by the Dependencies line below
+            local major="${cur_id%%.*}"
+            phase_total["$major"]=$(( ${phase_total[$major]:-0} + 1 ))
+            case "$cur_status" in
+                x|X|-|~) resolved["$cur_id"]=1 ;;
+                *)       phase_open["$major"]=$(( ${phase_open[$major]:-0} + 1 )) ;;
+            esac
+            continue
+        fi
+
+        [[ -z "$cur_id" ]] && continue
+
+        # Blank line closes the field block for this task
+        if [[ -z "${line// /}" ]]; then
+            seen_blank=1
+            continue
+        fi
+        [[ $seen_blank -eq 1 ]] && continue
+
+        if [[ "$line" =~ ^-[[:space:]]+\*\*Dependencies\*\*:[[:space:]]*(.*) ]]; then
+            t_deps[$(( ${#t_deps[@]} - 1 ))]="${BASH_REMATCH[1]}"
+        fi
+    done < "$file"
+
+    # A phase counts as complete when it has subtasks and none are open.
+    local -A phase_done_by_num=()
+    local pn
+    for pn in "${!phase_total[@]}"; do
+        if [[ "${phase_open[$pn]:-0}" -eq 0 ]]; then
+            phase_done_by_num["$pn"]=1
+        fi
+    done
+
+    # Walk pending subtasks in document order, deciding readiness.
+    local ndjson="" blocked_ndjson="" ready_count=0 blocked_count=0
+    local undeclared=0 first_pending_seen=0 i
+    for (( i=0; i<${#t_ids[@]}; i++ )); do
+        local id="${t_ids[$i]}" st="${t_status[$i]}"
+        case "$st" in x|X|-|~) continue ;; esac
+
+        local is_first_pending=0
+        if [[ $first_pending_seen -eq 0 ]]; then
+            is_first_pending=1
+            first_pending_seen=1
+        fi
+
+        # Only the current phase can be dispatched — never roll across the boundary.
+        if [[ -n "$current_phase" && "${t_phase[$i]}" != "$current_phase" ]]; then
+            continue
+        fi
+
+        local deps="${t_deps[$i]}"
+        local deps_trim="${deps#"${deps%%[![:space:]]*}"}"
+        deps_trim="${deps_trim%"${deps_trim##*[![:space:]]}"}"
+
+        local declared=1 ready=0 blocked_by=""
+
+        if [[ -z "$deps_trim" ]] || [[ "$deps_trim" =~ ^\[.*\]$ ]]; then
+            # Undeclared → cannot prove independence. Conservatively sequential:
+            # only the document-first pending item is dispatchable. This is the
+            # degradation path for legacy plans, and the reason --review now
+            # requires the field on new ones.
+            declared=0
+            undeclared=$((undeclared + 1))
+            [[ $is_first_pending -eq 1 ]] && ready=1
+            blocked_by="undeclared dependencies"
+        elif [[ "$deps_trim" =~ ^([Nn]one|N/A|n/a|-)$ ]]; then
+            ready=1
+        else
+            ready=1
+            local ref
+            # Subtask refs: N.M
+            for ref in $(grep -oE '[0-9]+\.[0-9]+' <<< "$deps_trim" || true); do
+                if [[ -z "${resolved[$ref]:-}" ]]; then
+                    ready=0
+                    blocked_by+="Task $ref, "
+                fi
+            done
+            # Phase refs: "Phase N complete". A reference to the task's OWN phase is
+            # prose framing ("Phase 2 starts after Phase 1 complete"), not an edge —
+            # treating it as one would deadlock every task against its own phase,
+            # since its own phase is by definition incomplete while it is pending.
+            local own_phase="${id%%.*}"
+            for ref in $(grep -oiE '[Pp]hase[[:space:]]+[0-9]+' <<< "$deps_trim" | grep -oE '[0-9]+' || true); do
+                [[ "$ref" == "$own_phase" ]] && continue
+                if [[ -z "${phase_done_by_num[$ref]:-}" ]]; then
+                    ready=0
+                    blocked_by+="Phase $ref, "
+                fi
+            done
+        fi
+
+        if [[ $ready -eq 1 ]]; then
+            if [[ $ready_count -lt 6 ]]; then
+                ndjson+=$(jq -nc \
+                    --arg task "$id" \
+                    --arg text "${t_text[$i]}" \
+                    --arg phase "${t_phase[$i]}" \
+                    --arg deps "$deps_trim" \
+                    --argjson declared "$( [[ $declared -eq 1 ]] && echo true || echo false )" \
+                    '{task:$task, text:$text, phase:$phase, dependencies:$deps, deps_declared:$declared}')$'\n'
+            fi
+            ready_count=$((ready_count + 1))
+        else
+            blocked_ndjson+=$(jq -nc \
+                --arg task "$id" \
+                --arg deps "$deps_trim" \
+                --arg blocked "${blocked_by%, }" \
+                '{task:$task, dependencies:$deps, blocked_by:$blocked}')$'\n'
+            blocked_count=$((blocked_count + 1))
+        fi
+    done
+
+    local ready_json="[]" blocked_json="[]"
+    [[ -n "$ndjson" ]] && ready_json=$(jq -sc '.' <<< "$ndjson")
+    [[ -n "$blocked_ndjson" ]] && blocked_json=$(jq -sc '.' <<< "$blocked_ndjson")
+
+    local deps_declared=true
+    [[ $undeclared -gt 0 ]] && deps_declared=false
+
+    # A pending phase where NOTHING is dispatchable is a dependency deadlock — a
+    # cycle, or a dep on a later phase. Surfacing it here (rather than returning a
+    # silently empty ready set) is what stops the executor from stalling with no
+    # explanation; the blocked_items reasons name the exact edges to fix.
+    local deadlock=false
+    [[ $ready_count -eq 0 && $blocked_count -gt 0 ]] && deadlock=true
+
+    printf '"ready_items": %s,\n  "ready_count": %d,\n  "blocked_items": %s,\n  "dependency_deadlock": %s,\n  "deps_declared": %s,\n  "deps_undeclared_count": %d' \
+        "$ready_json" "$ready_count" "$blocked_json" "$deadlock" "$deps_declared" "$undeclared"
 }
 
 #------------------------------------------------------------------------------
@@ -145,6 +360,7 @@ parse_progress() {
 
     local done_count=0
     local pending_count=0
+    local skipped_count=0
     local total_count=0
     local current_phase=""
     local current_phase_done=0
@@ -154,36 +370,84 @@ parse_progress() {
 
     local in_phase=""
 
+    # Per-phase tallies in document order. current_phase is resolved AFTER the
+    # scan as the first phase (in order) that still has pending items, so a
+    # fully-complete leading phase correctly advances the pointer to the next
+    # incomplete phase. This is what the task-continue loop's phase-stop relies on.
+    local -A phase_done=()
+    local -A phase_pending=()
+    local phase_order=()
+
+    # Only checkboxes INSIDE a phase/step/stage/part section count as work items.
+    # Scaffolding sections (Resources, Success Metrics, Approval, Risks, ...) use
+    # checkboxes too but are NOT tasks — counting them inflates totals and stalls
+    # the plan at <100%. Legacy plans with no phase headers fall back to counting
+    # every checkbox (flat-checklist style).
+    # The keyword must START the heading text (real phase headings are
+    # "### Phase N: …"); this excludes Progress-log entries like
+    # "### 2026-06-19 10:59 - Phase 1 (Tasks 1.1-1.3)" that merely mention a phase.
+    local has_phases=0
+    if grep -qE '^#{2,3}[[:space:]]+([Pp]hase|[Ss]tep|[Ss]tage|[Pp]art)([[:space:]]|:)' "$file" 2>/dev/null; then
+        has_phases=1
+    fi
+
     while IFS= read -r line; do
-        # Detect phase headers (## Phase or ### Phase)
+        # Detect section headers (## or ###). A phase/step/stage/part header opens
+        # a countable section; any OTHER ##/### header (Context, Resources,
+        # Success Metrics, Approval, ...) closes it, so trailing scaffolding
+        # checkboxes are neither counted as tasks nor attributed to the last phase.
+        # (#### Task headings are 4 hashes and don't match here, so a Task heading
+        # never resets the section.)
         if [[ "$line" =~ ^#{2,3}[[:space:]]+(.+) ]]; then
             local phase_name="${BASH_REMATCH[1]}"
-            # Skip non-phase headers like "## Context" or "## Summary"
-            if [[ "$phase_name" =~ [Pp]hase|[Ss]tep|[Ss]tage|[Pp]art ]]; then
+            if [[ "$phase_name" =~ ^([Pp]hase|[Ss]tep|[Ss]tage|[Pp]art)([[:space:]]|:) ]]; then
                 in_phase="$phase_name"
+                # Record phase in document order the first time we see it
+                if [[ -z "${phase_done[$in_phase]:-}" ]]; then
+                    phase_done["$in_phase"]=0
+                    phase_pending["$in_phase"]=0
+                    phase_order+=("$in_phase")
+                fi
+            else
+                in_phase=""
             fi
         fi
 
-        # Count checked items: "- [x] ..." or "#### Task N: [x] ..."
-        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]\[x\][[:space:]](.+) ]] || \
-           [[ "$line" =~ ^#{1,6}[[:space:]].*\[x\][[:space:]](.+) ]]; then
+        # A checkbox counts only inside a phase section — or anywhere, for legacy
+        # plans with no phase headers at all.
+        if [[ $has_phases -eq 1 && -z "$in_phase" ]]; then
+            continue
+        fi
+
+        # Done: "- [x]/[X] ..." or "#### Task N: [x] ..."
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]\[[xX]\][[:space:]](.+) ]] || \
+           [[ "$line" =~ ^#{1,6}[[:space:]].*\[[xX]\][[:space:]](.+) ]]; then
             done_count=$((done_count + 1))
             total_count=$((total_count + 1))
             if [[ -n "$in_phase" ]]; then
-                current_phase="$in_phase"
-                current_phase_done=$((current_phase_done + 1))
+                phase_done["$in_phase"]=$(( ${phase_done[$in_phase]:-0} + 1 ))
             fi
+            continue
         fi
 
-        # Count unchecked items and collect next items: "- [ ] ..." or "#### Task N: [ ] ..."
+        # Skipped / deferred / cancelled: "- [-]/[~] ..." or "#### Task N: [-] ..."
+        # These are decided (not outstanding work) — tracked separately so they
+        # don't read as pending and don't block plan/phase completion.
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]\[[-~]\][[:space:]](.+) ]] || \
+           [[ "$line" =~ ^#{1,6}[[:space:]].*\[[-~]\][[:space:]](.+) ]]; then
+            skipped_count=$((skipped_count + 1))
+            total_count=$((total_count + 1))
+            continue
+        fi
+
+        # Pending: "- [ ] ..." or "#### Task N: [ ] ..."
         if [[ "$line" =~ ^[[:space:]]*-[[:space:]]\[[[:space:]]\][[:space:]](.+) ]] || \
            [[ "$line" =~ ^#{1,6}[[:space:]].*\[[[:space:]]\][[:space:]](.+) ]]; then
             pending_count=$((pending_count + 1))
             total_count=$((total_count + 1))
 
-            if [[ -n "$in_phase" ]] && [[ -z "$current_phase" || "$current_phase" == "$in_phase" ]]; then
-                current_phase="$in_phase"
-                current_phase_pending=$((current_phase_pending + 1))
+            if [[ -n "$in_phase" ]]; then
+                phase_pending["$in_phase"]=$(( ${phase_pending[$in_phase]:-0} + 1 ))
             fi
 
             # Collect up to 3 next items
@@ -200,19 +464,50 @@ parse_progress() {
         fi
     done < "$file"
 
+    # Resolve current_phase: first phase in document order with pending items.
+    # If every phase is complete, fall back to the last phase seen (so output
+    # still reports a sensible phase for a finished plan).
+    local p
+    for p in "${phase_order[@]}"; do
+        if [[ "${phase_pending[$p]:-0}" -gt 0 ]]; then
+            current_phase="$p"
+            break
+        fi
+    done
+    if [[ -z "$current_phase" ]] && [[ ${#phase_order[@]} -gt 0 ]]; then
+        current_phase="${phase_order[${#phase_order[@]}-1]}"
+    fi
+    if [[ -n "$current_phase" ]]; then
+        current_phase_done="${phase_done[$current_phase]:-0}"
+        current_phase_pending="${phase_pending[$current_phase]:-0}"
+    fi
+
     # Determine progress percentage
     local percent=0
     if [[ $total_count -gt 0 ]]; then
-        percent=$(( (done_count * 100) / total_count ))
+        # Resolved = done + skipped/deferred/cancelled (decided, not outstanding),
+        # so a plan with nothing pending reads as 100%.
+        percent=$(( ((done_count + skipped_count) * 100) / total_count ))
     fi
 
     # Build JSON output
     local next_action="continue_implementation"
-    local message="$done_count of $total_count items complete ($percent%)"
+    local message="$done_count done, $pending_count left"
+    if [[ $skipped_count -gt 0 ]]; then
+        message="$message, $skipped_count skipped"
+    fi
+    message="$message ($percent%)"
     if [[ $pending_count -eq 0 ]]; then
         next_action="display_summary"
-        message="All $total_count items complete"
+        if [[ $skipped_count -gt 0 ]]; then
+            message="All work resolved — $done_count done, $skipped_count skipped"
+        else
+            message="All $done_count tasks complete"
+        fi
     fi
+
+    # Keep the unescaped heading for string comparison in compute_ready_items
+    local current_phase_raw="$current_phase"
 
     # Escape current_phase for JSON
     current_phase="${current_phase//\"/\\\"}"
@@ -229,16 +524,36 @@ parse_progress() {
   $task_config"
     fi
 
+    # Dependency-aware ready set (empty when nothing is pending)
+    local ready_fragment=""
+    if [[ $pending_count -gt 0 ]]; then
+        local ready_data
+        ready_data=$(compute_ready_items "$file" "$current_phase_raw")
+        ready_fragment=",
+  $ready_data"
+        # A deadlock is not "continue implementation" — the plan needs an edit first.
+        if [[ "$ready_data" == *'"dependency_deadlock": true'* ]]; then
+            next_action="resolve_dependency_deadlock"
+            message="$message — BLOCKED: no dispatchable subtask, see blocked_items"
+        fi
+    fi
+
     output_json "success" "$next_action" "$message" \
         "\"plan_file\": \"$file\",
   \"progress\": {
     \"done\": $done_count,
     \"pending\": $pending_count,
+    \"skipped\": $skipped_count,
     \"total\": $total_count,
     \"percent\": $percent
   },
   \"current_phase\": \"$current_phase\",
-  \"next_items\": [$next_items]${config_fragment}"
+  \"phase_progress\": {
+    \"done\": $current_phase_done,
+    \"pending\": $current_phase_pending,
+    \"total\": $((current_phase_done + current_phase_pending))
+  },
+  \"next_items\": [$next_items]${ready_fragment}${config_fragment}"
 }
 
 #------------------------------------------------------------------------------
@@ -278,17 +593,17 @@ extract_next_task_config() {
 
             # Extract field values: - **Field Name**: value
             if [[ "$line" =~ ^-[[:space:]]\*\*Work\ Model\*\*:[[:space:]]*(.+) ]]; then
-                work_model=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]' | xargs)
+                work_model=$(trim "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
             elif [[ "$line" =~ ^-[[:space:]]\*\*Test\ Model\*\*:[[:space:]]*(.+) ]]; then
-                test_model=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]' | xargs)
+                test_model=$(trim "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
             elif [[ "$line" =~ ^-[[:space:]]\*\*TDD\ Required\*\*:[[:space:]]*(.+) ]]; then
-                tdd_required=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]' | xargs)
+                tdd_required=$(trim "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
             elif [[ "$line" =~ ^-[[:space:]]\*\*Auto\ Review\*\*:[[:space:]]*(.+) ]]; then
-                auto_review=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]' | xargs)
+                auto_review=$(trim "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
             elif [[ "$line" =~ ^-[[:space:]]\*\*Review\ Type\*\*:[[:space:]]*(.+) ]]; then
-                review_type=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]' | xargs)
+                review_type=$(trim "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
             elif [[ "$line" =~ ^-[[:space:]]\*\*Fresh\ Context\*\*:[[:space:]]*(.+) ]]; then
-                fresh_context=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]' | xargs)
+                fresh_context=$(trim "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
             fi
         fi
     done < "$file"
@@ -660,6 +975,116 @@ extract_progress_entries() {
 }
 
 #------------------------------------------------------------------------------
+# Extract Task Detail (--task-detail N.M[,N.M...])
+#------------------------------------------------------------------------------
+
+# Emit the full field block for one or more "#### Task N.M" headings as JSON,
+# so the orchestrator can build subagent dispatch prompts without ever
+# Reading the PLN file itself.
+extract_task_detail() {
+    local file="$1"
+    local wanted_csv="$2"
+
+    local -A wanted=()
+    local _w
+    IFS=',' read -ra _wanted_arr <<< "$wanted_csv"
+    for _w in "${_wanted_arr[@]}"; do
+        _w=$(trim "$_w")
+        [[ -n "$_w" ]] && wanted["$_w"]=1
+    done
+
+    local tasks="[]"
+    local cur_id="" cur_matches=0
+    local cur_heading_text="" cur_ac_csv=""
+    local cur_description="" cur_estimated_time="" cur_complexity=""
+    local -a cur_files=()
+    local seen_blank=0
+
+    flush_task() {
+        if [[ -z "$cur_id" ]] || [[ $cur_matches -eq 0 ]]; then
+            return
+        fi
+        local files_json="[]"
+        if [[ ${#cur_files[@]} -gt 0 ]]; then
+            files_json=$(printf '%s\n' "${cur_files[@]}" | jq -R . | jq -s .)
+        fi
+        local ac_json="[]"
+        if [[ -n "$cur_ac_csv" ]]; then
+            ac_json=$(printf '%s\n' "${cur_ac_csv//,/$'\n'}" | jq -R . | jq -s .)
+        fi
+        local entry
+        entry=$(jq -n \
+            --arg task "$cur_id" \
+            --arg description "$cur_description" \
+            --argjson files "$files_json" \
+            --argjson acceptance_criteria "$ac_json" \
+            --arg estimated_time "$cur_estimated_time" \
+            --arg complexity "$cur_complexity" \
+            --arg heading "$cur_heading_text" \
+            '{task: $task, heading: $heading, description: $description, files: $files, acceptance_criteria: $acceptance_criteria, estimated_time: $estimated_time, complexity: $complexity}')
+        tasks=$(echo "$tasks" | jq --argjson e "$entry" '. + [$e]')
+    }
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^####[[:space:]]+Task[[:space:]]+([0-9]+(\.[0-9]+)*):[[:space:]]*\[(.)\][[:space:]]*(.*) ]]; then
+            flush_task
+            cur_id="${BASH_REMATCH[1]}"
+            local rest="${BASH_REMATCH[4]}"
+            cur_matches=0
+            [[ -n "${wanted[$cur_id]:-}" ]] && cur_matches=1
+            cur_ac_csv=""
+            # Pull [AC#] / [ACx] tags out of the heading remainder
+            while [[ "$rest" =~ \[(AC[0-9x]*)\] ]]; do
+                if [[ -z "$cur_ac_csv" ]]; then
+                    cur_ac_csv="${BASH_REMATCH[1]}"
+                else
+                    cur_ac_csv="${cur_ac_csv},${BASH_REMATCH[1]}"
+                fi
+                rest="${rest/\[${BASH_REMATCH[1]}\]/}"
+            done
+            cur_heading_text=$(trim "$rest")
+            cur_description=""
+            cur_estimated_time=""
+            cur_complexity=""
+            cur_files=()
+            seen_blank=0
+            continue
+        fi
+
+        if [[ -z "$cur_id" ]] || [[ $cur_matches -eq 0 ]]; then
+            continue
+        fi
+
+        # Blank line closes the field block for this task (same contract as
+        # compute_ready_items above)
+        if [[ -z "${line// /}" ]]; then
+            seen_blank=1
+            continue
+        fi
+        [[ $seen_blank -eq 1 ]] && continue
+
+        if [[ "$line" =~ ^-[[:space:]]+\*\*Description\*\*:[[:space:]]*(.*) ]]; then
+            cur_description="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^-[[:space:]]+\*\*Files\*\*:[[:space:]]*(.*) ]]; then
+            local files_raw="${BASH_REMATCH[1]}"
+            IFS=',' read -ra _files_arr <<< "$files_raw"
+            local _f
+            for _f in "${_files_arr[@]}"; do
+                _f=$(trim "$_f" | tr -d '`')
+                [[ -n "$_f" ]] && cur_files+=("$_f")
+            done
+        elif [[ "$line" =~ ^-[[:space:]]+\*\*Estimated\ Time\*\*:[[:space:]]*(.*) ]]; then
+            cur_estimated_time="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^-[[:space:]]+\*\*Complexity\*\*:[[:space:]]*(.*) ]]; then
+            cur_complexity="${BASH_REMATCH[1]}"
+        fi
+    done < "$file"
+    flush_task
+
+    log_json "$tasks"
+}
+
+#------------------------------------------------------------------------------
 # Parse Arguments
 #------------------------------------------------------------------------------
 
@@ -676,8 +1101,8 @@ while [[ $# -gt 0 ]]; do
             for _at_pair in "${_at_pairs[@]}"; do
                 _at_key="${_at_pair%%=*}"
                 _at_val="${_at_pair#*=}"
-                _at_key=$(echo "$_at_key" | xargs)
-                _at_val=$(echo "$_at_val" | xargs)
+                _at_key=$(trim "$_at_key")
+                _at_val=$(trim "$_at_val")
                 ACTUAL_TIMES["$_at_key"]="$_at_val"
             done
             shift 2
@@ -690,8 +1115,9 @@ while [[ $# -gt 0 ]]; do
         --differently) DO_DIFFERENTLY="$2"; shift 2 ;;
         --patterns) PATTERNS="$2"; shift 2 ;;
         --extract-entries) EXTRACT_ENTRIES=true; shift ;;
+        --task-detail) TASK_DETAIL="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--json|--raw] [--file <path>] [--mark-complete \"<item>\" ...] [--actual-time \"1.1=45m\"] [--progress \"note\"] [--lessons \"text\"] [--task-label \"Task 1.2\"] [--went-well \"...\"] [--challenges \"...\"] [--differently \"...\"] [--patterns \"...\"] [--extract-entries]"
+            echo "Usage: $0 [--json|--raw] [--file <path>] [--mark-complete \"<item>\" ...] [--actual-time \"1.1=45m\"] [--progress \"note\"] [--lessons \"text\"] [--task-label \"Task 1.2\"] [--went-well \"...\"] [--challenges \"...\"] [--differently \"...\"] [--patterns \"...\"] [--extract-entries] [--task-detail \"1.1,1.2\"]"
             exit 0
             ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -749,6 +1175,12 @@ fi
 # Extract entries mode — output JSON and exit
 if [[ "$EXTRACT_ENTRIES" == "true" ]]; then
     extract_progress_entries "$PLN_PATH"
+    exit 0
+fi
+
+# Task detail mode — output JSON and exit
+if [[ -n "$TASK_DETAIL" ]]; then
+    extract_task_detail "$PLN_PATH" "$TASK_DETAIL"
     exit 0
 fi
 

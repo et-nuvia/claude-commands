@@ -9,7 +9,7 @@ set -euo pipefail
 #   ~/.claude/scripts/deploy-risk.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -49,9 +49,7 @@ VERSION=""
 RISK_SCORE=0
 DEPLOYMENT=""
 TIMESTAMP=""
-TASK_ID=""          # When set, document section integrates with V4 task system
-NEW_TASK=false      # When true (and TASK_ID empty), new-doc.sh creates a fresh task ID
-DOC_PATH=""         # Resolved document path (set by section_document)
+CHAINED=false  # true when section_gather is invoked as part of the "full" chain
 
 #------------------------------------------------------------------------------
 # Parse Arguments
@@ -60,17 +58,15 @@ DOC_PATH=""         # Resolved document path (set by section_document)
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) OUTPUT_MODE="json"; shift ;;
-        --toon) OUTPUT_MODE="json"; OUTPUT_FORMAT="toon"; shift ;;
+            --toon) OUTPUT_MODE="json"; OUTPUT_FORMAT="toon"; shift ;;
         --raw) OUTPUT_MODE="raw"; shift ;;
         --full) SECTION="full"; shift ;;
         --gather) SECTION="gather"; shift ;;
         --analyze) SECTION="analyze"; shift ;;
         --score) SECTION="score"; shift ;;
         --document) SECTION="document"; shift ;;
-        --environment|--env) ENVIRONMENT="$2"; shift 2 ;;
+        --environment) ENVIRONMENT="$2"; shift 2 ;;
         --version) VERSION="$2"; shift 2 ;;
-        --task-id|--id) TASK_ID="$2"; shift 2 ;;
-        --new) NEW_TASK=true; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -110,72 +106,47 @@ section_gather() {
 
     git fetch origin "$source_branch" "$target_branch" >/dev/null 2>&1 || true
 
-    # Capture diffs once. Re-running git diff per check is slow on large branches
-    # and introduces subtle race conditions if the index changes mid-scan.
-    local diff_range="origin/${target_branch}...origin/${source_branch}"
-    local changed_files_list diff_added diff_full numstat
-    changed_files_list=$(git diff "$diff_range" --name-only 2>/dev/null || echo "")
-    diff_added=$(git diff "$diff_range" 2>/dev/null | grep '^+' | grep -v '^+++' || true)
-    diff_full=$(git diff "$diff_range" 2>/dev/null || echo "")
-    numstat=$(git diff "$diff_range" --numstat 2>/dev/null || echo "")
-
-    # 1. Database migrations — look only at *added* lines (post-merge state)
-    # and require actual SQL keywords at statement position (not random comments).
-    if echo "$changed_files_list" | grep -qE "(^|/)migrations?/"; then
-        local migration_diff migs
-        migration_diff=$(git diff "$diff_range" -- '*migrations*' '*migration*' 2>/dev/null | grep '^+' | grep -v '^+++' || true)
-        migs=$(echo "$migration_diff" | grep -cE '\b(DROP[[:space:]]+(TABLE|COLUMN|INDEX|CONSTRAINT)|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]]+[^[:space:]]+[[:space:]]+DROP|ALTER[[:space:]]+COLUMN[[:space:]]+[^[:space:]]+[[:space:]]+TYPE|TRUNCATE)\b' 2>/dev/null || echo "0")
-        if [[ "${migs:-0}" -gt 0 ]]; then migration_risk=8; else migration_risk=3; fi
+    # 1. Database migrations
+    if git diff "origin/$target_branch"..."origin/$source_branch" --name-only 2>/dev/null | grep -qE "migrations?/"; then
+        local migs
+        migs=$(git diff "origin/$target_branch"..."origin/$source_branch" -- "**/migrations*" 2>/dev/null | grep -cE "^[+-].*DROP|^[+-].*DELETE FROM|^[+-].*ALTER.*TYPE" || echo "0")
+        if [[ $migs -gt 0 ]]; then migration_risk=8; else migration_risk=3; fi
         risk_score=$((risk_score + migration_risk))
     fi
 
-    # 2. Breaking API changes — *removed* route/handler signatures
-    if echo "$diff_full" | grep -qE '^-.*@(get|post|put|delete|patch)\(|^-.*def (get_|post_|put_|delete_)|^-[[:space:]]+def [a-zA-Z_]+\(.*:'; then
+    # 2. Breaking API changes
+    if git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "^-.*@(get|post|put|delete|patch)\(|^-.*def (get_|post_|put_|delete_)|^-\s+def \w+\(.*:"; then
         api_risk=6
         risk_score=$((risk_score + api_risk))
     fi
 
-    # 3. Security risks — applied to *added* lines (introducing risk), with
-    # legitimate password-reset patterns filtered out before counting.
-    # Previous version had `grep -q ... | grep -v ...` which short-circuited:
-    # -q exits 0/1 without emitting, so the -v filter was a no-op.
-    local secret_hits exec_hits sql_hits
-    secret_hits=$(echo "$diff_added" | grep -E 'password|secret|api_key|token' | grep -vE 'password_reset|reset_token|password_hash|hashed_password' | head -1 || true)
-    exec_hits=$(echo "$diff_added" | grep -E 'exec\(|eval\(|os\.system\(|subprocess\.|shell=True' | head -1 || true)
-    sql_hits=$(echo "$diff_added" | grep -E '\.query\(|\.execute\(|SELECT[[:space:]]+.*FROM' | grep -vE 'WHERE|parameterized|prepared' | head -1 || true)
-    if [[ -n "$secret_hits" ]]; then
+    # 3. Security risks
+    if git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -vE "password_reset|reset_token" | grep -qE "password|secret|api_key|token"; then
         security_risk=9; risk_score=$((risk_score + security_risk))
-    elif [[ -n "$exec_hits" ]]; then
+    elif git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "exec\(|eval\(|system\(|subprocess|shell=True"; then
         security_risk=8; risk_score=$((risk_score + security_risk))
-    elif [[ -n "$sql_hits" ]]; then
+    elif git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -vE "WHERE" | grep -qE "\.query\(|\.execute\(|SELECT.*FROM"; then
         security_risk=7; risk_score=$((risk_score + security_risk))
     fi
 
-    # 4. Performance risks — N+1-style query patterns introduced
-    if echo "$diff_added" | grep -qE 'for.*in.*\{.*query|\.map.*query|db\.query'; then
+    # 4. Performance risks
+    if git diff "origin/$target_branch"..."origin/$source_branch" 2>/dev/null | grep -qE "for.*in.*\{.*query|\.map.*query|db\.query"; then
         perf_risk=6; risk_score=$((risk_score + perf_risk))
     fi
 
-    # 5. Dependency changes — count actual added/removed dep lines via numstat.
-    # The previous `grep -cE '^[+-]' | head -1` was nonsense: head -1 on a
-    # single count line is a no-op, and the count included diff headers
-    # (`+++`/`---`), inflating the result.
-    if echo "$changed_files_list" | grep -qE '(^|/)(package\.json|requirements\.txt|pyproject\.toml|go\.mod|Gemfile|Cargo\.toml)$'; then
-        local dep_changed=0
-        if [[ -n "$numstat" ]]; then
-            dep_changed=$(echo "$numstat" | awk '$3 ~ /(^|\/)(package\.json|requirements\.txt|pyproject\.toml|go\.mod|Gemfile|Cargo\.toml)$/ { sum += $1 + $2 } END { print sum+0 }')
-        fi
-        if [[ "${dep_changed:-0}" -gt 5 ]]; then dep_risk=5; else dep_risk=2; fi
+    # 5. Dependency changes
+    if git diff "origin/$target_branch"..."origin/$source_branch" --name-only 2>/dev/null | grep -qE "package.json|requirements.txt|pyproject.toml|go.mod|Gemfile|Cargo.toml"; then
+        local dep_changed
+        dep_changed=$(git diff "origin/$target_branch"..."origin/$source_branch" -- package.json requirements.txt pyproject.toml go.mod Gemfile Cargo.toml 2>/dev/null | grep -cE "^[+-]" | head -1 || echo "0")
+        if [[ $dep_changed -gt 5 ]]; then dep_risk=5; else dep_risk=2; fi
         risk_score=$((risk_score + dep_risk))
     fi
 
     # 6. Code volume
-    changed_files=$(echo "$changed_files_list" | grep -c . 2>/dev/null || echo "0")
-    if [[ -n "$numstat" ]]; then
-        changed_lines=$(echo "$numstat" | awk '{ sum += $1 + $2 } END { print sum+0 }')
-    fi
-    if [[ "${changed_files:-0}" -gt 50 ]]; then risk_score=$((risk_score + 2))
-    elif [[ "${changed_files:-0}" -gt 30 ]]; then risk_score=$((risk_score + 1)); fi
+    changed_files=$(git diff "origin/$target_branch"..."origin/$source_branch" --name-only 2>/dev/null | wc -l | tr -d ' ')
+    changed_lines=$(git diff "origin/$target_branch"..."origin/$source_branch" --shortstat 2>/dev/null | grep -oE '[0-9]+ insertion|[0-9]+ deletion' | grep -oE '[0-9]+' | awk '{sum+=$1} END{print sum+0}')
+    if [[ $changed_files -gt 50 ]]; then risk_score=$((risk_score + 2))
+    elif [[ $changed_files -gt 30 ]]; then risk_score=$((risk_score + 1)); fi
 
     # Cap at 10
     [[ $risk_score -gt 10 ]] && risk_score=10
@@ -187,6 +158,13 @@ section_gather() {
     elif [[ $risk_score -ge 3 ]]; then auto_status="low-medium"; fi
 
     log "${GREEN}✓${NC} Automated scan: score=$risk_score status=$auto_status"
+
+    if [[ "$CHAINED" == "true" ]]; then
+        # Part of the "full" chain — record results for the caller and return
+        # instead of exiting, so subsequent sections can still run.
+        log "${GREEN}✓${NC} Context gathered (chained)"
+        return 0
+    fi
 
     SECTION="gather"
     exit_with_json "ready" "Context gathered with automated risk scan" "" \
@@ -241,6 +219,11 @@ section_analyze() {
 Diff stats:
 $diff_stats"
 
+    if [[ "$CHAINED" == "true" ]]; then
+        log "${GREEN}✓${NC} Risk analysis checks complete (chained)"
+        return 0
+    fi
+
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         cat <<EOF
 {
@@ -278,6 +261,11 @@ section_score() {
 5. Adjust for historical context
 6. Apply deployment window factors"
 
+    if [[ "$CHAINED" == "true" ]]; then
+        log "${GREEN}✓${NC} Risk scoring checks complete (chained)"
+        return 0
+    fi
+
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         cat <<EOF
 {
@@ -303,69 +291,22 @@ EOF
 section_document() {
     log "${BLUE}=== Generating Risk Document ===${NC}"
 
-    # Document generation is LLM-driven. This section resolves where the
-    # document should be written and emits the path for the LLM.
-    #
-    # Two modes:
-    #   1. V4 task integration (--task-id or --new): uses new-doc.sh to
-    #      generate an RSK-type document under docs/active/ following the
-    #      V4 naming convention. The LLM gets a template back to populate.
-    #   2. Standalone (default): writes to docs/deployment-risks/ with a
-    #      flat date-env-version name. Used by deploy-to-stage.sh /
-    #      deploy-to-prod.sh which don't have a task context.
+    # Document generation is LLM-driven
+    # Script just ensures output directory exists
 
-    local doc_path=""
-    local doc_template=""
-
-    if [[ -n "$TASK_ID" ]] || [[ "$NEW_TASK" == "true" ]]; then
-        # V4 task integration — try to derive a description from the
-        # primary task doc or current branch name
-        local raw_title=""
-        if [[ -n "$TASK_ID" ]]; then
-            # shellcheck disable=SC1091
-            source "${SCRIPT_DIR}/doc-utils.sh" 2>/dev/null || true
-            if command -v find_primary &>/dev/null; then
-                local primary_doc
-                primary_doc=$(find_primary "$TASK_ID" 2>/dev/null || echo "")
-                if [[ -n "$primary_doc" ]]; then
-                    raw_title=$(basename "$primary_doc" .md | sed -E 's/^[A-F0-9]{6}-[0-9]{10}-[A-Z]{3}-//')
-                fi
-            fi
-        fi
-        if [[ -z "$raw_title" ]]; then
-            raw_title=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed 's|.*/||; s|^[0-9]*-||')
-        fi
-        local description
-        description=$(echo "$raw_title" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/^-//;s/-$//' | cut -c1-40)
-        description="${description}-${ENVIRONMENT}"
-
-        local doc_json=""
-        if [[ -n "$TASK_ID" ]]; then
-            doc_json=$("${SCRIPT_DIR}/new-doc.sh" --type RSK --description "${description}" --id "${TASK_ID}" --status "active" --json 2>/dev/null) || true
-        else
-            doc_json=$("${SCRIPT_DIR}/new-doc.sh" --type RSK --description "${description}" --new --status "active" --json 2>/dev/null) || true
-        fi
-        doc_path=$(echo "$doc_json" | jq -r '.filepath // empty')
-        doc_template=$(echo "$doc_json" | jq -r '.template // empty')
-        # Pick up assigned task ID if --new was used
-        if [[ -z "$TASK_ID" ]]; then
-            TASK_ID=$(echo "$doc_json" | jq -r '.task_id // empty')
-        fi
-    else
-        # Standalone mode — preserved for deploy-to-stage / deploy-to-prod callers
-        local risk_dir="docs/deployment-risks"
-        if [[ ! -d "$risk_dir" ]]; then
-            mkdir -p "$risk_dir" || exit_with_json "error" "Failed to create $risk_dir"
-        fi
-        doc_path="$risk_dir/$(date +%Y-%m-%d)-${ENVIRONMENT:-unknown}-${VERSION:-unknown}.md"
+    local risk_dir="docs/deployment-risks"
+    if [[ ! -d "$risk_dir" ]]; then
+        mkdir -p "$risk_dir" || exit_with_json "error" "Failed to create $risk_dir"
     fi
-    DOC_PATH="$doc_path"
+
+    local doc_name="$(date +%Y-%m-%d)-${ENVIRONMENT:-unknown}-${VERSION:-unknown}.md"
+    local doc_path="$risk_dir/$doc_name"
 
     local details="Document should be created at: $doc_path
 
 LLM must generate document with:
 - Executive Summary
-- Risk Breakdown Table (10 categories with scores)
+- Risk Breakdown Table
 - Detailed Risk Analysis
 - Mitigation Options (2+ per risk)
 - Deployment Readiness Assessment
@@ -373,19 +314,19 @@ LLM must generate document with:
 - Rollback Plan
 - Recommendation"
 
+    if [[ "$CHAINED" == "true" ]]; then
+        log "${GREEN}✓${NC} Document prerequisites complete (chained): $doc_path"
+        return 0
+    fi
+
     if [[ "$OUTPUT_MODE" == "json" ]]; then
-        # Pick the action label that matches the mode so callers can route
-        local next_action="llm_generate_document"
-        [[ -n "$TASK_ID" ]] && next_action="write_document"
         cat <<EOF
 {
   "status": "ready_for_llm",
-  "next_action": "$next_action",
+  "next_action": "llm_generate_document",
   "message": "Ready for LLM to generate risk document",
   "section": "document",
   "document_path": "$doc_path",
-  "task_id": "$TASK_ID",
-  "template": $(echo "${doc_template:-}" | jq -Rs .),
   "details": $(echo "$details" | jq -Rs .)
 }
 EOF
@@ -404,10 +345,25 @@ EOF
 main() {
     case "$SECTION" in
         full)
+            CHAINED=true
             section_gather
             section_analyze
             section_score
             section_document
+
+            local json=$(cat <<EOF
+{
+  "status": "ready_for_llm",
+  "next_action": "llm_analyze",
+  "message": "Automated checks complete across full chain; LLM analysis, scoring, and document generation needed",
+  "environment": "$ENVIRONMENT",
+  "version": "$VERSION",
+  "timestamp": "$(date -Iseconds)"
+}
+EOF
+)
+            log_json "$json"
+            exit 0
             ;;
         gather)
             section_gather

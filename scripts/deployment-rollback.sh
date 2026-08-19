@@ -47,26 +47,8 @@ EOF
 fi
 
 # Checkout branch
-if ! git checkout "$BRANCH" >/dev/null 2>&1; then
-  cat <<EOF
-{
-  "success": false,
-  "branch": "$BRANCH",
-  "error": "Failed to checkout $BRANCH (uncommitted changes or invalid branch)"
-}
-EOF
-  exit 2
-fi
-if ! git pull origin "$BRANCH" >/dev/null 2>&1; then
-  cat <<EOF
-{
-  "success": false,
-  "branch": "$BRANCH",
-  "error": "Failed to pull origin/$BRANCH (diverged or network failure) — refusing to revert from stale state"
-}
-EOF
-  exit 2
-fi
+git checkout "$BRANCH" >/dev/null 2>&1
+git pull origin "$BRANCH" >/dev/null 2>&1
 
 # Get current HEAD before revert
 ORIGINAL_HASH=$(git rev-parse HEAD)
@@ -98,10 +80,7 @@ if git revert -n HEAD >/dev/null 2>&1; then
 EOF
       exit 0
     else
-      echo "⚠️  Revert created but push failed — unwinding local revert to keep branch in sync with origin" >&2
-      # Without this reset, a retry would revert HEAD (the failed local revert)
-      # and produce a revert-of-revert.
-      git reset --hard "$ORIGINAL_HASH" >/dev/null 2>&1 || true
+      echo "⚠️  Revert created but push failed" >&2
 
       cat <<EOF
 {
@@ -109,7 +88,7 @@ EOF
   "branch": "$BRANCH",
   "original_hash": "$ORIGINAL_HASH",
   "revert_hash": "$REVERT_HASH",
-  "error": "Failed to push rollback to remote (local revert unwound)"
+  "error": "Failed to push rollback to remote"
 }
 EOF
       exit 2

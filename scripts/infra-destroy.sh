@@ -240,21 +240,23 @@ choose_destruction_scope() {
 #------------------------------------------------------------------------------
 
 create_destruction_plan() {
-    local destroy_plan_cmd="terraform plan -destroy"
+    # Build the command as an argv array (no eval) so resource names containing
+    # shell metacharacters cannot be executed.
+    local -a destroy_plan_cmd=(terraform plan -destroy)
 
     if [[ -n "$VAR_FILE" ]] && [[ -f "$VAR_FILE" ]]; then
-        destroy_plan_cmd="$destroy_plan_cmd -var-file=$VAR_FILE"
+        destroy_plan_cmd+=("-var-file=$VAR_FILE")
     fi
 
     for TARGET in "${TARGETS[@]}"; do
-        destroy_plan_cmd="$destroy_plan_cmd -target=$TARGET"
+        destroy_plan_cmd+=("-target=$TARGET")
     done
 
     mkdir -p plans
     PLAN_FILE="plans/${WORKSPACE}-destroy-$(date +%Y%m%d-%H%M%S).tfplan"
-    destroy_plan_cmd="$destroy_plan_cmd -out=$PLAN_FILE"
+    destroy_plan_cmd+=("-out=$PLAN_FILE")
 
-    if ! eval "$destroy_plan_cmd" >/dev/null 2>&1; then
+    if ! "${destroy_plan_cmd[@]}" >/dev/null 2>&1; then
         PLAN_STATUS=$?
         exit_with_json "error" "Failed to create destruction plan" "" \
             "$(_destroy_extra_fields "\"exit_code\": ${PLAN_STATUS}")"

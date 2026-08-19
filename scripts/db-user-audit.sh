@@ -43,6 +43,37 @@ map_status_to_action() {
 
 source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+source "${SCRIPT_DIR}/lib/project-config.sh"
+
+# Get a secret value - delegates to the project's secrets backend (mirrors
+# db-schema-sync.sh's get_secret_value so credential resolution is consistent).
+get_secret_value() {
+    local secret_name="$1"
+    local value=""
+
+    local backend
+    backend=$(get_secrets_backend)
+
+    case "$backend" in
+        aws)
+            value=$(aws secretsmanager get-secret-value \
+                --secret-id "$secret_name" \
+                --query 'SecretString' \
+                --output text 2>/dev/null || echo "")
+            ;;
+        infisical)
+            value=$(infisical secrets get "$secret_name" --plain 2>/dev/null || echo "")
+            ;;
+        env)
+            value="${!secret_name:-}"
+            ;;
+        *)
+            value="${!secret_name:-}"
+            ;;
+    esac
+
+    echo "$value"
+}
 
 # Remaining global variables
 DB_TYPE=""
@@ -85,6 +116,8 @@ print_header() {
 detect_database() {
     print_header "Detecting Database"
 
+    local db_password_secret=""
+
     # Try to get from PROJECT.yaml
     if [[ -f "PROJECT.yaml" ]] && [[ -z "$DB_TYPE" ]]; then
         DB_TYPE=$(yaml_get '.database.type' PROJECT.yaml)
@@ -92,6 +125,7 @@ detect_database() {
         DB_PORT=$(yaml_get '.database.connection.port' PROJECT.yaml)
         DB_NAME=$(yaml_get '.database.connection.database' PROJECT.yaml)
         DB_USER=$(yaml_get '.database.connection.user' PROJECT.yaml)
+        db_password_secret=$(yaml_get '.database.connection.password_secret' PROJECT.yaml)
     fi
 
     # Prompt if not found
@@ -114,11 +148,34 @@ detect_database() {
             read -p "Database name: " DB_NAME >&2
             read -p "Database user (with sufficient privileges): " DB_USER >&2
         else
-            DB_TYPE="postgresql"
-            DB_HOST="localhost"
-            DB_NAME="postgres"
-            DB_USER="postgres"
+            # JSON mode with no PROJECT.yaml database config — surface as an
+            # input-needed error instead of silently defaulting to
+            # postgresql@localhost/postgres (which produced false-negative audits).
+            local error_json=$(cat <<EOF
+{
+  "status": "error",
+  "next_action": "fix_config",
+  "message": "No database configuration found",
+  "details": "PROJECT.yaml is missing a 'database' section (type/connection.host/connection.database/connection.user). Add it, or pass --type/--host/--db/--user explicitly."
+}
+EOF
+)
+            if [[ "$OUTPUT_JSON" == "true" ]]; then
+                echo "$error_json"
+            else
+                echo "$error_json" > "$OUTPUT_FILE"
+            fi
+            exit 1
         fi
+    fi
+
+    # Resolve the DB password from the project's secrets backend and export it
+    # so every psql invocation below picks it up via PGPASSWORD.
+    if [[ -n "$db_password_secret" ]] && [[ "$db_password_secret" != "null" ]]; then
+        DB_PASSWORD=$(get_secret_value "$db_password_secret")
+    fi
+    if [[ -n "$DB_PASSWORD" ]]; then
+        export PGPASSWORD="$DB_PASSWORD"
     fi
 
     log_info "Database: $DB_TYPE"
@@ -241,6 +298,50 @@ check_weak_authentication() {
     fi
 }
 
+# Step 5b: Check database connection pool saturation
+# Detects a max_connections ceiling that is too low for current demand: if live
+# connections are near the usable limit, the backend pool cannot grow and requests
+# will queue/fail. This is the DB-server side of the pool check; the backend
+# pool_size vs capacity math lives in docker-audit.
+check_connection_pool() {
+    print_header "Checking Connection Pool Saturation"
+
+    # Defaults so the report/JSON always have values even for non-postgres backends.
+    MAX_CONNECTIONS=0
+    RESERVED_CONNECTIONS=0
+    USABLE_CONNECTIONS=0
+    CONN_IN_USE=0
+    CONN_PCT=0
+    POOL_RISK="none"  # none | medium | high
+
+    if [[ "$DB_TYPE" == "postgresql" ]]; then
+        MAX_CONNECTIONS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT setting FROM pg_settings WHERE name='max_connections';" 2>/dev/null || echo "0")
+        RESERVED_CONNECTIONS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT setting FROM pg_settings WHERE name='superuser_reserved_connections';" 2>/dev/null || echo "0")
+        CONN_IN_USE=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null || echo "0")
+
+        MAX_CONNECTIONS=${MAX_CONNECTIONS:-0}
+        RESERVED_CONNECTIONS=${RESERVED_CONNECTIONS:-0}
+        CONN_IN_USE=${CONN_IN_USE:-0}
+
+        USABLE_CONNECTIONS=$(( MAX_CONNECTIONS - RESERVED_CONNECTIONS ))
+        if [[ $USABLE_CONNECTIONS -gt 0 ]]; then
+            CONN_PCT=$(( CONN_IN_USE * 100 / USABLE_CONNECTIONS ))
+        fi
+
+        # High: pool is effectively saturated — max_connections is too low for demand.
+        # Medium: approaching the ceiling with little headroom to absorb spikes.
+        if [[ $CONN_PCT -ge 90 ]]; then
+            POOL_RISK="high"
+            log_warning "Connection pool ${CONN_PCT}% saturated (${CONN_IN_USE}/${USABLE_CONNECTIONS} usable) — max_connections too low"
+        elif [[ $CONN_PCT -ge 75 ]]; then
+            POOL_RISK="medium"
+            log_warning "Connection pool ${CONN_PCT}% used (${CONN_IN_USE}/${USABLE_CONNECTIONS} usable) — limited headroom"
+        else
+            log_success "Connection pool healthy: ${CONN_IN_USE}/${USABLE_CONNECTIONS} usable connections (${CONN_PCT}%)"
+        fi
+    fi
+}
+
 # Step 6: Check for shared/generic accounts
 check_generic_accounts() {
     print_header "Checking Generic Accounts"
@@ -288,6 +389,24 @@ generate_report() {
 - **Users with excessive privileges**: ${HIGH_PRIV_COUNT:-N/A}
 - **Users without passwords**: ${PASSWORDLESS_USERS:-N/A}
 - **Expired passwords**: ${EXPIRED_PASSWORDS:-N/A}
+- **Connection pool usage**: ${CONN_IN_USE:-N/A}/${USABLE_CONNECTIONS:-N/A} usable (${CONN_PCT:-0}%, risk: ${POOL_RISK:-none})
+
+---
+
+## Connection Pool
+
+- **max_connections**: ${MAX_CONNECTIONS:-N/A}
+- **superuser_reserved_connections**: ${RESERVED_CONNECTIONS:-N/A}
+- **Usable connections**: ${USABLE_CONNECTIONS:-N/A}
+- **Currently in use**: ${CONN_IN_USE:-N/A} (${CONN_PCT:-0}%)
+
+$(if [[ "${POOL_RISK:-none}" == "high" ]]; then
+  echo "**HIGH RISK**: The pool is ${CONN_PCT}% saturated. \`max_connections\` is too low for current demand — the backend pool cannot grow and new connections will queue or fail. Raise \`max_connections\` (and shared_buffers accordingly), or front the database with a pooler (PgBouncer)."
+elif [[ "${POOL_RISK:-none}" == "medium" ]]; then
+  echo "**MEDIUM RISK**: The pool is ${CONN_PCT}% used, leaving little headroom for traffic spikes. Review \`max_connections\` and the backend \`pool_size\`/\`max_overflow\` against expected peak load."
+else
+  echo "Connection pool headroom is healthy."
+fi)
 
 ---
 
@@ -410,8 +529,8 @@ EOF
 emit_result_json() {
     local high_risk
     local medium_risk
-    if [[ ${SUPERUSER_COUNT:-0} -gt 0 ]] || [[ ${PASSWORDLESS_USERS:-0} -gt 0 ]]; then high_risk="true"; else high_risk="false"; fi
-    if [[ ${EXPIRED_PASSWORDS:-0} -gt 0 ]] || [[ ${CREATEDB_USERS:-0} -gt 0 ]]; then medium_risk="true"; else medium_risk="false"; fi
+    if [[ ${SUPERUSER_COUNT:-0} -gt 0 ]] || [[ ${PASSWORDLESS_USERS:-0} -gt 0 ]] || [[ "${POOL_RISK:-none}" == "high" ]]; then high_risk="true"; else high_risk="false"; fi
+    if [[ ${EXPIRED_PASSWORDS:-0} -gt 0 ]] || [[ ${CREATEDB_USERS:-0} -gt 0 ]] || [[ "${POOL_RISK:-none}" == "medium" ]]; then medium_risk="true"; else medium_risk="false"; fi
 
     local next_action
     if [[ "$high_risk" == "true" ]]; then next_action="remediate_high_risk"
@@ -433,6 +552,14 @@ emit_result_json() {
   "expired_passwords": ${EXPIRED_PASSWORDS},
   "createdb_users": ${CREATEDB_USERS},
   "createrole_users": ${CREATEROLE_USERS},
+  "connection_pool": {
+    "max_connections": ${MAX_CONNECTIONS:-0},
+    "reserved_connections": ${RESERVED_CONNECTIONS:-0},
+    "usable_connections": ${USABLE_CONNECTIONS:-0},
+    "in_use": ${CONN_IN_USE:-0},
+    "usage_pct": ${CONN_PCT:-0},
+    "risk": "${POOL_RISK:-none}"
+  },
   "audit_report": "${AUDIT_REPORT}",
   "findings": {
     "high_risk": $high_risk,
@@ -466,6 +593,7 @@ print_summary() {
     echo "  Excessive privileges: ${HIGH_PRIV_COUNT:-0}" >&2
     echo "  Without passwords: ${PASSWORDLESS_USERS:-0}" >&2
     echo "  Expired passwords: ${EXPIRED_PASSWORDS:-0}" >&2
+    echo "  Connection pool: ${CONN_IN_USE:-0}/${USABLE_CONNECTIONS:-0} (${CONN_PCT:-0}%, risk: ${POOL_RISK:-none})" >&2
     echo "" >&2
     echo "Report: $AUDIT_REPORT" >&2
     echo "" >&2
@@ -527,6 +655,9 @@ main() {
 
     # Step 5: Check weak authentication
     check_weak_authentication
+
+    # Step 5b: Check connection pool saturation
+    check_connection_pool
 
     # Step 6: Check generic accounts
     check_generic_accounts

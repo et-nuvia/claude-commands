@@ -9,7 +9,7 @@ set -euo pipefail
 #   ~/.claude/scripts/task-design.sh [--json|--raw] [--full|--section] [--task-id <id>]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -47,9 +47,71 @@ DSN_PATH=""
 DSN_FILENAME=""
 EXISTING_DSN=""
 
+# Architecture context (same sources as arch-explore.sh / task-arch-review.sh)
+KNOWLEDGE_DOC="docs/architecture/PROJECT-KNOWLEDGE.md"
+ADR_DIR="docs/adr"
+LANGUAGE_TEMPLATE="${HOME}/.claude/templates/architecture/LANGUAGE.md"
+DEEPENING_TEMPLATE="${HOME}/.claude/templates/architecture/DEEPENING.md"
+ARCH_CONTEXT_JSON="{}"
+
 #------------------------------------------------------------------------------
 # Section Functions
 #------------------------------------------------------------------------------
+
+# Gather architecture context for the design session. Everything here is
+# advisory — a missing file/dir produces empty/null fields, never an error,
+# so the design session proceeds while accounting for what's absent.
+gather_architecture_context() {
+    local knowledge_present="false"
+    [[ -f "$KNOWLEDGE_DOC" ]] && knowledge_present="true"
+
+    local adr_list_json="[]"
+    if [[ -d "$ADR_DIR" ]]; then
+        adr_list_json=$(find "$ADR_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null \
+            | sort | jq -R . | jq -sc . 2>/dev/null || echo "[]")
+    fi
+
+    local language_present="false" deepening_present="false"
+    [[ -f "$LANGUAGE_TEMPLATE" ]] && language_present="true"
+    [[ -f "$DEEPENING_TEMPLATE" ]] && deepening_present="true"
+
+    # ARC linkage: /feature-to-task writes a "## Related ARC" section and
+    # pre-resolved decisions under "## Notes for /task-design" into the TSK.
+    local arc_ref="" arc_present="false" pre_resolved_present="false"
+    if [[ -f "${TASK_DOC:-}" ]]; then
+        arc_ref=$(grep -oE '[^ `"()]*-ARC-[^ `"()]*\.md' "$TASK_DOC" 2>/dev/null | head -1 || echo "")
+        [[ -n "$arc_ref" && -f "$arc_ref" ]] && arc_present="true"
+        grep -qE '^##[[:space:]]+Notes for /task-design' "$TASK_DOC" 2>/dev/null && pre_resolved_present="true"
+    fi
+
+    ARCH_CONTEXT_JSON=$(jq -nc \
+        --arg knowledge_doc "$KNOWLEDGE_DOC" \
+        --argjson knowledge_present "$knowledge_present" \
+        --arg adr_dir "$ADR_DIR" \
+        --argjson adr_files "$adr_list_json" \
+        --arg language_template "$LANGUAGE_TEMPLATE" \
+        --argjson language_present "$language_present" \
+        --arg deepening_template "$DEEPENING_TEMPLATE" \
+        --argjson deepening_present "$deepening_present" \
+        --arg arc_ref "$arc_ref" \
+        --argjson arc_present "$arc_present" \
+        --argjson pre_resolved_present "$pre_resolved_present" \
+        '{
+            knowledge_doc: $knowledge_doc,
+            knowledge_present: $knowledge_present,
+            adr_dir: $adr_dir,
+            adr_files: $adr_files,
+            language_template: $language_template,
+            language_present: $language_present,
+            deepening_template: $deepening_template,
+            deepening_present: $deepening_present,
+            arc_ref: ($arc_ref | if . == "" then null else . end),
+            arc_present: $arc_present,
+            pre_resolved_decisions_present: $pre_resolved_present
+        }')
+
+    log "${GREEN}✓${NC} Architecture context: ADRs=$(echo "$adr_list_json" | jq -r 'length'), ARC linked=${arc_present}, pre-resolved=${pre_resolved_present}"
+}
 
 # Section: Identify task
 section_identify() {
@@ -101,9 +163,21 @@ section_identify() {
         EXISTING_DSN=$(find "$(dirname "$TASK_DOC")" -name "${TASK_ID}-*-DSN-*.md" 2>/dev/null | sort -r | head -1 || echo "")
     fi
 
+    # Locate an INV (investigation report) for this task — for investigation-driven
+    # tasks it carries the confirmed root cause the design must be grounded in.
+    EXISTING_INV=""
+    if [[ -n "$_repo_root" && -d "$_repo_root/docs" ]]; then
+        EXISTING_INV=$(find "$_repo_root/docs" -name "${TASK_ID}-*-INV-*.md" 2>/dev/null | sort -r | head -1 || echo "")
+    fi
+    if [[ -z "$EXISTING_INV" ]]; then
+        EXISTING_INV=$(find "$(dirname "$TASK_DOC")" -name "${TASK_ID}-*-INV-*.md" 2>/dev/null | sort -r | head -1 || echo "")
+    fi
+
     if [[ "$SECTION" == "identify" ]]; then
         local next_act="create_design"
         [[ -n "$EXISTING_DSN" ]] && next_act="resume_design"
+
+        gather_architecture_context
 
         log_json "$(jq -nc \
             --arg task_id "$TASK_ID" \
@@ -111,8 +185,10 @@ section_identify() {
             --arg task_title "$TASK_TITLE" \
             --arg branch "$TASK_BRANCH" \
             --arg existing_dsn "${EXISTING_DSN:-}" \
+            --arg existing_inv "${EXISTING_INV:-}" \
             --arg next_action "$next_act" \
-            '{status:"success", section:"identify", next_action:$next_action, task_id:$task_id, task_doc:$task_doc, task_title:$task_title, branch:$branch, existing_dsn:($existing_dsn | if . == "" then null else . end)}')"
+            --argjson architecture "$ARCH_CONTEXT_JSON" \
+            '{status:"success", section:"identify", next_action:$next_action, task_id:$task_id, task_doc:$task_doc, task_title:$task_title, branch:$branch, existing_dsn:($existing_dsn | if . == "" then null else . end), existing_inv:($existing_inv | if . == "" then null else . end), architecture:$architecture}')"
         exit 0
     fi
 }
@@ -343,6 +419,8 @@ main() {
             local next_act="create_design"
             [[ -n "$EXISTING_DSN" ]] && next_act="resume_design"
 
+            gather_architecture_context
+
             log_json "$(jq -nc \
                 --arg task_id "$TASK_ID" \
                 --arg task_title "$TASK_TITLE" \
@@ -350,6 +428,7 @@ main() {
                 --arg branch "$TASK_BRANCH" \
                 --arg existing_dsn "${EXISTING_DSN:-}" \
                 --arg next_action "$next_act" \
+                --argjson architecture "$ARCH_CONTEXT_JSON" \
                 '{
                     status: "success",
                     next_action: $next_action,
@@ -357,7 +436,8 @@ main() {
                     task_title: $task_title,
                     task_doc: $task_doc,
                     branch: $branch,
-                    existing_dsn: ($existing_dsn | if . == "" then null else . end)
+                    existing_dsn: ($existing_dsn | if . == "" then null else . end),
+                    architecture: $architecture
                 }')"
             exit 0
             ;;

@@ -201,7 +201,7 @@ upgrade_python() {
     "Read pyproject.toml",
     "Remove version constraints (e.g., ==1.2.3) from dependencies except forced pins",
     "Keep forced pins unchanged (marked with PINNED comments)",
-    "Then run: ~/.claude/scripts/upgrade-dependencies.sh --json --python-resolve"
+    "Then run: ~/.claude/scripts/upgrade-dependencies.sh --json --python"
   ]
 }
 EOF
@@ -376,7 +376,7 @@ upgrade_nodejs() {
     "Read package.json",
     "Set upgradeable dependencies to 'latest' (not ^ or ~ prefix)",
     "Keep forced pins at their current versions",
-    "Then run: ~/.claude/scripts/upgrade-dependencies.sh --json --nodejs-resolve"
+    "Then run: ~/.claude/scripts/upgrade-dependencies.sh --json --nodejs"
   ]
 }
 EOF

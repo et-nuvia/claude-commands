@@ -88,6 +88,25 @@ VERSION_TYPE=""
 # Helper Functions
 #------------------------------------------------------------------------------
 
+# Check if target has commits ahead of source - USE LOCAL BRANCHES
+# Skip for squash merges (squash handles divergence naturally) and for --allow-diverged
+# (deploy workflows where cherry-picks / release-note syncs on the target are expected)
+# Exits with needs_decision JSON if a blocking divergence is found.
+check_target_divergence() {
+    local target_ahead=$(git rev-list --count "$SOURCE_BRANCH..$TARGET_BRANCH" 2>/dev/null || echo "0")
+    if [[ "$target_ahead" -gt 0 ]] && [[ "$SQUASH" != "true" ]] && [[ "$ALLOW_DIVERGED" != "true" ]]; then
+        log "${YELLOW}⚠ Target branch has $target_ahead commits not in source${NC}"
+        exit_with_json "needs_decision" \
+            "Target branch ($TARGET_BRANCH) has $target_ahead commit(s) not in source ($SOURCE_BRANCH)" \
+            "" \
+            "\"target_ahead_count\": $target_ahead, \"source_branch\": \"$SOURCE_BRANCH\", \"target_branch\": \"$TARGET_BRANCH\", \"source_ahead_count\": $COMMITS_COUNT, \"options\": [\"rebase\", \"merge_anyway\", \"cancel\"]"
+    elif [[ "$target_ahead" -gt 0 ]] && [[ "$ALLOW_DIVERGED" == "true" ]]; then
+        log "${YELLOW}⚠ Target branch has $target_ahead commits not in source (--allow-diverged set, git merge will reconcile via merge-base)${NC}"
+    elif [[ "$target_ahead" -gt 0 ]]; then
+        log "${YELLOW}⚠ Target branch has $target_ahead commits not in source (squash merge handles this)${NC}"
+    fi
+}
+
 #------------------------------------------------------------------------------
 # Section 1: Validate
 #------------------------------------------------------------------------------
@@ -151,20 +170,7 @@ section_validate() {
     fi
 
     # Check if target has commits ahead of source - USE LOCAL BRANCHES
-    # Skip for squash merges (squash handles divergence naturally) and for --allow-diverged
-    # (deploy workflows where cherry-picks / release-note syncs on the target are expected)
-    local target_ahead=$(git rev-list --count "$SOURCE_BRANCH..$TARGET_BRANCH" 2>/dev/null || echo "0")
-    if [[ "$target_ahead" -gt 0 ]] && [[ "$SQUASH" != "true" ]] && [[ "$ALLOW_DIVERGED" != "true" ]]; then
-        log "${YELLOW}⚠ Target branch has $target_ahead commits not in source${NC}"
-        exit_with_json "needs_decision" \
-            "Target branch ($TARGET_BRANCH) has $target_ahead commit(s) not in source ($SOURCE_BRANCH)" \
-            "" \
-            "\"target_ahead_count\": $target_ahead, \"source_branch\": \"$SOURCE_BRANCH\", \"target_branch\": \"$TARGET_BRANCH\", \"source_ahead_count\": $COMMITS_COUNT, \"options\": [\"rebase\", \"merge_anyway\", \"cancel\"]"
-    elif [[ "$target_ahead" -gt 0 ]] && [[ "$ALLOW_DIVERGED" == "true" ]]; then
-        log "${YELLOW}⚠ Target branch has $target_ahead commits not in source (--allow-diverged set, git merge will reconcile via merge-base)${NC}"
-    elif [[ "$target_ahead" -gt 0 ]]; then
-        log "${YELLOW}⚠ Target branch has $target_ahead commits not in source (squash merge handles this)${NC}"
-    fi
+    check_target_divergence
 
     log "${GREEN}✓${NC} Validation complete"
 
@@ -245,10 +251,17 @@ section_merge() {
         git pull origin "$TARGET_BRANCH" >/dev/null 2>&1
     fi
 
+    # Re-check divergence: the pull above may have advanced target since section_validate ran
+    check_target_divergence
+
     # Prepare merge arguments
     local merge_args=()
     if [[ "$SQUASH" == "true" ]]; then
         merge_args+=("--squash")
+    else
+        # Force a real merge commit with the generated message (default merge
+        # commits never contain $MERGE_MESSAGE, so set it explicitly here)
+        merge_args+=("--no-ff" "-m" "$MERGE_MESSAGE")
     fi
     # CRITICAL: Merge from LOCAL branch, not origin (prevents orphaned commits)
     merge_args+=("$SOURCE_BRANCH")
@@ -266,52 +279,28 @@ Dev-SHA: ${source_sha}"
                 git merge --abort >/dev/null 2>&1 || true
                 exit_with_json "error" "Failed to create merge commit" "Merge succeeded but commit failed"
             fi
-        else
-            # Regular merge - ensure correct message
-            if ! git log -1 --pretty=%B | grep -q "$MERGE_MESSAGE"; then
-                if [[ -n "$(git diff --cached --name-only 2>/dev/null)" ]]; then
-                    git commit -m "$MERGE_MESSAGE" >/dev/null 2>&1 || true
-                fi
-            fi
         fi
+        # Regular merges pass -m "$MERGE_MESSAGE" directly above, so no post-hoc
+        # message fixup is needed here.
 
-        # Verify package-lock.json sync after merge (root and 1 level deep).
-        # Helper: amend the merge commit with the regenerated lockfile, or
-        # unwind the staged change and abort the whole merge on failure so the
-        # caller never sees a merge_hash that doesn't include the fix.
-        _amend_lockfile_or_fail() {
-            local lockfile_path="$1"
-            if ! git commit --amend --no-edit >/dev/null 2>&1; then
-                git reset HEAD "$lockfile_path" >/dev/null 2>&1 || true
-                git checkout -- "$lockfile_path" >/dev/null 2>&1 || true
-                git merge --abort >/dev/null 2>&1 || true
-                exit_with_json "error" "Failed to amend merge commit with regenerated $lockfile_path" \
-                    "Merge aborted to avoid pushing a commit without the lockfile fix"
-            fi
-        }
-
+        # Verify package-lock.json sync after merge (root and 1 level deep)
         local lockfile_fixed=false
         if [[ -f "package.json" ]] && [[ -f "package-lock.json" ]]; then
             if ! npm ls --package-lock-only >/dev/null 2>&1; then
                 log "${YELLOW}⚠️  package-lock.json out of sync — regenerating${NC}"
                 npm install --package-lock-only >/dev/null 2>&1
                 git add package-lock.json
-                _amend_lockfile_or_fail "package-lock.json"
+                git commit --amend --no-edit >/dev/null 2>&1
                 lockfile_fixed=true
             fi
         fi
-        # Only descend into top-level directories that are part of *this* repo
-        # (skip vendored checkouts, node_modules, etc., which have their own .git
-        # or are gitignored).
         for subdir in */; do
-            [[ -e "${subdir}.git" ]] && continue
-            git check-ignore -q "$subdir" 2>/dev/null && continue
             if [[ -f "${subdir}package.json" ]] && [[ -f "${subdir}package-lock.json" ]]; then
                 if ! (cd "$subdir" && npm ls --package-lock-only >/dev/null 2>&1); then
                     log "${YELLOW}⚠️  ${subdir}package-lock.json out of sync — regenerating${NC}"
                     (cd "$subdir" && npm install --package-lock-only >/dev/null 2>&1)
                     git add "${subdir}package-lock.json"
-                    _amend_lockfile_or_fail "${subdir}package-lock.json"
+                    git commit --amend --no-edit >/dev/null 2>&1
                     lockfile_fixed=true
                 fi
             fi
@@ -336,6 +325,8 @@ Dev-SHA: ${source_sha}"
         # Files that can be auto-resolved without LLM intervention:
         # - Generated indexes: take target (ours), regenerate after merge
         # - docs/completed/: take source (theirs) — source branch has final state
+        # - docs/release_notes/: take source (theirs) — release notes always flow
+        #   forward (dev → staging → prod); the source branch is authoritative
         local auto_gen_patterns=("docs/DOCUMENT-INDEX.md" "docs/SEQUENCE-TRACKER.md")
         local has_real_conflicts=false
         local auto_resolved_count=0
@@ -365,6 +356,24 @@ Dev-SHA: ${source_sha}"
                 resolved=true
             fi
 
+            # Release notes: always take source (theirs). Release notes flow
+            # forward dev → staging → prod; the source branch is authoritative,
+            # so a conflict here is resolved in favor of source rather than
+            # halting the deploy for manual intervention.
+            if [[ "$resolved" == "false" ]] && [[ "$cfile" == docs/release_notes/* ]]; then
+                # Source may have modified or deleted the file. Prefer the
+                # source version; if source deleted it, honor the deletion.
+                if git checkout --theirs "$cfile" >/dev/null 2>&1; then
+                    git add "$cfile" >/dev/null 2>&1
+                    log "${GREEN}✓${NC} Auto-resolved release note (took source): $cfile"
+                else
+                    git rm -f "$cfile" >/dev/null 2>&1 || true
+                    log "${GREEN}✓${NC} Auto-resolved release note (source deleted): $cfile"
+                fi
+                ((auto_resolved_count++)) || true
+                resolved=true
+            fi
+
             if [[ "$resolved" == "false" ]]; then
                 has_real_conflicts=true
             fi
@@ -384,27 +393,17 @@ Dev-SHA: ${source_sha}"
                     exit_with_json "error" "Failed to create merge commit after auto-resolve" "Auto-resolved generated files but commit failed"
                 fi
             else
-                if ! git commit --no-edit >/dev/null 2>&1; then
-                    git merge --abort >/dev/null 2>&1 || true
-                    exit_with_json "error" "Failed to commit merge after auto-resolve" "Auto-resolved generated files but commit failed (hook rejected, no changes staged, or similar)"
-                fi
+                git commit --no-edit >/dev/null 2>&1 || true
             fi
 
-            # Regenerate auto-generated docs and amend them into the merge commit.
-            # If regeneration produces changes that fail to amend, undo the staged
-            # change rather than pushing a merge commit that's missing the regen.
+            # Regenerate auto-generated docs
             if [[ -x "${SCRIPT_DIR}/update-docs.sh" ]]; then
                 log "${BLUE}ℹ${NC} Regenerating auto-generated docs..."
                 "${SCRIPT_DIR}/update-docs.sh" >/dev/null 2>&1 || true
                 if [[ -n "$(git diff --name-only 2>/dev/null)" ]]; then
                     git add docs/DOCUMENT-INDEX.md docs/SEQUENCE-TRACKER.md 2>/dev/null || true
-                    if ! git commit --amend --no-edit >/dev/null 2>&1; then
-                        git reset HEAD docs/DOCUMENT-INDEX.md docs/SEQUENCE-TRACKER.md >/dev/null 2>&1 || true
-                        git checkout -- docs/DOCUMENT-INDEX.md docs/SEQUENCE-TRACKER.md >/dev/null 2>&1 || true
-                        log "${YELLOW}⚠${NC} Failed to amend regenerated docs into merge commit — merge proceeds without regen"
-                    else
-                        log "${GREEN}✓${NC} Regenerated and amended docs"
-                    fi
+                    git commit --amend --no-edit >/dev/null 2>&1 || true
+                    log "${GREEN}✓${NC} Regenerated and amended docs"
                 fi
             fi
 

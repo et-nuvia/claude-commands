@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# deploy-to-prod.sh - Deploy to production with strict risk analysis, merge, and monitoring
+# deploy-to-prod.sh - Deploy to production with strict risk analysis, merge, monitoring, and smoke tests
 #
 # STANDARD SCRIPT PATTERN: Section flags with --json/--raw output modes
 #
@@ -9,15 +9,15 @@ set -euo pipefail
 #   ~/.claude/scripts/deploy-to-prod.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
 #   --validate:      Validate git state only
 #   --risk-analysis: Run automated risk analysis only (production strict)
 #   --merge:         Attempt merge only (returns conflict details if needed)
-#   --deploy:        Run pipeline + health + version (after merge)
-#   --tag:           Create release tag and sync to staging/dev
+#   --deploy:        Run pipeline + health + version + smoke tests (after merge)
+#   --tag:           Create release tag (branch sync-back is the pipeline's job)
 #   --full:          Run all sections end-to-end (default)
 #
 # Workflow:
@@ -29,12 +29,14 @@ set -euo pipefail
 #
 # Features:
 #   - Strictest risk thresholds for production
+#   - Rollback is owned by the CI pipeline (its rollback job restores the
+#     previous image on smoke failure). This script NEVER git-reverts the
+#     production branch — a pipeline failure may be only post-deploy bookkeeping
+#     (e.g. tag-release) after a healthy deploy; on failure it reports and defers
+#     to the operator.
 #   - LLM intervention at merge conflicts
 #   - Auto-flow when everything succeeds
 #   - --raw mode for debugging
-#   - Idempotent: re-running --full after partial success resumes cleanly
-#
-# Rollback and smoke tests are owned by the CI pipeline, not this script.
 
 # Global variables
 OUTPUT_MODE="json"
@@ -53,32 +55,13 @@ map_status_to_action() {
 }
 
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+source "${SCRIPT_DIR}/lib/deploy-stash.sh"
 
 # Guard: deploy scripts must run from main checkout, not a worktree (DSN Decision 4)
 if declare -f is_in_worktree &>/dev/null && is_in_worktree; then
     exit_with_json "error" "Deploy scripts must run from the main checkout, not a worktree" \
         "cd to the main repo checkout first, then re-run"
 fi
-
-# Cleanup on unexpected exit: abort any in-progress merge and return to the
-# original branch. Without this, a Ctrl-C or set -e trip during section_tag
-# can strand the working tree on staging/dev with a half-finished merge.
-_ORIG_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
-_cleanup_on_error() {
-    local rc=$?
-    [[ $rc -eq 0 ]] && return 0
-    git merge --abort >/dev/null 2>&1 || true
-    git revert --abort >/dev/null 2>&1 || true
-    if [[ -n "$_ORIG_BRANCH" ]]; then
-        local current
-        current=$(git branch --show-current 2>/dev/null || echo "")
-        if [[ "$current" != "$_ORIG_BRANCH" ]]; then
-            git checkout "$_ORIG_BRANCH" >/dev/null 2>&1 || true
-        fi
-    fi
-    return $rc
-}
-trap '_cleanup_on_error' EXIT INT TERM
 
 RISK_SCORE=0
 RISK_STATUS="unknown"
@@ -87,7 +70,9 @@ MERGE_STATUS="unknown"
 PIPELINE_STATUS="unknown"
 HEALTH_STATUS="unknown"
 VERSION_STATUS="unknown"
+SMOKE_TEST_STATUS="unknown"
 RELEASE_TAG=""
+ROLLBACK_PERFORMED=false
 
 # Deployment config variables
 DEV_BRANCH=""
@@ -116,6 +101,10 @@ section_validate() {
     if ! source "${SCRIPT_DIR}/lib/deployment-config.sh" 2>&1; then
         exit_with_json "error" "Failed to load deployment configuration"
     fi
+
+    # Stash a dirty working tree (marked) so the merge/branch-switch runs clean;
+    # the user is offered a pop-into-dev-or-drop choice on success.
+    deploy_autostash "deploy-to-prod"
 
     # Ensure target (inactive) instances are running for blue-green deployments
     if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
@@ -216,41 +205,6 @@ EOF
 # Section 3: Merge (regular merge for production)
 section_merge() {
     log "${BLUE}Merging to Production${NC}"
-
-    # Idempotency guard: if source is already merged into target on origin, skip.
-    # Lets re-runs of --full after a partial success proceed straight to deploy.
-    git fetch origin "$STAGING_BRANCH" "$PRODUCTION_BRANCH" >/dev/null 2>&1 || true
-    local _src_sha _tgt_sha
-    _src_sha=$(git rev-parse "origin/$STAGING_BRANCH" 2>/dev/null || echo "")
-    _tgt_sha=$(git rev-parse "origin/$PRODUCTION_BRANCH" 2>/dev/null || echo "")
-    if [[ -n "$_src_sha" && -n "$_tgt_sha" ]] && \
-       git merge-base --is-ancestor "$_src_sha" "$_tgt_sha" 2>/dev/null; then
-        MERGE_STATUS="success"
-        MERGE_COMMIT="$_tgt_sha"
-        log "${GREEN}✓${NC} $STAGING_BRANCH already merged into $PRODUCTION_BRANCH ($_tgt_sha) — skipping merge"
-
-        if [[ "$SECTION" == "merge" ]]; then
-            local json=$(cat <<EOF
-{
-  "status": "success",
-  "next_action": "display_summary",
-  "section": "merge",
-  "message": "Already merged (idempotent skip)",
-  "merge_commit": "$MERGE_COMMIT",
-  "staging_branch": "$STAGING_BRANCH",
-  "production_branch": "$PRODUCTION_BRANCH",
-  "next_steps": [
-    "Continue deployment: deploy-to-prod.sh --json --deploy"
-  ],
-  "timestamp": "$(date -Iseconds)"
-}
-EOF
-)
-            log_json "$json"
-            exit 0
-        fi
-        return 0
-    fi
 
     # Capture git-merge.sh stdout (JSON) separately from stderr (logs).
     # --allow-diverged: production (master) normally has release-note autosync
@@ -409,24 +363,16 @@ EOF
     log "${GREEN}✓${NC} Merged: $MERGE_COMMIT"
 }
 
-# Section 4: Deploy (pipeline + health + version)
+# Section 4: Deploy (pipeline + health + version + smoke tests)
 section_deploy() {
     log "${BLUE}Deploying to Production${NC}"
-
-    # Refuse to start a deploy section with a dirty working tree — a prior
-    # interrupted run could have left half-staged files that would either
-    # ride along on the merge or block subsequent git operations.
-    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        exit_with_json "error" "Working tree is dirty" \
-            "Resolve uncommitted changes before re-running --deploy (git status to inspect)"
-    fi
 
     # Resolve the commit we expect the pipeline to build, and ensure it is on
     # origin. When --full ran end-to-end, section_merge already pushed via
     # git-merge.sh cleanup. When --deploy is invoked standalone after manual
     # conflict resolution, the local merge commit lives only on the developer's
     # machine — without an explicit push here, monitor-pipeline.sh would watch
-    # the stale origin HEAD forever.
+    # the stale origin HEAD forever, then mistakenly trigger a rollback.
     git fetch origin "$PRODUCTION_BRANCH" >/dev/null 2>&1 || true
     local local_head remote_head
     local_head=$(git rev-parse "$PRODUCTION_BRANCH" 2>/dev/null || echo "")
@@ -462,7 +408,28 @@ section_deploy() {
     # Monitor pipeline for THIS commit on the production branch. Matching by SHA
     # is critical — without it, the monitor matches the latest run on the branch
     # (often a stale, already-succeeded run) and reports false success.
-    if ! ~/.claude/scripts/monitor-pipeline.sh --branch "$PRODUCTION_BRANCH" --head-sha "$MERGE_COMMIT" 2>&1; then
+    # Capture the monitor's exit code rather than testing truthiness: it uses
+    # 0=success, 1=failure, 2=timeout, and a timeout must NOT be reported as a
+    # failure (see the exit 2 branch below).
+    local _monitor_rc=0
+    ~/.claude/scripts/monitor-pipeline.sh --branch "$PRODUCTION_BRANCH" --head-sha "$MERGE_COMMIT" 2>&1 || _monitor_rc=$?
+    if [[ $_monitor_rc -eq 2 ]]; then
+        # Still running when we stopped watching. On PRODUCTION this is the most
+        # dangerous case to mislabel: calling a live, in-flight deploy "failed"
+        # invites a panic rollback of a release that is about to go green.
+        # Report it as unverified and stop — no rollback, no tagging.
+        PIPELINE_STATUS="timeout"
+        ROLLBACK_PERFORMED=false
+        log "${YELLOW}→${NC} Pipeline still RUNNING when the monitor stopped watching — NOT a failure, and NOT rolled back."
+        exit_with_json "error" \
+            "Pipeline still RUNNING for $MERGE_COMMIT on $PRODUCTION_BRANCH — this is NOT a failure" \
+            "The monitor stopped watching before the run finished; the deploy is in flight and may well succeed. Watch it to completion with '~/.claude/scripts/pipeline-watch.sh --branch ${PRODUCTION_BRANCH} --head-sha ${MERGE_COMMIT}' before deciding anything — pass those flags so it watches the deploy run and not another workflow on the same commit. Do NOT roll back on this status alone. If the production pipeline is legitimately this slow, raise ci.pipeline_timeout in PROJECT.yaml (default 540s, capped at 540s so this message can reach you before the Bash tool's 600s limit — for longer waits use pipeline-watch.sh)."
+    fi
+    if [[ $_monitor_rc -ne 0 ]]; then
+        # Distinguish "pipeline failed" from "no pipeline ever started". If the
+        # remote HEAD still doesn't match what we expect, no run was triggered
+        # (push rejected, CI disabled on the branch, [skip ci] in the merge
+        # message, etc.) — rolling back here would revert a healthy deploy.
         git fetch origin "$PRODUCTION_BRANCH" >/dev/null 2>&1 || true
         local current_remote
         current_remote=$(git rev-parse "origin/$PRODUCTION_BRANCH" 2>/dev/null || echo "")
@@ -470,10 +437,24 @@ section_deploy() {
             PIPELINE_STATUS="not_started"
             exit_with_json "error" \
                 "No pipeline run found for $MERGE_COMMIT on $PRODUCTION_BRANCH" \
-                "origin/$PRODUCTION_BRANCH is at $current_remote, expected $MERGE_COMMIT. The push may have been rejected or the merge commit contains [skip ci]."
+                "origin/$PRODUCTION_BRANCH is at $current_remote, expected $MERGE_COMMIT. The push may have been rejected or the merge commit contains [skip ci]. Skipping rollback (nothing was deployed)."
         fi
+        # The CI pipeline OWNS rollback: its rollback job restores the previous
+        # :production image when deploy succeeded but smoke failed. And a pipeline
+        # "failure" is frequently a NON-gating, post-deploy bookkeeping job (e.g.
+        # tag-release committing release notes) failing AFTER a healthy deploy +
+        # smoke — in which case the deploy is live and fine. Either way this
+        # script must NOT git-revert the production branch: doing so reverted
+        # healthy deploys on bookkeeping failures and raced the pipeline's own
+        # image rollback. Report the failure and let the operator decide
+        # (fix-forward, or a deliberate manual revert if the deploy itself failed).
         PIPELINE_STATUS="failed"
-        exit_with_json "error" "Pipeline failed on $PRODUCTION_BRANCH for $MERGE_COMMIT"
+        ROLLBACK_PERFORMED=false
+        log "${RED}✗${NC} Pipeline reported failure"
+        log "${YELLOW}→${NC} NOT auto-reverting ${PRODUCTION_BRANCH} — the CI pipeline owns image rollback. A post-deploy bookkeeping failure (e.g. tag-release) does not mean the deploy is unhealthy."
+        exit_with_json "error" \
+            "Pipeline reported failure for $MERGE_COMMIT on $PRODUCTION_BRANCH" \
+            "Inspect the failed job(s) (pipeline-jobs.sh / pipeline-logs.sh). If deploy + smoke passed and only post-deploy bookkeeping failed, the deploy is HEALTHY — no action needed. If the deploy itself failed, the pipeline's rollback job already restored the previous image; decide fix-forward vs. a manual revert. This script does NOT auto-revert the branch."
     fi
     PIPELINE_STATUS="success"
     log "${GREEN}✓${NC} Pipeline succeeded"
@@ -492,13 +473,18 @@ section_deploy() {
         VERSION="$refreshed_version"
     fi
 
-    # Health check is informational only.
+    # Check health (informational only).
+    # Rollback is owned by the CI pipeline — when smoke tests fail it auto-
+    # triggers the pipeline rollback job. Reverting master from this script
+    # races the pipeline and has produced false reverts on healthy deploys
+    # (e.g. when the local check times out before DNS cutover finishes), so
+    # we only report status here.
     if [[ -n "$PRODUCTION_URL" ]]; then
         if ~/.claude/scripts/check-health.sh --url "$PRODUCTION_URL" --health-path "$HEALTH_CHECK_PATH" 2>&1; then
             HEALTH_STATUS="healthy"
         else
             HEALTH_STATUS="unhealthy"
-            log "${YELLOW}⚠${NC} Health check failed"
+            log "${YELLOW}⚠${NC} Health check failed — pipeline owns rollback, not auto-reverting master"
         fi
     else
         HEALTH_STATUS="skipped"
@@ -510,7 +496,7 @@ section_deploy() {
     #   - blue-green: the *inactive* color's domain (e.g. clearance-blue.x.com).
     #     PRODUCTION_URL is the roving domain, which still serves the
     #     previously-active color until DNS cutover, so checking it here
-    #     would always fail.
+    #     would always fail and trigger a false rollback.
     #   - other strategies: the deploy goes directly to PRODUCTION_URL.
     local _verify_url=""
     if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
@@ -528,12 +514,26 @@ section_deploy() {
         if ~/.claude/scripts/check-deployed-version.sh --url "$_verify_url" --expected-version "$VERSION" --version-path "$VERSION_PATH" 2>&1; then
             VERSION_STATUS="verified"
         else
+            # Version mismatch is reported but does NOT trigger rollback.
+            # The pipeline already validated the deploy via smoke tests; a
+            # local mismatch usually means the script resolved the wrong
+            # color (e.g. checked the inactive blue/green target before DNS
+            # cutover) — not an actual deployment failure. The user can
+            # investigate the warning without master being reverted under
+            # them.
             VERSION_STATUS="unverified"
-            log "${YELLOW}⚠${NC} Version verification failed"
+            log "${YELLOW}⚠${NC} Version verification failed — pipeline owns rollback, not auto-reverting master"
         fi
     elif [[ -z "${VERSION_STATUS:-}" || "$VERSION_STATUS" == "unknown" ]]; then
         VERSION_STATUS="skipped"
     fi
+
+    # Smoke tests are owned by the CI pipeline (smoke-test job) which runs
+    # immediately after deploy and auto-triggers the pipeline's rollback job
+    # on failure. Running a second set of local smoke tests here is both
+    # redundant and fragile — the local monitor can return before the real
+    # pipeline finishes deploying, causing false failures + bogus reverts.
+    SMOKE_TEST_STATUS="skipped"
 
     if [[ "$SECTION" == "deploy" ]]; then
         local json=$(cat <<EOF
@@ -544,6 +544,8 @@ section_deploy() {
   "pipeline_status": "$PIPELINE_STATUS",
   "health_status": "$HEALTH_STATUS",
   "version_status": "$VERSION_STATUS",
+  "smoke_test_status": "$SMOKE_TEST_STATUS",
+  "rollback_performed": $ROLLBACK_PERFORMED,
   "production_url": "${PRODUCTION_URL}",
   "version": "$VERSION",
   "next_steps": [
@@ -570,25 +572,15 @@ EOF
 section_tag() {
     log "${BLUE}Creating Release Tag${NC}"
 
-    # Refuse to tag with a dirty working tree — the sync_branch step does
-    # checkouts and merges that won't work cleanly otherwise.
-    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        exit_with_json "error" "Working tree is dirty" \
-            "Resolve uncommitted changes before re-running --tag (git status to inspect)"
-    fi
-
     # Refresh tags so we can check for existing tags created by the pipeline
     git fetch origin --tags >/dev/null 2>&1 || true
 
-    # Prefer a semver tag (vX.Y.Z) already pointing at the deployed commit —
-    # that's the pipeline's bumped version. Filter to semver shape so we
-    # don't pick up `latest`, `staging`, or other floating tags that happen
-    # to share the commit. Sort by version and take the highest.
+    # Prefer a tag that already points at the deployed commit — that's the
+    # pipeline's bumped version. If the pipeline handles versioning + tagging
+    # (common with conventional-commit-driven bumps), the real release tag is
+    # whatever the pipeline created, not v$VERSION from a stale PROJECT.yaml.
     local pipeline_tag
-    pipeline_tag=$(git tag --points-at "$MERGE_COMMIT" 2>/dev/null \
-        | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+([+-].*)?$' \
-        | sort -V \
-        | tail -1)
+    pipeline_tag=$(git tag --points-at "$MERGE_COMMIT" 2>/dev/null | head -1)
 
     if [[ -n "$pipeline_tag" ]]; then
         RELEASE_TAG="$pipeline_tag"
@@ -613,67 +605,62 @@ section_tag() {
                 exit_with_json "error" "Failed to create tag $RELEASE_TAG"
             fi
             if ! git push origin "$RELEASE_TAG" 2>&1; then
-                # Drop the local tag so a retry doesn't see it as "already exists"
-                # and skip pushing, or worse, treat it as the pipeline-created tag.
-                git tag -d "$RELEASE_TAG" >/dev/null 2>&1 || true
-                exit_with_json "error" "Failed to push tag $RELEASE_TAG (local tag deleted to keep state consistent)"
+                exit_with_json "error" "Failed to push tag $RELEASE_TAG"
             fi
             log "${GREEN}✓${NC} Tag created and pushed: $RELEASE_TAG"
         fi
     fi
 
-    # Sync production -> staging. Use a non-ff merge and fall back gracefully:
-    # release-note autosync commits on master that aren't on staging mean
-    # --ff-only is often impossible. A plain `git merge` creates a merge
-    # commit and succeeds.
-    sync_branch() {
-        local from="$1" into="$2"
-        log "Syncing $from -> $into"
-
-        if ! git checkout "$into" >/dev/null 2>&1; then
-            log "${RED}✗${NC} Failed to checkout $into"
-            return 1
-        fi
-        if ! git pull --ff-only origin "$into" >/dev/null 2>&1; then
-            log "${YELLOW}⚠${NC} Could not fast-forward $into from origin (continuing)"
-        fi
-        if ! git merge --no-edit "$from" >/dev/null 2>&1; then
-            log "${RED}✗${NC} Merge $from -> $into failed (likely conflicts)"
-            git merge --abort >/dev/null 2>&1 || true
-            return 1
-        fi
-        if ! git push origin "$into" >/dev/null 2>&1; then
-            log "${RED}✗${NC} Failed to push $into — resetting local $into to origin to avoid drift"
-            # Without this, local $into is ahead of origin with an unpushed
-            # merge commit; the next sync attempt sees it as already-merged
-            # and silently does nothing, leaving origin permanently behind.
-            git reset --hard "origin/$into" >/dev/null 2>&1 || true
-            return 1
-        fi
-        log "${GREEN}✓${NC} Synced to $into"
-        return 0
-    }
-
+    # NO branch sync-back here. The CI pipeline already owns it: its tag-release
+    # job commits the release notes on the production branch and its follow-up
+    # sync jobs replay that file onto staging and dev, every one of them marked
+    # [skip ci]. Re-merging production -> staging -> dev from here duplicated
+    # content the pipeline had already placed, and because a `git merge` commit
+    # carries no [skip ci], each of the two merges fired a *fresh* staging and
+    # dev pipeline — two redundant builds per production deploy, plus branch
+    # histories that looked like drift ("Merge branch 'master' into staging")
+    # when nothing had actually diverged.
+    #
+    # Divergence between production and staging is EXPECTED and already handled:
+    # the merge in section 2 passes --allow-diverged precisely because the
+    # pipeline's autosync commits live on production but not on staging.
+    # Leave that to it.
     local sync_warnings=()
-    sync_branch "$PRODUCTION_BRANCH" "$STAGING_BRANCH" || sync_warnings+=("$PRODUCTION_BRANCH->$STAGING_BRANCH")
-    sync_branch "$STAGING_BRANCH"    "$DEV_BRANCH"     || sync_warnings+=("$STAGING_BRANCH->$DEV_BRANCH")
 
-    # Return to production regardless. Abort any in-progress merge first
-    # (sync_branch's failure path already resets, but defend against the case
-    # where the merge step was interrupted by signal between merge and reset).
-    git merge --abort >/dev/null 2>&1 || true
-    git checkout "$PRODUCTION_BRANCH" >/dev/null 2>&1 || \
-        log "${YELLOW}⚠${NC} Failed to return to $PRODUCTION_BRANCH — check working tree state"
+    # Pull the latest on each PROJECT.yaml-configured branch in order
+    # (production -> staging -> dev) and END ON DEV so the user resumes work
+    # there. Branch names are sourced from PROJECT.yaml, never hardcoded.
+    local _b
+    for _b in "$PRODUCTION_BRANCH" "$STAGING_BRANCH" "$DEV_BRANCH"; do
+        [[ -z "$_b" ]] && continue
+        if git checkout "$_b" >/dev/null 2>&1; then
+            git pull --ff-only origin "$_b" >/dev/null 2>&1 \
+                || log "${YELLOW}⚠${NC} Could not fast-forward $_b from origin (continuing)"
+        else
+            log "${YELLOW}⚠${NC} Could not checkout $_b to pull latest"
+        fi
+    done
+    log "${GREEN}✓${NC} Pulled latest on ${PRODUCTION_BRANCH} → ${STAGING_BRANCH} → ${DEV_BRANCH}; now on ${DEV_BRANCH}"
 
     if [[ ${#sync_warnings[@]} -gt 0 ]]; then
         log "${YELLOW}⚠${NC} Branch sync-back had issues: ${sync_warnings[*]} — production deploy itself succeeded; resolve manually"
     fi
 
     if [[ "$SECTION" == "tag" ]]; then
+        local _stash_ref _next_action _stash_json
+        _stash_ref=$(deploy_find_marked_stash)
+        if [[ -n "$_stash_ref" ]]; then
+            _next_action="prompt_stash"
+            _stash_json=$(deploy_stash_details_json "$_stash_ref")
+        else
+            _next_action="display_summary"
+            _stash_json="null"
+        fi
         local json=$(cat <<EOF
 {
   "status": "success",
-  "next_action": "display_summary",
+  "next_action": "$_next_action",
+  "stash": $_stash_json,
   "section": "tag",
   "release_tag": "$RELEASE_TAG",
   "version": "$VERSION",
@@ -706,10 +693,7 @@ main() {
             --deploy) SECTION="deploy"; shift ;;
             --tag) SECTION="tag"; shift ;;
             --full) SECTION="full"; shift ;;
-            *)
-                exit_with_json "error" "Unknown argument: $1" \
-                    "Valid flags: --json|--toon|--raw, --validate|--risk-analysis|--merge|--deploy|--tag|--full"
-                ;;
+            *) shift ;;
         esac
     done
 
@@ -748,10 +732,24 @@ main() {
             section_deploy
             section_tag
 
+            # If we auto-stashed a dirty tree at the start, prompt the user to
+            # pop it into dev or drop it (with details) instead of the plain
+            # summary. We are on the dev branch at this point (section_tag).
+            local _stash_ref _next_action _stash_json
+            _stash_ref=$(deploy_find_marked_stash)
+            if [[ -n "$_stash_ref" ]]; then
+                _next_action="prompt_stash"
+                _stash_json=$(deploy_stash_details_json "$_stash_ref")
+            else
+                _next_action="display_summary"
+                _stash_json="null"
+            fi
+
             local json=$(cat <<EOF
 {
   "status": "success",
-  "next_action": "display_summary",
+  "next_action": "$_next_action",
+  "stash": $_stash_json,
   "deployment": "production",
   "staging_branch": "$STAGING_BRANCH",
   "production_branch": "$PRODUCTION_BRANCH",
@@ -763,6 +761,8 @@ main() {
   "pipeline_status": "$PIPELINE_STATUS",
   "health_status": "$HEALTH_STATUS",
   "version_status": "$VERSION_STATUS",
+  "smoke_test_status": "$SMOKE_TEST_STATUS",
+  "rollback_performed": $ROLLBACK_PERFORMED,
   "production_url": "${PRODUCTION_URL}",
   "ci_platform": "$CI_PLATFORM",
   "timestamp": "$(date -Iseconds)"

@@ -9,6 +9,9 @@
 #   Interactive (default): Creates file on disk, updates indexes, prints summary
 #   JSON (--json):         Returns filepath + template content as JSON. Does NOT write the file.
 #                          The caller (LLM) writes the completed document directly.
+#   Skeleton (--write-skeleton): Writes the placeholder-substituted skeleton
+#                          directly to filepath; returns {filepath, next_action,
+#                          sections_needing_content} instead of the template body.
 #
 # Automatically detects project docs folder from current directory
 
@@ -25,8 +28,9 @@ NC='\033[0m'
 source "${HOME}/.claude/scripts/common.sh"
 source "${HOME}/.claude/scripts/doc-utils.sh"
 
-# macOS/BSD sed compatibility: sed -i requires '' on macOS
-if [[ "$(uname -s)" == "Darwin" ]]; then
+# macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
+source "${HOME}/.claude/scripts/lib/platform.sh"
+if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else
     sedi() { sed -i "$@"; }
@@ -39,6 +43,7 @@ MODE=""
 TASK_ID=""
 STATUS="active"
 OUTPUT_MODE="interactive"
+WRITE_SKELETON=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -73,6 +78,11 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_MODE="json"
             shift
             ;;
+        --write-skeleton)
+            OUTPUT_MODE="json"
+            WRITE_SKELETON=true
+            shift
+            ;;
         -h|--help)
             cat << EOF
 Usage: $0 --type <TYPE> --description <desc> [--new | --id TASK_ID] [--status STATUS] [--json]
@@ -92,6 +102,7 @@ Document Types:
   TSK    Task (primary)
   FRV    Feature Review (related)
   FND    Findings (related)
+  INV    Investigation Report (related — root-cause investigation output)
   FIX    Fix (related)
   RCA    Root Cause Analysis (related)
   DEP    Deployment (related)
@@ -100,6 +111,7 @@ Document Types:
   AUD    Audit (related)
   IMP    Implementation Guide (related)
   RSC    Research (related)
+  RDM    Research Decision Matrix (related — goal/criteria + adversarial pro/con → weighted matrix)
   LRN    Lessons Learned (related)
   PLN    Plan (related)
   RSP    Response (related)
@@ -157,7 +169,11 @@ if [[ "$OUTPUT_MODE" != "json" ]]; then
 
     # Regenerate documentation BEFORE reading to ensure accuracy
     echo -e "${BLUE}Regenerating documentation for accurate tracking...${NC}"
-    "${HOME}/.claude/scripts/update-docs.sh" --docs-dir "${DOCS_DIR}" 2>&1 | grep -E "✓|⚠️|Error|Found:" || true
+    update_docs_out=$("${HOME}/.claude/scripts/update-docs.sh" --docs-dir "${DOCS_DIR}" 2>&1) && update_docs_rc=0 || update_docs_rc=$?
+    echo "${update_docs_out}" | grep -E "✓|⚠️|Error|Found:" || true
+    if [[ "${update_docs_rc}" -ne 0 ]]; then
+        echo -e "${YELLOW}⚠${NC} update-docs.sh exited with status ${update_docs_rc}"
+    fi
     echo ""
 fi
 
@@ -182,7 +198,7 @@ if [[ -z "${MODE}" ]]; then
 fi
 
 # Validate type
-VALID_TYPES=("INC" "RCA" "TSK" "FND" "FIX" "DEP" "CRV" "RSK" "AUD" "IMP" "RSC" "LRN" "PLN" "RSP" "UPD" "SUM" "SVC" "RUN" "SCR" "REF" "FRV" "REV" "RFA" "PERF" "DEAD" "AUDIT" "NET" "TSP" "TSR" "QST" "DES" "DSN" "ART" "ARC")
+VALID_TYPES=("INC" "RCA" "TSK" "FND" "INV" "FIX" "DEP" "CRV" "RSK" "AUD" "IMP" "RSC" "RDM" "LRN" "PLN" "RSP" "UPD" "SUM" "SVC" "RUN" "SCR" "REF" "FRV" "REV" "RFA" "PERF" "DEAD" "AUDIT" "NET" "TSP" "TSR" "QST" "DES" "DSN" "ART" "ARC")
 if [[ ! " ${VALID_TYPES[@]} " =~ " ${TYPE} " ]]; then
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg t "$TYPE" '{status:"error",message:"Invalid document type",type:$t}'
@@ -203,13 +219,19 @@ if [[ "${STATUS}" != "active" && "${STATUS}" != "completed" ]]; then
     exit 1
 fi
 
-# Validate description
-if [[ ! "${DESCRIPTION}" =~ ^[a-z0-9-]+$ ]]; then
+# Normalize description to lowercase kebab-case (don't error on spaces/caps —
+# just fix it: lowercase, collapse any non-alphanumeric runs to single hyphens,
+# trim leading/trailing hyphens).
+DESCRIPTION=$(printf '%s' "${DESCRIPTION}" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+
+if [[ -z "${DESCRIPTION}" ]]; then
     if [[ "$OUTPUT_MODE" == "json" ]]; then
-        jq -nc '{status:"error",message:"Description must be lowercase kebab-case"}'
+        jq -nc '{status:"error",message:"Description is empty after normalization"}'
         exit 1
     fi
-    echo -e "${RED}Error: Description must be lowercase kebab-case${NC}"
+    echo -e "${RED}Error: Description is empty after normalization${NC}"
     exit 1
 fi
 
@@ -298,7 +320,7 @@ if [[ -f "${TEMPLATE_PATH}" ]]; then
             EXT_BACKEND=$(yaml_get '.task_management.backend // ""' PROJECT.yaml 2>/dev/null)
         fi
         if [[ -z "$EXT_BACKEND" ]]; then
-            if [[ "$(uname -s)" == "Darwin" ]]; then
+            if env_is_work; then
                 EXT_BACKEND="asana"
             else
                 EXT_BACKEND="gitlab"
@@ -385,6 +407,45 @@ fi
 # ============================================================================
 if [[ "$OUTPUT_MODE" == "json" ]]; then
     mkdir -p "${TARGET_DIR}"
+
+    if [[ "${WRITE_SKELETON}" == "true" ]]; then
+        # Write the placeholder-substituted skeleton straight to disk and tell
+        # the caller which sections still need real content, instead of
+        # round-tripping the full template body through the LLM.
+        echo "$TEMPLATE_CONTENT" > "${FILEPATH}"
+
+        # A section "needs content" if the line right after its ## heading is
+        # still an unfilled [bracket placeholder].
+        sections_needing_content=$(awk '
+            /^## / { heading = substr($0, 4) }
+            /^\[.*\]$/ && heading != "" { print heading; heading = "" }
+        ' <<< "$TEMPLATE_CONTENT")
+        sections_json=$(printf '%s\n' "${sections_needing_content}" | jq -R . | jq -s 'map(select(length > 0))')
+
+        jq -nc \
+            --arg status "success" \
+            --arg task_id "$TASK_ID" \
+            --arg filepath "$FILEPATH" \
+            --arg filename "$FILENAME" \
+            --arg type "$TYPE" \
+            --arg description "$DESCRIPTION" \
+            --arg mode "$MODE" \
+            --arg next_action "edit_document" \
+            --argjson sections_needing_content "$sections_json" \
+            '{
+                status: $status,
+                task_id: $task_id,
+                filepath: $filepath,
+                filename: $filename,
+                type: $type,
+                description: $description,
+                mode: $mode,
+                next_action: $next_action,
+                sections_needing_content: $sections_needing_content
+            }'
+        exit 0
+    fi
+
     jq -nc \
         --arg status "success" \
         --arg task_id "$TASK_ID" \
@@ -419,6 +480,7 @@ fi
 # Interactive mode: write file to disk, update indexes
 # ============================================================================
 
+mkdir -p "${TARGET_DIR}"
 echo "$TEMPLATE_CONTENT" > "${FILEPATH}"
 
 # Confirm action
@@ -431,7 +493,11 @@ fi
 # Regenerate documentation to include the newly created document
 echo ""
 echo -e "${BLUE}Updating documentation with new document...${NC}"
-"${HOME}/.claude/scripts/update-docs.sh" --docs-dir "${DOCS_DIR}" 2>&1 | grep -E "✓|⚠️|Error" || true
+update_docs_out=$("${HOME}/.claude/scripts/update-docs.sh" --docs-dir "${DOCS_DIR}" 2>&1) && update_docs_rc=0 || update_docs_rc=$?
+echo "${update_docs_out}" | grep -E "✓|⚠️|Error" || true
+if [[ "${update_docs_rc}" -ne 0 ]]; then
+    echo -e "${YELLOW}⚠${NC} update-docs.sh exited with status ${update_docs_rc}"
+fi
 
 # Success
 echo ""

@@ -78,7 +78,7 @@ GIT_PROJECT_PATH=""
 
 case "$GIT_PLATFORM" in
     gitlab)
-        GIT_TOKEN_FILE="${HOME}/.gitlab-token"
+        GIT_TOKEN_FILE="${HOME}/.secrets/gitlab-token"
         GIT_API_URL="https://${GIT_INSTANCE}/api/v4"
         GIT_PROJECT_PATH=$(echo "$GIT_REPO" | sed 's|/|%2F|g')
         ;;

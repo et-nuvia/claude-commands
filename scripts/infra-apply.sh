@@ -5,13 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # infra-apply.sh - Apply Terraform plan to provision/modify infrastructure
 #
 # Usage:
-#   ~/.claude/scripts/infra-apply.sh [--json|--raw] [--plan-file <path>] [--auto-confirm]
+#   ~/.claude/scripts/infra-apply.sh [--json|--raw] [--plan-file <path>] [--auto-confirm|--auto-confirm-destructive]
 #
 # Flags:
-#   --json         Return structured JSON output (default)
-#   --raw          Return raw output with verbose details
-#   --plan-file    Specify plan file path
-#   --auto-confirm Skip safety confirmation
+#   --json                     Return structured JSON output (default)
+#   --raw                      Return raw output with verbose details
+#   --plan-file                Specify plan file path
+#   --auto-confirm             Skip safety confirmation (non-destructive plans only:
+#                              destroy_count == 0 and workspace != production)
+#   --auto-confirm-destructive Skip safety confirmation even when the plan destroys
+#                              resources or targets the production workspace
 #
 # next_action values:
 #   display_summary    - Apply completed successfully
@@ -31,13 +34,15 @@ map_status_to_action() {
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 
 # Global variables
-OUTPUT_FORMAT="json"
+OUTPUT_MODE="json"
 AUTO_CONFIRM=false
+AUTO_CONFIRM_DESTRUCTIVE=false
 PLAN_FILE=""
 PROJECT_ROOT=""
 ADD_COUNT=0
 CHANGE_COUNT=0
 DESTROY_COUNT=0
+WORKSPACE=""
 APPLY_STATUS=0
 TERRAFORM_OUTPUTS=""
 APPLY_LOG=""
@@ -47,25 +52,25 @@ APPLY_LOG=""
 #------------------------------------------------------------------------------
 
 log_info() {
-    if [[ "$OUTPUT_FORMAT" != "json" ]]; then
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
         echo -e "${BLUE}ℹ${NC} $*" >&2
     fi
 }
 
 log_success() {
-    if [[ "$OUTPUT_FORMAT" != "json" ]]; then
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
         echo -e "${GREEN}✓${NC} $*" >&2
     fi
 }
 
 log_warning() {
-    if [[ "$OUTPUT_FORMAT" != "json" ]]; then
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
         echo -e "${YELLOW}⚠${NC} $*" >&2
     fi
 }
 
 log_error() {
-    if [[ "$OUTPUT_FORMAT" != "json" ]]; then
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
         echo -e "${RED}✗${NC} $*" >&2
     fi
 }
@@ -78,7 +83,7 @@ locate_plan_file() {
     PROJECT_ROOT=$(pwd)
 
     if [[ -z "$PLAN_FILE" ]]; then
-        if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
             local recent_plans=""
             if [[ -d "infrastructure/terraform/plans" ]]; then
                 recent_plans=$(ls -t infrastructure/terraform/plans/*.tfplan 2>/dev/null | head -5 | tr '\n' ',' | sed 's/,$//')
@@ -114,12 +119,17 @@ locate_plan_file() {
 review_plan() {
     cd infrastructure/terraform || exit 1
 
-    local plan_content
-    plan_content=$(terraform show "$PLAN_FILE" 2>&1)
+    # Render the plan once to a temp file rather than holding a potentially
+    # multi-megabyte plan in a shell variable; grep the file for each count.
+    local plan_file
+    plan_file=$(mktemp)
+    trap 'rm -f "$plan_file"' RETURN
+    terraform show "$PLAN_FILE" > "$plan_file" 2>&1 || true
 
-    ADD_COUNT=$(echo "$plan_content" | grep -c "will be created" 2>/dev/null || echo "0")
-    CHANGE_COUNT=$(echo "$plan_content" | grep -c "will be updated" 2>/dev/null || echo "0")
-    DESTROY_COUNT=$(echo "$plan_content" | grep -c "will be destroyed" 2>/dev/null || echo "0")
+    ADD_COUNT=$(grep -c "will be created" "$plan_file" 2>/dev/null || echo "0")
+    CHANGE_COUNT=$(grep -c "will be updated" "$plan_file" 2>/dev/null || echo "0")
+    DESTROY_COUNT=$(grep -c "will be destroyed" "$plan_file" 2>/dev/null || echo "0")
+    WORKSPACE=$(terraform workspace show 2>/dev/null || echo "")
 
     if [[ $DESTROY_COUNT -gt 0 ]]; then
         log_warning "CAUTION: This plan will DESTROY $DESTROY_COUNT resource(s)"
@@ -133,12 +143,26 @@ review_plan() {
 #------------------------------------------------------------------------------
 
 confirm_application() {
+    # A plan that destroys resources, or targets the production workspace, is
+    # destructive: plain --auto-confirm must not silently apply it. Require
+    # the explicit --auto-confirm-destructive flag for that case.
+    local is_destructive=false
+    if [[ $DESTROY_COUNT -gt 0 ]] || [[ "$WORKSPACE" == "production" ]]; then
+        is_destructive=true
+    fi
+
+    if [[ "$is_destructive" == "true" ]] && [[ "$AUTO_CONFIRM" == "true" ]] && [[ "$AUTO_CONFIRM_DESTRUCTIVE" != "true" ]]; then
+        exit_with_json "needs_confirm" "Destructive infrastructure change requires explicit confirmation" \
+            "Re-run with --auto-confirm-destructive to proceed, or omit --auto-confirm to confirm interactively" \
+            "\"plan_file\": \"$PLAN_FILE\", \"add_count\": $ADD_COUNT, \"change_count\": $CHANGE_COUNT, \"destroy_count\": $DESTROY_COUNT, \"workspace\": \"$WORKSPACE\""
+    fi
+
     if [[ "$AUTO_CONFIRM" == "true" ]]; then
         log_warning "Auto-confirm enabled - skipping safety check"
         return
     fi
 
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
         exit_with_json "needs_confirm" "Infrastructure changes require confirmation" "" \
             "\"plan_file\": \"$PLAN_FILE\", \"add_count\": $ADD_COUNT, \"change_count\": $CHANGE_COUNT, \"destroy_count\": $DESTROY_COUNT"
     else
@@ -197,10 +221,11 @@ document_application() {
 main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --json) OUTPUT_FORMAT="json"; shift ;;
-            --raw) OUTPUT_FORMAT="raw"; shift ;;
+            --json) OUTPUT_MODE="json"; shift ;;
+            --raw) OUTPUT_MODE="raw"; shift ;;
             --plan-file) PLAN_FILE="$2"; shift 2 ;;
             --auto-confirm) AUTO_CONFIRM=true; shift ;;
+            --auto-confirm-destructive) AUTO_CONFIRM=true; AUTO_CONFIRM_DESTRUCTIVE=true; shift ;;
             *)
                 if [[ -z "$PLAN_FILE" ]]; then PLAN_FILE="$1"; fi
                 shift
@@ -214,7 +239,7 @@ main() {
     apply_plan
     document_application
 
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
         exit_with_json "success" "Infrastructure changes applied successfully" "" \
             "\"plan_file\": \"$PLAN_FILE\", \"add_count\": $ADD_COUNT, \"change_count\": $CHANGE_COUNT, \"destroy_count\": $DESTROY_COUNT, \"apply_log\": \"$APPLY_LOG\""
     else

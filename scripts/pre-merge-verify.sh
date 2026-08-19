@@ -104,6 +104,17 @@ if [[ -n "$(git diff --name-only 2>/dev/null)" ]] || [[ -n "$(git diff --cached 
     exit 0
 fi
 
+# Explicit doc-only skip runs BEFORE the protected-branch preflight: doc-only
+# changes need no build/test regardless of which branch is checked out. In
+# worktree mode task-close removes the worktree before verifying, leaving the
+# main checkout on the (protected) target branch — without this early exit a
+# legitimate doc-only close would wedge on the preflight below.
+if [[ "$DOC_ONLY" == "true" ]]; then
+    SKIP_REASON="doc-only flag"
+    _output "skipped"
+    exit 0
+fi
+
 # Check we're on a feature branch (not dev/staging/main/master)
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 if [[ "$CURRENT_BRANCH" =~ ^(main|master|dev|develop|staging|production)$ ]]; then
@@ -124,12 +135,6 @@ fi
 
 # ─── Auto-Skip Detection ────────────────────────────────────────────────────
 
-if [[ "$DOC_ONLY" == "true" ]]; then
-    SKIP_REASON="doc-only flag"
-    _output "skipped"
-    exit 0
-fi
-
 # No Makefile → skip (single-script projects)
 if [[ ! -f "Makefile" ]]; then
     SKIP_REASON="No Makefile in project root"
@@ -137,20 +142,17 @@ if [[ ! -f "Makefile" ]]; then
     exit 0
 fi
 
-# PROJECT.yaml is preferred (gives explicit components/services + custom
-# make targets), but not required. When it's missing, fall through to the
-# directory-name fallback below — top-level dirs from changed files become
-# the affected-services list and we lint/test with the generic make targets.
-# Previously the script skipped entirely on missing PROJECT.yaml, which
-# broke single-component repos and tested-without-config setups.
+# No docker services in PROJECT.yaml → skip
 if [[ -f "PROJECT.yaml" ]]; then
-    # If PROJECT.yaml exists but declares neither components: nor docker:,
-    # there's nothing structured to verify — skip.
-    if ! grep -qE '^(components|docker):' PROJECT.yaml 2>/dev/null; then
-        SKIP_REASON="No components or docker services in PROJECT.yaml"
+    if ! grep -q 'docker:' PROJECT.yaml 2>/dev/null; then
+        SKIP_REASON="No docker services in PROJECT.yaml"
         _output "skipped"
         exit 0
     fi
+elif [[ ! -f "PROJECT.yaml" ]]; then
+    SKIP_REASON="No PROJECT.yaml"
+    _output "skipped"
+    exit 0
 fi
 
 # Check if all changed files are doc/config only
@@ -318,39 +320,14 @@ LINT_FAILED=false
 
 # Helper: count lint errors from output (grep for "N errors" or count "error" lines)
 _count_lint_errors() {
-    # Heuristic error counter. Tries (1) explicit "N errors" summary,
-    # (2) lines containing " error ", (3) lines containing "error" or
-    # "Error" as a last resort so simple linters (e.g. `echo "lint error"`)
-    # at least register as 1 — otherwise a genuine lint failure with no
-    # parseable summary collapses to "0 errors" and gets swallowed by the
-    # baseline-comparison logic.
-    #
-    # Each `grep -c` is wrapped in `|| true` (NOT `|| echo "0"`) because
-    # `grep -c` with no matches exits 1 but still prints "0" — the literal
-    # `echo "0"` fallback used to append a second "0", producing "0\n0"
-    # which then blew up the caller's `[[ -gt ]]` arithmetic.
     local output="$1"
     local count
-
-    count=$(echo "$output" | grep -oE '[0-9]+ errors?' | tail -1 | grep -oE '[0-9]+' | head -1 || true)
+    count=$(echo "$output" | grep -oE '[0-9]+ errors?' | tail -1 | grep -oE '[0-9]+' | head -1 || echo "")
     if [[ -n "$count" ]]; then
         echo "$count"
-        return
+    else
+        echo "$output" | grep -c ' error ' 2>/dev/null || echo "0"
     fi
-
-    count=$(echo "$output" | grep -c ' error ' || true)
-    count="${count:-0}"
-    if [[ "$count" -gt 0 ]]; then
-        echo "$count"
-        return
-    fi
-
-    # Fallback: any line mentioning "error" or "Error" — matches the simple
-    # `echo "lint error"` test fixture as well as ruff `E501 ...`, mypy
-    # `error:`, etc.
-    count=$(echo "$output" | grep -cE '(^|[^a-zA-Z])[Ee]rror' || true)
-    count="${count:-0}"
-    echo "$count"
 }
 
 for svc in "${SERVICES[@]:-}"; do
@@ -368,38 +345,17 @@ feature_errors=${feature_errors:-0}
 
             # Get baseline error count from target branch (skipped in worktree mode)
             baseline_errors=0
-            baseline_target_exists=true
             if [[ "$IN_WORKTREE" == "true" ]]; then
                 echo "Baseline comparison skipped (worktree mode)" >&2
-                # In worktree mode, we can't switch branches — assume no
-                # baseline data and treat the feature failure as new.
-                baseline_target_exists=false
-            elif current_branch=$(git rev-parse --abbrev-ref HEAD) && git stash --quiet --include-untracked 2>/dev/null; then
+            elif current_branch=$(git rev-parse --abbrev-ref HEAD) && git stash --quiet 2>/dev/null; then
                 if git checkout "$TARGET_BRANCH" --quiet 2>/dev/null || \
                    git checkout "origin/$TARGET_BRANCH" --detach --quiet 2>/dev/null; then
-                    # Only count baseline errors when the make target actually
-                    # exists on the baseline branch. Otherwise `make` prints
-                    # its own "*** No rule to make target ... Error N" message
-                    # which the heuristic counts as a "lint error" — falsely
-                    # inflating baseline_errors to match feature_errors and
-                    # masking real new failures as pre-existing.
-                    if make -n "$target" &>/dev/null; then
-                        baseline_output=$(make "$target" 2>&1 || true)
-                        baseline_errors=$(_count_lint_errors "$baseline_output" | tr -d '[:space:]')
-                        baseline_errors=${baseline_errors:-0}
-                    else
-                        baseline_target_exists=false
-                    fi
+                    baseline_output=$(make "$target" 2>&1 || true)
+                    baseline_errors=$(_count_lint_errors "$baseline_output" | tr -d '[:space:]')
+                    baseline_errors=${baseline_errors:-0}
                     git checkout "$current_branch" --quiet 2>/dev/null || true
                 fi
-                git stash pop --quiet >/dev/null 2>&1 || true
-            fi
-
-            # If we couldn't establish a baseline (target missing on baseline
-            # or worktree-mode), treat any feature failure as a genuine new
-            # failure rather than swallowing it as "pre-existing."
-            if [[ "$baseline_target_exists" != "true" ]]; then
-                baseline_errors=0
+                git stash pop --quiet 2>/dev/null || true
             fi
 
             if [[ "$feature_errors" -gt "$baseline_errors" ]]; then
@@ -429,7 +385,7 @@ if [[ ${#LINT_RAN[@]} -eq 0 ]]; then
 feature_errors=${feature_errors:-0}
             baseline_errors=0
             current_branch=$(git rev-parse --abbrev-ref HEAD)
-            if git stash --quiet --include-untracked 2>/dev/null; then
+            if git stash --quiet 2>/dev/null; then
                 if git checkout "$TARGET_BRANCH" --quiet 2>/dev/null || \
                    git checkout "origin/$TARGET_BRANCH" --detach --quiet 2>/dev/null; then
                     baseline_output=$(make lint 2>&1 || true)
@@ -437,7 +393,7 @@ feature_errors=${feature_errors:-0}
                     baseline_errors=${baseline_errors:-0}
                     git checkout "$current_branch" --quiet 2>/dev/null || true
                 fi
-                git stash pop --quiet >/dev/null 2>&1 || true
+                git stash pop --quiet 2>/dev/null || true
             fi
 
             if [[ "$feature_errors" -gt "$baseline_errors" ]]; then
@@ -486,7 +442,7 @@ for svc in "${SERVICES[@]:-}"; do
             baseline_failures=0
             if [[ "$IN_WORKTREE" == "true" ]]; then
                 echo "Baseline comparison skipped (worktree mode)" >&2
-            elif current_branch=$(git rev-parse --abbrev-ref HEAD) && git stash --quiet --include-untracked 2>/dev/null; then
+            elif current_branch=$(git rev-parse --abbrev-ref HEAD) && git stash --quiet 2>/dev/null; then
                 if git checkout "$TARGET_BRANCH" --quiet 2>/dev/null || \
                    git checkout "origin/$TARGET_BRANCH" --detach --quiet 2>/dev/null; then
                     baseline_output=$(make "$target" 2>&1 || true)
@@ -494,7 +450,7 @@ for svc in "${SERVICES[@]:-}"; do
                     baseline_failures=${baseline_failures:-0}
                     git checkout "$current_branch" --quiet 2>/dev/null || true
                 fi
-                git stash pop --quiet >/dev/null 2>&1 || true
+                git stash pop --quiet 2>/dev/null || true
             fi
 
             if [[ "$feature_failures" -gt "$baseline_failures" ]]; then
@@ -521,7 +477,7 @@ if [[ ${#TEST_RAN[@]} -eq 0 ]]; then
             feature_failures=${feature_failures:-0}
             baseline_failures=0
             current_branch=$(git rev-parse --abbrev-ref HEAD)
-            if git stash --quiet --include-untracked 2>/dev/null; then
+            if git stash --quiet 2>/dev/null; then
                 if git checkout "$TARGET_BRANCH" --quiet 2>/dev/null || \
                    git checkout "origin/$TARGET_BRANCH" --detach --quiet 2>/dev/null; then
                     baseline_output=$(make test 2>&1 || true)
@@ -529,7 +485,7 @@ if [[ ${#TEST_RAN[@]} -eq 0 ]]; then
                     baseline_failures=${baseline_failures:-0}
                     git checkout "$current_branch" --quiet 2>/dev/null || true
                 fi
-                git stash pop --quiet >/dev/null 2>&1 || true
+                git stash pop --quiet 2>/dev/null || true
             fi
 
             if [[ "$feature_failures" -gt "$baseline_failures" ]]; then

@@ -7,7 +7,7 @@
 #   ~/.claude/scripts/task-audit.sh [task_id] [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -33,6 +33,7 @@ RE_VERIFY=false  # Set by --re-verify: include previous AUD doc path + prior sco
 
 # Source utilities
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/platform.sh"
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/doc-utils.sh"
@@ -50,6 +51,15 @@ TESTS_PASSING=false
 TEST_FILE_COUNT=0
 COVERAGE_PERCENT="unknown"
 MIN_COVERAGE=80
+# Explicit classification of HOW the coverage figure was arrived at, so an
+# unverified figure can never be scored as if it were a passing one:
+#   met        — measured and >= MIN_COVERAGE
+#   below      — measured and <  MIN_COVERAGE (a real gate failure)
+#   unknown    — coverage ran but no percentage could be parsed, or the command failed
+#   not_run    — coverage skipped because tests are failing
+#   not_configured — no coverage command in PROJECT.yaml while a gate is set
+#   disabled   — MIN_COVERAGE is 0, i.e. PROJECT.yaml deliberately disables the gate
+COVERAGE_STATUS="unknown"
 TEST_RESULTS_JSON=""
 
 # Counters
@@ -132,7 +142,7 @@ section_load() {
 
     # Get branches
     CURRENT_BRANCH=${CURRENT_BRANCH:-$(git branch --show-current)}
-    DEFAULT_BRANCH=$(get_default_branch)
+    DEFAULT_BRANCH=$(get_default_branch_interactive)
 
     log ""
     log "${BLUE}Auditing: $TASK_TITLE${NC}"
@@ -301,10 +311,37 @@ section_test() {
                 TESTS_PASSING=false
             fi
 
+            # Coverage gate for the Makefile path. The test runner's JSON only
+            # carries coverage_percent when the invoked target actually measures
+            # it — many projects put coverage behind a SEPARATE target (e.g.
+            # test-backend-cov), so `make test` legitimately reports none. That
+            # case must be classified as UNVERIFIED, not silently left looking
+            # like a pass: prior to this, COVERAGE_PERCENT stayed "unknown", no
+            # log line was emitted, nothing was deducted, and the audit could
+            # still report "excellent" with the gate never having run.
             local cov
             cov=$(echo "$totals" | jq -r '.coverage_percent // "unknown"')
-            if [[ "$cov" != "null" ]] && [[ "$cov" != "unknown" ]]; then
+            if [[ "$cov" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
                 COVERAGE_PERCENT="$cov"
+                if [[ ${MIN_COVERAGE} -eq 0 ]]; then
+                    COVERAGE_STATUS="disabled"
+                # Integer-compare on the truncated value; a fractional figure
+                # like 87.42 must not blow up [[ -ge ]].
+                elif [[ ${cov%%.*} -ge ${MIN_COVERAGE} ]]; then
+                    COVERAGE_STATUS="met"
+                    log "${GREEN}✓ Coverage ${COVERAGE_PERCENT}% meets the ${MIN_COVERAGE}% minimum${NC}"
+                else
+                    COVERAGE_STATUS="below"
+                    log "${RED}❌ Coverage ${COVERAGE_PERCENT}% is BELOW the ${MIN_COVERAGE}% minimum${NC}"
+                fi
+            elif [[ ${MIN_COVERAGE} -eq 0 ]]; then
+                COVERAGE_STATUS="disabled"
+            elif [[ "$TESTS_PASSING" != "true" ]]; then
+                COVERAGE_STATUS="not_run"
+            else
+                COVERAGE_STATUS="unknown"
+                log "${YELLOW}⚠️  The test target reported no coverage figure, so the ${MIN_COVERAGE}% gate is UNVERIFIED (not passed)${NC}"
+                log "   Coverage is often a separate target — run it directly (e.g. \`make test-backend-cov\`) to confirm the gate."
             fi
 
             log "Tests total: $(echo "$totals" | jq '.tests_total')"
@@ -367,7 +404,23 @@ section_test() {
             TESTS_PASSING=false
         fi
 
-        if [[ -n "$coverage_command" ]] && [[ "$TESTS_PASSING" == "true" ]]; then
+        # Coverage gate. EVERY path below sets COVERAGE_STATUS explicitly — an
+        # unparsed or failed coverage run must never leave the audit looking as
+        # though the threshold was checked and met. Previously all three failure
+        # paths fell through to COVERAGE_PERCENT="unknown" with no log line and
+        # no score impact, so an audit could report "excellent" while the
+        # coverage gate had not actually run.
+        if [[ ${MIN_COVERAGE} -eq 0 ]]; then
+            # PROJECT.yaml documents min_coverage: 0 as "gate disabled".
+            COVERAGE_STATUS="disabled"
+            log "Coverage gate disabled (min_coverage: 0)"
+        elif [[ "$TESTS_PASSING" != "true" ]]; then
+            COVERAGE_STATUS="not_run"
+            log "${YELLOW}⚠️  Coverage not measured — tests are failing${NC}"
+        elif [[ -z "$coverage_command" ]]; then
+            COVERAGE_STATUS="not_configured"
+            log "${YELLOW}⚠️  No coverage command configured, but min_coverage is ${MIN_COVERAGE}% — the gate cannot be verified${NC}"
+        else
             print_section "Gathering coverage data"
 
             if eval "$coverage_command" &>/tmp/coverage-output.txt; then
@@ -375,17 +428,33 @@ section_test() {
                     cat /tmp/coverage-output.txt >&2
                 fi
 
-                COVERAGE_PERCENT=$(grep -oP '\d+(?=%)' /tmp/coverage-output.txt | head -1 || echo "unknown")
+                COVERAGE_PERCENT=$(grep_op '\d+(?=%)' /tmp/coverage-output.txt | head -1 || echo "unknown")
 
-                if [[ "$COVERAGE_PERCENT" != "unknown" ]]; then
+                if [[ "$COVERAGE_PERCENT" =~ ^[0-9]+$ ]]; then
                     log ""
                     log "Overall project coverage: ${COVERAGE_PERCENT}%"
 
                     if [[ ${COVERAGE_PERCENT} -ge ${MIN_COVERAGE} ]]; then
+                        COVERAGE_STATUS="met"
                         log "${GREEN}✓ Coverage meets minimum requirement (${MIN_COVERAGE}%)${NC}"
                     else
-                        log "${YELLOW}⚠️  Coverage below minimum requirement (${MIN_COVERAGE}%)${NC}"
+                        COVERAGE_STATUS="below"
+                        log "${RED}❌ Coverage ${COVERAGE_PERCENT}% is BELOW the minimum requirement (${MIN_COVERAGE}%)${NC}"
                     fi
+                else
+                    # The command succeeded but no percentage could be parsed —
+                    # a reporter format change looks exactly like this, and it
+                    # must be loud rather than silent.
+                    COVERAGE_PERCENT="unknown"
+                    COVERAGE_STATUS="unknown"
+                    log "${RED}❌ Coverage command ran but no percentage could be parsed from its output${NC}"
+                    log "   Inspect /tmp/coverage-output.txt — the reporter format may have changed."
+                fi
+            else
+                COVERAGE_STATUS="unknown"
+                log "${RED}❌ Coverage command failed: ${coverage_command}${NC}"
+                if [[ "$OUTPUT_MODE" == "raw" ]]; then
+                    tail -20 /tmp/coverage-output.txt >&2
                 fi
             fi
         fi
@@ -402,14 +471,42 @@ section_test() {
         grep -v -E '/models/[a-z_]+\.py$' | \
         grep -v -E '/schemas/[a-z_]+\.py$' | \
         grep -v -E '/router\.py$' | \
-        grep -v -E '\.d\.ts$' || echo "")
+        grep -v -E '\.d\.ts$' | \
+        grep -v -iE '(^|/)types\.tsx?$' | \
+        grep -v -E '/(error|loading|not-found|layout)\.tsx?$' | \
+        grep -v -E '/route\.ts$' | \
+        grep -v -E '\.(module|entity|dto)\.tsx?$' | \
+        grep -v -E '/dto/[^/]+\.tsx?$' | \
+        grep -v -E '(^|/)(main|data-source|migrate-[a-z]+)\.tsx?$' | \
+        grep -v -E '/scripts/[^/]+\.(ts|tsx|js|mjs|cjs)$' | \
+        grep -v -E '\.(sh|bash)$' || echo "")
     # Exclusions rationale:
     #   alembic/migrations — DDL scripts, tested via migration runner not unit tests
     #   models/enums.py, models/__init__.py — pure data definitions, tested indirectly
     #   models/*.py — ORM models, tested indirectly via CRUD/API tests
     #   schemas/*.py — Pydantic models, tested indirectly via API endpoint tests
     #   router.py — route registration, tested indirectly via endpoint tests
-    #   .d.ts — TypeScript type declarations, no runtime code
+    #   .d.ts / types.ts(x) — TypeScript type declarations, no runtime code
+    #   Next.js error/loading/not-found/layout.tsx — framework boilerplate, tested via e2e
+    #   App Router route.ts — route handler/registration, tested via API/e2e (its logic
+    #     belongs in extracted, unit-tested helpers)
+    #   *.module.ts — NestJS DI module wiring/registration (TS analog of router.py);
+    #     pure wiring by convention (logic lives in services), validated by a
+    #     module-compile spec + real e2e boot, not a unit test
+    #   *.entity.ts — TypeORM ORM entities (TS analog of models/*.py), tested
+    #     indirectly via repository/integration tests
+    #   *.dto.ts and /dto/*.ts — class-validator request/response DTOs (TS analog of
+    #     schemas/*.py / Pydantic), validated indirectly via controller/endpoint specs
+    #   main.ts — app bootstrap entrypoint; framework boilerplate, validated via e2e boot
+    #   data-source.ts — TypeORM DataSource config; pure config/registration
+    #   migrate-*.ts — migration runner/bootstrap helpers, paired with /migrations/ (already excluded)
+    #   /scripts/*.{ts,js,mjs,cjs} — ops/seed/maintenance scripts, outside the unit
+    #     runner (TS analog of the *.sh exclusion); validated via e2e / manual run
+    #   *.sh/*.bash — shell scripts, outside the JS/Python unit runner; validated via bats/e2e
+    # NOTE: deliberately NOT excluded — service/helper/util modules with real logic
+    #   that happen to lack a *direct* sibling spec (e.g. covered only transitively).
+    #   Flagging those is correct: the reviewer should confirm the transitive coverage
+    #   or add a direct spec, rather than the script silently assuming they're fine.
 
     if [[ -n "$source_files_changed" ]]; then
         local uncovered_files=""
@@ -438,11 +535,18 @@ section_test() {
                     fi
                 fi
 
-                # Stage B: Content-based grep fallback
+                # Stage B: Content-based grep fallback. Match on the import-style
+                # path suffix (last two segments, extension stripped) rather than
+                # the bare basename: ESM/TS imports omit the extension
+                # (`@/app/projects/new/actions`), so a bare `actions.ts` grep would
+                # miss them, while a bare `actions` grep would over-match. The
+                # two-segment suffix (`new/actions`) is both precise and
+                # extension-agnostic.
                 if [[ "$has_test" == "false" ]] && [[ -n "$test_file_index" ]]; then
-                    local src_basename
-                    src_basename=$(basename "$src_file")
-                    if echo "$test_file_index" | tr '\n' '\0' | xargs -0 grep -lq "$src_basename" 2>/dev/null; then
+                    local src_noext src_suffix
+                    src_noext="${src_file%.*}"
+                    src_suffix=$(printf '%s' "$src_noext" | awk -F/ '{ if (NF>=2) print $(NF-1)"/"$NF; else print $NF }')
+                    if echo "$test_file_index" | tr '\n' '\0' | xargs -0 grep -lqF "$src_suffix" 2>/dev/null; then
                         has_test=true
                     fi
                 fi
@@ -498,6 +602,8 @@ ${src_file}"
             "\"tests_passing\": $TESTS_PASSING," \
             "\"test_file_count\": $TEST_FILE_COUNT," \
             "\"coverage_percent\": \"$COVERAGE_PERCENT\"," \
+            "\"coverage_status\": \"$COVERAGE_STATUS\"," \
+            "\"min_coverage\": $MIN_COVERAGE," \
             "${test_results_field}" \
             "\"covered_files\": $COVERED_COUNT," \
             "\"uncovered_files\": $UNCOVERED_COUNT," \
@@ -606,13 +712,26 @@ section_remaining() {
         log "  Using PLN document for completion: $(basename "$pln_doc")"
 
         local pln_done pln_pending pln_total
-        # Count both "- [x]" list items and "#### Task N: [x]" heading items
-        pln_done=$(grep -cE '^\s*- \[x\]|^#{1,6}\s.*\[x\]' "$pln_doc" 2>/dev/null || echo "0")
-        pln_pending=$(grep -cE '^\s*- \[ \]|^#{1,6}\s.*\[ \]' "$pln_doc" 2>/dev/null || echo "0")
-        pln_done=${pln_done//[^0-9]/}
-        pln_pending=${pln_pending//[^0-9]/}
-        pln_done=${pln_done:-0}
-        pln_pending=${pln_pending:-0}
+        # Completion authority is the SUBTASK checkboxes only — the
+        # "#### Task N.M: [ ] ..." headings that plan-progress.sh tracks. Generic
+        # "- [ ]" list items elsewhere in the PLN (Resources Required, Success
+        # Metrics, Approval, Tools/Access) are scaffolding, NOT work items, and
+        # must not count against completion.
+        # `grep -c` already prints 0 on no match; use `|| true` (NOT `|| echo 0`,
+        # which would append a second 0 → "00" → invalid JSON) to swallow grep's
+        # no-match exit status under `set -e`, then sanitize to digits.
+        pln_done=$(grep -cE '^#{1,6}[[:space:]].*Task[^][]*\[x\]' "$pln_doc" 2>/dev/null || true)
+        pln_pending=$(grep -cE '^#{1,6}[[:space:]].*Task[^][]*\[ \]' "$pln_doc" 2>/dev/null || true)
+        pln_done=${pln_done//[^0-9]/}; pln_done=${pln_done:-0}
+        pln_pending=${pln_pending//[^0-9]/}; pln_pending=${pln_pending:-0}
+        # Fallback: a PLN with no "#### Task" headings (older flat format) — count
+        # top-level list checkboxes instead so completion is still measured.
+        if [[ $((pln_done + pln_pending)) -eq 0 ]]; then
+            pln_done=$(grep -cE '^[[:space:]]*- \[x\]' "$pln_doc" 2>/dev/null || true)
+            pln_pending=$(grep -cE '^[[:space:]]*- \[ \]' "$pln_doc" 2>/dev/null || true)
+            pln_done=${pln_done//[^0-9]/}; pln_done=${pln_done:-0}
+            pln_pending=${pln_pending//[^0-9]/}; pln_pending=${pln_pending:-0}
+        fi
         pln_total=$((pln_done + pln_pending))
 
         log ""
@@ -693,11 +812,20 @@ section_remaining() {
     # Incomplete patterns
     print_section "Checking for incomplete work patterns"
 
-    local incomplete_patterns=$(git diff "${DEFAULT_BRANCH}...${CURRENT_BRANCH}" 2>/dev/null | \
-        grep -E '^\+.*(^|\s|#|//|/\*)(WIP|TEMPORARY|PLACEHOLDER|NOT IMPLEMENTED)(\s|$|:|;|\*/)' || echo "")
-    # Also catch "throw new Error" as incomplete work marker
-    local throw_patterns=$(git diff "${DEFAULT_BRANCH}...${CURRENT_BRANCH}" 2>/dev/null | \
-        grep -E '^\+.*throw new Error' || echo "")
+    # Scan added lines for incomplete-work markers, EXCLUDING test/spec files —
+    # tests legitimately contain `throw new Error(...)` (assertions, mocks) and
+    # marker words in fixture data, which are not incomplete production work.
+    local pattern_diff
+    pattern_diff=$(git diff "${DEFAULT_BRANCH}...${CURRENT_BRANCH}" -- \
+        ':(exclude)*test*' ':(exclude)*spec*' ':(exclude)*__tests__*' 2>/dev/null || echo "")
+    local incomplete_patterns
+    incomplete_patterns=$(printf '%s\n' "$pattern_diff" | \
+        grep -E '^\+.*(^|\s|#|//|/\*)(WIP|TEMPORARY|PLACEHOLDER|NOT IMPLEMENTED|TODO|FIXME|XXX)(\s|$|:|;|\*/)' || echo "")
+    # A `throw` is only an incomplete-work signal when its message says so —
+    # plain `throw new Error("msg")` is normal error handling, not a stub.
+    local throw_patterns
+    throw_patterns=$(printf '%s\n' "$pattern_diff" | \
+        grep -iE '^\+.*throw new Error\([^)]*(not implemented|unimplemented|TODO|FIXME|stub)' || echo "")
     if [[ -n "$throw_patterns" ]]; then
         if [[ -n "$incomplete_patterns" ]]; then
             incomplete_patterns="${incomplete_patterns}
@@ -706,6 +834,8 @@ ${throw_patterns}"
             incomplete_patterns="$throw_patterns"
         fi
     fi
+    # Drop blank lines that the `|| echo ""` fallbacks can introduce.
+    incomplete_patterns=$(printf '%s\n' "$incomplete_patterns" | grep -v '^$' || echo "")
 
     if [[ -n "$incomplete_patterns" ]]; then
         PATTERN_COUNT=$(echo "$incomplete_patterns" | wc -l | tr -d ' ')
@@ -781,6 +911,8 @@ section_verify() {
   "commit_log": $(echo "$commit_log" | jq -Rs 'split("\n") | map(select(length > 0))'),
   "tests_passing": $TESTS_PASSING,
   "coverage_percent": "$COVERAGE_PERCENT",
+  "coverage_status": "$COVERAGE_STATUS",
+  "min_coverage": $MIN_COVERAGE,
   "scoring_rubric": {
     "plan_completeness": {"max": 30, "description": "Each planned task implemented. 100%=30, 90%+=25, 80%+=20, <80%=FAIL"},
     "code_quality": {"max": 25, "description": "Conventions, DRY, error handling, codebase consistency"},
@@ -826,6 +958,28 @@ calculate_scores() {
         TEST_SCORE=$((TEST_SCORE - uncovered_percent / 2))
     fi
 
+    # Coverage gate. This block previously did not exist: calculate_scores never
+    # read COVERAGE_PERCENT, so a measured-and-BELOW-threshold figure cost
+    # nothing and an unmeasured one cost nothing either. A verdict of
+    # "excellent" was therefore reachable with the coverage gate unverified.
+    case "$COVERAGE_STATUS" in
+        below)
+            # A measured miss against the project's own floor is a gate failure.
+            TEST_SCORE=$((TEST_SCORE - 25))
+            ;;
+        unknown|not_configured)
+            # We do not know. That is not the same as passing, and it must not
+            # score like passing — but it is a weaker signal than a known miss.
+            TEST_SCORE=$((TEST_SCORE - 15))
+            ;;
+        not_run)
+            # Tests are failing, which already costs 50 above. Do not double-
+            # penalise the same root cause; the failing-test deduction dominates.
+            ;;
+        met|disabled)
+            ;;
+    esac
+
     # Completion score
     if [[ $TODO_COUNT -gt 0 ]]; then
         COMPLETION_SCORE=$((COMPLETION_SCORE - TODO_COUNT * 5))
@@ -858,6 +1012,31 @@ generate_recommendations() {
     if [[ "$TESTS_PASSING" != "true" ]]; then
         recommendations_array=$(echo "$recommendations_array" | jq '. + ["Fix failing tests before proceeding"]')
     fi
+
+    # Coverage gate recommendations. An unverified gate needs a louder
+    # recommendation than a merely-imperfect one, because the default reading of
+    # a missing number is "probably fine".
+    case "$COVERAGE_STATUS" in
+        below)
+            recommendations_array=$(echo "$recommendations_array" | jq \
+                --arg m "Coverage ${COVERAGE_PERCENT}% is below the required ${MIN_COVERAGE}% — raise it or justify the gap before merging" \
+                '. + [$m]')
+            ;;
+        unknown)
+            recommendations_array=$(echo "$recommendations_array" | jq \
+                --arg m "Coverage could NOT be measured (gate unverified, not passed) — run the project's coverage target directly and inspect /tmp/coverage-output.txt; the reporter format may have changed" \
+                '. + [$m]')
+            ;;
+        not_configured)
+            recommendations_array=$(echo "$recommendations_array" | jq \
+                --arg m "min_coverage is ${MIN_COVERAGE}% but no coverage command is configured in PROJECT.yaml — the gate can never be enforced as written" \
+                '. + [$m]')
+            ;;
+        not_run)
+            recommendations_array=$(echo "$recommendations_array" | jq \
+                '. + ["Coverage was not measured because tests are failing — re-audit once they pass"]')
+            ;;
+    esac
 
     if [[ $UNCOVERED_COUNT -gt 0 ]]; then
         recommendations_array=$(echo "$recommendations_array" | jq ". + [\"Add tests for $UNCOVERED_COUNT uncovered file(s)\"]")
@@ -960,6 +1139,25 @@ main() {
                 audit_status="fair"
             fi
 
+            # A headline verdict must never be stronger than the evidence behind
+            # it. "excellent" reads as "ship it", and a caller who sees it does
+            # not go looking for coverage_percent: unknown three fields further
+            # down — which is exactly what happened on task A748A9, where the
+            # script reported excellent/97 with the coverage gate unverified.
+            case "$COVERAGE_STATUS" in
+                below)
+                    # A measured miss against the project's own floor is a gate
+                    # failure; it cannot be better than "fair".
+                    [[ "$audit_status" == "excellent" || "$audit_status" == "good" ]] && audit_status="fair"
+                    ;;
+                unknown|not_configured|not_run)
+                    # Unverified is not passing. Cap at "good" so the caller is
+                    # steered to look, without overstating a branch that may
+                    # well be fine.
+                    [[ "$audit_status" == "excellent" ]] && audit_status="good"
+                    ;;
+            esac
+
             # Get AUD document filepath + template via new-doc.sh --json (no file written)
             local aud_filepath=""
             local aud_template=""
@@ -1001,7 +1199,9 @@ main() {
 
             local todo_json="[]"
             if [[ -n "$TODO_LIST" ]]; then
-                todo_json=$(echo "$TODO_LIST" | jq -R . | jq -s .)
+                # Cap the emitted list so a change touching hundreds of TODO lines
+                # cannot blow up the JSON payload; TODO_COUNT still reflects the total.
+                todo_json=$(echo "$TODO_LIST" | head -50 | jq -R . | jq -s .)
             fi
 
             local pattern_json="[]"
@@ -1029,6 +1229,8 @@ main() {
     "tests_passing": $TESTS_PASSING,
     "test_file_count": $TEST_FILE_COUNT,
     "coverage_percent": "$COVERAGE_PERCENT",
+    "coverage_status": "$COVERAGE_STATUS",
+    "min_coverage": $MIN_COVERAGE,
     "covered_files": $COVERED_COUNT,
     "uncovered_files": $UNCOVERED_COUNT,
     "total_source_files": $TOTAL_SOURCE,

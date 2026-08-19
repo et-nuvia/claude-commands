@@ -32,7 +32,7 @@ map_status_to_action() {
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 
 # Output format (default: json)
-OUTPUT_FORMAT="json"
+OUTPUT_MODE="json"
 
 # Sections to run (default: all)
 RUN_CONFIG=false
@@ -44,8 +44,8 @@ RUN_ALL=false
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --json) OUTPUT_FORMAT="json"; shift ;;
-    --raw) OUTPUT_FORMAT="raw"; shift ;;
+    --json) OUTPUT_MODE="json"; shift ;;
+    --raw) OUTPUT_MODE="raw"; shift ;;
     --full) RUN_ALL=true; shift ;;
     --config) RUN_CONFIG=true; shift ;;
     --link) RUN_LINK=true; shift ;;
@@ -87,13 +87,13 @@ INFRA_LOCAL=""
 verify_config() {
   local section="config"
 
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo "=== Verifying PROJECT.yaml Configuration ==="
   fi
 
   # Check if PROJECT.yaml exists
   if [[ ! -f "PROJECT.yaml" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "error" "PROJECT.yaml not found" \
         "This command requires PROJECT.yaml with infrastructure configuration"
     else
@@ -107,7 +107,7 @@ verify_config() {
   INFRA_ENABLED=$(yaml_get '.infrastructure.enabled')
 
   if [[ "$INFRA_ENABLED" != "true" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "blocked" "Infrastructure not enabled for this project" \
         "To enable: Edit PROJECT.yaml and set infrastructure.enabled: true"
     else
@@ -128,7 +128,7 @@ verify_config() {
   LINK_TARGET=$(yaml_get '.infrastructure.link.target')
   LINK_SOURCE=$(yaml_get '.infrastructure.link.source')
 
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo "Infrastructure Configuration:"
     echo "  Type: $REPO_TYPE"
     echo "  URL/Path: $REPO_URL"
@@ -140,7 +140,7 @@ verify_config() {
 
   # Validate required fields
   if [[ -z "$REPO_TYPE" ]] || [[ "$REPO_TYPE" == "null" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "error" "infrastructure.repo.type not set" \
         "Must be 'git' or 'local'"
     else
@@ -150,7 +150,7 @@ verify_config() {
   fi
 
   if [[ -z "$REPO_URL" ]] || [[ "$REPO_URL" == "null" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "error" "infrastructure.repo.url not set" \
         "Set the URL or path to infrastructure repository"
     else
@@ -160,7 +160,7 @@ verify_config() {
   fi
 
   if [[ -z "$LINK_TARGET" ]] || [[ "$LINK_TARGET" == "null" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "error" "infrastructure.link.target not set" \
         "Set the symlink path (e.g., 'infrastructure')"
     else
@@ -169,7 +169,7 @@ verify_config() {
     exit 1
   fi
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]] && [[ "$RUN_CONFIG" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]] && [[ "$RUN_CONFIG" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
     SECTION="$section" exit_with_json "success" "Configuration valid" "" \
       "\"repo_type\": \"$REPO_TYPE\", \"repo_url\": \"$REPO_URL\", \"link_target\": \"$LINK_TARGET\""
   fi
@@ -179,7 +179,7 @@ verify_config() {
 verify_link() {
   local section="link"
 
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo "=== Verifying Infrastructure Link ==="
   fi
 
@@ -191,7 +191,7 @@ verify_link() {
 
     # Check if infrastructure repo exists locally
     if [[ ! -d "$INFRA_LOCAL" ]]; then
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "intervention" "Infrastructure repository not cloned" \
           "Clone to $INFRA_LOCAL? Repository: $REPO_URL"
       else
@@ -205,7 +205,7 @@ verify_link() {
 
     # Verify it's a git repo
     if [[ ! -d "$INFRA_LOCAL/.git" ]]; then
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "error" "Not a git repository" \
           "Path exists but is not a git repository: $INFRA_LOCAL"
       else
@@ -217,7 +217,7 @@ verify_link() {
     # Check remote URL matches
     REMOTE_URL=$(cd "$INFRA_LOCAL" && git config --get remote.origin.url)
     if [[ "$REMOTE_URL" != "$REPO_URL" ]]; then
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "error" "Remote URL mismatch" \
           "Expected: $REPO_URL, Actual: $REMOTE_URL"
       else
@@ -231,7 +231,7 @@ verify_link() {
     # Check branch if specified
     CURRENT_BRANCH=$(cd "$INFRA_LOCAL" && git branch --show-current)
     if [[ -n "$REPO_BRANCH" ]] && [[ "$REPO_BRANCH" != "null" ]] && [[ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]]; then
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "intervention" "Branch mismatch" \
           "Expected: $REPO_BRANCH, Current: $CURRENT_BRANCH. Switch branch?"
       else
@@ -246,14 +246,14 @@ verify_link() {
 
     # Check for uncommitted changes
     if ! (cd "$INFRA_LOCAL" && git diff-index --quiet HEAD --); then
-      if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+      if [[ "$OUTPUT_MODE" == "raw" ]]; then
         echo "⚠️  Infrastructure repository has uncommitted changes:"
         cd "$INFRA_LOCAL" && git status --short
         cd - > /dev/null
       fi
     fi
 
-    if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+    if [[ "$OUTPUT_MODE" == "raw" ]]; then
       echo "✓ Infrastructure repository found: $INFRA_LOCAL"
       echo "  Remote: $REMOTE_URL"
       echo "  Branch: $CURRENT_BRANCH"
@@ -268,7 +268,7 @@ verify_link() {
 
   elif [[ "$REPO_TYPE" == "local" ]]; then
     if [[ ! -d "$REPO_URL" ]]; then
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "error" "Local infrastructure path not found" \
           "Path: $REPO_URL"
       else
@@ -277,7 +277,7 @@ verify_link() {
       exit 1
     fi
 
-    if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+    if [[ "$OUTPUT_MODE" == "raw" ]]; then
       echo "✓ Local infrastructure found: $REPO_URL"
     fi
 
@@ -291,7 +291,7 @@ verify_link() {
 
   # Verify source path exists
   if [[ ! -d "$EXPECTED_TARGET" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "error" "Source path not found" \
         "Path: $EXPECTED_TARGET"
     else
@@ -309,11 +309,11 @@ verify_link() {
     EXPECTED_ABS=$(cd -P "$EXPECTED_TARGET" 2>/dev/null && pwd)
 
     if [[ "$CURRENT_ABS" == "$EXPECTED_ABS" ]]; then
-      if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+      if [[ "$OUTPUT_MODE" == "raw" ]]; then
         echo "✓ Symlink is correct: $LINK_TARGET -> $EXPECTED_TARGET"
       fi
     else
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "intervention" "Symlink points to wrong location" \
           "Current: $CURRENT_ABS, Expected: $EXPECTED_ABS. Fix symlink?"
       else
@@ -327,7 +327,7 @@ verify_link() {
     fi
 
   elif [[ -e "$LINK_TARGET" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "intervention" "'$LINK_TARGET' exists but is NOT a symlink" \
         "Type: $(file -b "$LINK_TARGET"). Remove and create symlink?"
     else
@@ -339,7 +339,7 @@ verify_link() {
     exit 0
 
   else
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       SECTION="$section" exit_with_json "intervention" "Symlink does not exist" \
         "Create: $LINK_TARGET -> $EXPECTED_TARGET?"
     else
@@ -349,7 +349,7 @@ verify_link() {
     exit 0
   fi
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]] && [[ "$RUN_LINK" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]] && [[ "$RUN_LINK" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
     SECTION="$section" exit_with_json "success" "Symlink verified" "" \
       "\"link_target\": \"$LINK_TARGET\", \"expected_target\": \"$EXPECTED_TARGET\""
   fi
@@ -359,18 +359,18 @@ verify_link() {
 verify_tools() {
   local section="tools"
 
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo "=== Verifying Infrastructure Tools ==="
   fi
 
   CHECK_TOOLS=$(yaml_get '.infrastructure.validation.check_tools')
 
   if [[ "$CHECK_TOOLS" != "true" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+    if [[ "$OUTPUT_MODE" == "raw" ]]; then
       echo "Tool validation disabled in PROJECT.yaml"
     fi
 
-    if [[ "$OUTPUT_FORMAT" == "json" ]] && [[ "$RUN_TOOLS" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]] && [[ "$RUN_TOOLS" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
       SECTION="$section" exit_with_json "success" "Tool validation disabled" "" \
         "\"check_tools\": false"
     fi
@@ -386,7 +386,7 @@ verify_tools() {
     if command -v terraform &> /dev/null; then
       TF_VERSION=$(terraform version -json | jq -r '.terraform_version')
 
-      if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+      if [[ "$OUTPUT_MODE" == "raw" ]]; then
         echo "✓ Terraform installed: $TF_VERSION"
       fi
 
@@ -395,14 +395,14 @@ verify_tools() {
       if [[ -n "$TF_EXPECTED" ]] && [[ "$TF_EXPECTED" != "null" ]] && [[ "$TF_EXPECTED" != "latest" ]]; then
         if [[ "$TF_VERSION" != "$TF_EXPECTED" ]]; then
           tools_warnings="${tools_warnings}Terraform version mismatch: expected $TF_EXPECTED, got $TF_VERSION. "
-          if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+          if [[ "$OUTPUT_MODE" == "raw" ]]; then
             echo "⚠️  Version mismatch: expected $TF_EXPECTED, got $TF_VERSION"
           fi
         fi
       fi
     else
       tools_status="error"
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "error" "Terraform not found in PATH" \
           "Install: https://developer.hashicorp.com/terraform/downloads"
       else
@@ -418,7 +418,7 @@ verify_tools() {
     if command -v ansible &> /dev/null; then
       ANSIBLE_VERSION=$(ansible --version | head -1 | sed -n 's/.*ansible \[\(core [^]]*\)\].*/\1/p')
 
-      if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+      if [[ "$OUTPUT_MODE" == "raw" ]]; then
         echo "✓ Ansible installed: $ANSIBLE_VERSION"
       fi
 
@@ -427,14 +427,14 @@ verify_tools() {
       if [[ -n "$ANSIBLE_EXPECTED" ]] && [[ "$ANSIBLE_EXPECTED" != "null" ]] && [[ "$ANSIBLE_EXPECTED" != "latest" ]]; then
         if [[ "$ANSIBLE_VERSION" != *"$ANSIBLE_EXPECTED"* ]]; then
           tools_warnings="${tools_warnings}Ansible version mismatch: expected $ANSIBLE_EXPECTED. "
-          if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+          if [[ "$OUTPUT_MODE" == "raw" ]]; then
             echo "⚠️  Version mismatch: expected $ANSIBLE_EXPECTED"
           fi
         fi
       fi
     else
       tools_status="error"
-      if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
         SECTION="$section" exit_with_json "error" "Ansible not found in PATH" \
           "Install: pip install ansible"
       else
@@ -444,7 +444,7 @@ verify_tools() {
     fi
   fi
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]] && [[ "$RUN_TOOLS" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]] && [[ "$RUN_TOOLS" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
     if [[ -n "$tools_warnings" ]]; then
       SECTION="$section" exit_with_json "success" "Tools installed with warnings" "" \
         "\"warnings\": \"$tools_warnings\""
@@ -458,7 +458,7 @@ verify_tools() {
 validate_infrastructure() {
   local section="validate"
 
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo "=== Validating Infrastructure Files ==="
   fi
 
@@ -467,25 +467,25 @@ validate_infrastructure() {
 
   if [[ -d "$LINK_TARGET/terraform" ]]; then
     tf_files=$(find "$LINK_TARGET/terraform" -name "*.tf" | wc -l)
-    if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+    if [[ "$OUTPUT_MODE" == "raw" ]]; then
       echo "  Terraform: $tf_files .tf files"
     fi
   fi
 
   if [[ -d "$LINK_TARGET/ansible" ]]; then
     ansible_files=$(find "$LINK_TARGET/ansible" -name "*.yml" -o -name "*.yaml" | wc -l)
-    if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+    if [[ "$OUTPUT_MODE" == "raw" ]]; then
       echo "  Ansible: $ansible_files playbooks"
     fi
   fi
 
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo ""
     echo "Infrastructure structure:"
     ls -lah "$LINK_TARGET" | head -20
   fi
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]] && [[ "$RUN_VALIDATE" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]] && [[ "$RUN_VALIDATE" == "true" ]] && [[ "$RUN_ALL" == "false" ]]; then
     SECTION="$section" exit_with_json "success" "Infrastructure validated" "" \
       "\"terraform_files\": $tf_files, \"ansible_files\": $ansible_files"
   fi
@@ -510,7 +510,7 @@ main() {
   fi
 
   # Final success output
-  if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
     SECTION="complete" exit_with_json "success" "Infrastructure verification complete" "" \
       "\"repo_type\": \"$REPO_TYPE\", \"link_target\": \"$LINK_TARGET\", \"expected_target\": \"$EXPECTED_TARGET\""
   else

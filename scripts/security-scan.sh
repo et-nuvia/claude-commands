@@ -9,7 +9,7 @@ set -euo pipefail
 #   security-scan.sh [--json|--raw]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose text output for debugging
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,20 +81,24 @@ fi
 # ─────────────────────────────────────────
 # Secrets Detection
 # ─────────────────────────────────────────
-log_header "Secrets Detection (Gitleaks)"
+log_header "Secrets Detection (Gitleaks — full repo history)"
 
+# Scan the ENTIRE git history, not just the working tree. The audit's job is to
+# surface any secret ever committed (even if later removed from HEAD). Per-PR
+# review (/review-pr) deliberately scopes gitleaks to the PR's commit range; the
+# whole-history sweep lives here.
 if command -v gitleaks &> /dev/null; then
-  if gitleaks detect --source "${PROJECT_ROOT}" --no-git 2>/dev/null; then
-    log_success "No secrets detected in codebase"
+  if gitleaks detect --source "${PROJECT_ROOT}" 2>/dev/null; then
+    log_success "No secrets detected in repo history"
   else
-    log_error "Potential secrets found in codebase"
+    log_error "Potential secrets found in repo history"
   fi
 elif command -v docker &> /dev/null; then
   if docker run --rm -v "${PROJECT_ROOT}":/repo zricethezav/gitleaks:latest detect \
-      --source /repo --no-git 2>/dev/null; then
-    log_success "No secrets detected in codebase"
+      --source /repo 2>/dev/null; then
+    log_success "No secrets detected in repo history"
   else
-    log_error "Potential secrets found in codebase"
+    log_error "Potential secrets found in repo history"
   fi
 else
   log_warning "Gitleaks not available, skipping secrets scan"

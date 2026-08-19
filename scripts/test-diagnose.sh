@@ -10,7 +10,7 @@
 # with structured output parsing. Categorizes failures for targeted fixes.
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output
 #
 # Workflow:
@@ -35,6 +35,7 @@ GREP_FILTER=""
 FRAMEWORK=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/platform.sh"  # grep_op (portable grep -oP)
 
 #------------------------------------------------------------------------------
 # Make delegation - use Makefile when available
@@ -200,9 +201,9 @@ run_pytest() {
         summary_line=$(echo "$raw_output" | tail -5 | grep -E '[0-9]+ (passed|failed|error)' || true)
     fi
 
-    passed=$(echo "$summary_line" | grep -oP '\d+(?= passed)' || echo "0")
-    failed=$(echo "$summary_line" | grep -oP '\d+(?= failed)' || echo "0")
-    errors=$(echo "$summary_line" | grep -oP '\d+(?= error)' || echo "0")
+    passed=$(echo "$summary_line" | grep_op '\d+(?= passed)' || echo "0")
+    failed=$(echo "$summary_line" | grep_op '\d+(?= failed)' || echo "0")
+    errors=$(echo "$summary_line" | grep_op '\d+(?= error)' || echo "0")
     total=$((passed + failed + errors))
 
     # Extract failure details

@@ -80,7 +80,7 @@ section_validate() {
   has_staged=$(git diff --cached --name-only 2>/dev/null)
   if [[ -n "$has_unstaged" || -n "$has_staged" ]]; then
     local changed_files
-    changed_files=$(printf '%s\n' $has_unstaged $has_staged | sort -u)
+    changed_files=$(printf '%s\n' "$has_unstaged" "$has_staged" | grep -v '^$' | sort -u)
     local file_count
     file_count=$(echo "$changed_files" | wc -l | tr -d ' ')
     if [[ "$OUTPUT_MODE" == "json" ]]; then
@@ -108,7 +108,7 @@ section_validate() {
   fi
 
   # Check for protected branches
-  if [[ "$branch" =~ ^(main|master|develop|production|staging)$ ]]; then
+  if is_protected_branch "$branch"; then
     errors+=("Cannot rebase protected branch '$branch' onto another branch")
   fi
 

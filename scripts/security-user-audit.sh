@@ -12,7 +12,7 @@ set -euo pipefail
 #   ~/.claude/scripts/security-user-audit.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -35,6 +35,7 @@ SECTION="full"      # full, detect, discover, analyze, report
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/yaml.sh"
 source "${SCRIPT_DIR}/lib/output-framework.sh"
+source "${SCRIPT_DIR}/lib/platform.sh"
 
 # Database connection
 DB_TYPE=""
@@ -545,7 +546,7 @@ fi)
 
 ## Next Audit
 
-Schedule next application user audit: $(date -d "+30 days" +%Y-%m-%d)
+Schedule next application user audit: $(portable_date_relative 30)
 
 EOF
 

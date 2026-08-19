@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_RUN_TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_RUN_TESTS_DIR}/lib/platform.sh"  # grep_op (portable grep -oP)
+
 # run-tests.sh - Universal test runner for multiple frameworks
 #
 # Usage:
@@ -146,7 +149,7 @@ run_bats_tests() {
     fi
 
     # Parse BATS output
-    local total_tests=$(echo "$output" | grep -oP '^\d+\.\.\d+' | tail -1 | grep -oP '\d+$')
+    local total_tests=$(echo "$output" | grep_op '^\d+\.\.\d+' | tail -1 | grep_op '\d+$')
     local passed=$(echo "$output" | grep -c '^ok' || echo 0)
     local failed=$(echo "$output" | grep -c '^not ok' || echo 0)
     local skipped=$(echo "$output" | grep -c '# skip' || echo 0)
@@ -155,7 +158,7 @@ run_bats_tests() {
     # Look for tests with no assertion keywords
     local fake_tests=$(grep -r "^@test" . --include="*.bats" | while read -r line; do
         local test_file=$(echo "$line" | cut -d: -f1)
-        local test_name=$(echo "$line" | grep -oP '@test "\K[^"]+')
+        local test_name=$(echo "$line" | grep_op '@test "\K[^"]+')
 
         # Extract test body (simplified - would need better parsing)
         if ! grep -A 10 "@test \"$test_name\"" "$test_file" | grep -qE '\[\[|\[|assert|expect|run'; then

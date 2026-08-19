@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -uo pipefail
 # understand-auto-update.sh — cron-driven auto-update orchestrator.
 #
 # Walks the understand-watchlist, decides per-repo whether the graph has
@@ -257,8 +258,8 @@ evaluate_repo() {
         return 0
     fi
     if ! scanned_epoch=$(parse_iso8601_to_epoch "$scanned_at"); then
-        jq -n --argjson gv "$graph_schema_version" \
-            '{action:"rescan", reason:"missing scanned_at",
+        jq -n --argjson gv "$graph_schema_version" --arg sa "$scanned_at" \
+            '{action:"rescan", reason:("unparseable scanned_at: " + $sa),
               churn_metrics:{age_days:null, graph_schema_version:$gv}}'
         return 0
     fi

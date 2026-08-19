@@ -9,7 +9,7 @@ set -euo pipefail
 #   ~/.claude/scripts/task-continue.sh [--json|--raw] [--full|--section] [options] [--task-id <id>]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
@@ -22,7 +22,9 @@ set -euo pipefail
 #
 # Plan Progress Flags (passed through to plan-progress.sh):
 #   --completed-tasks "1.1,1.2"        Mark plan tasks as complete [x]
-#   --actual-time "1.1=45m,1.2=1h"     Set actual time for completed tasks
+#   --actual-time "15m"                Set actual time; applied to every task in
+#                                       --completed-tasks. Keyed form
+#                                       ("1.1=45m,1.2=1h") still works for split values.
 #   --lessons "text"                    Lessons learned for this session
 #   --progress-note "text"             Progress summary for plan entry
 #   --task-label "Task 1.2"            Label for the progress entry heading
@@ -58,7 +60,9 @@ TASK_TITLE=""
 CURRENT_BRANCH=""
 DEFAULT_BRANCH=""
 PLAN_DOC=""
-PLAN_UPDATED=false
+# Optional caller-supplied stage list (--files "a,b" or newline-separated). Empty =
+# stage every changed path in the tree (the historical behaviour).
+COMMIT_FILES=""
 TASK_TYPE=""
 ASANA_GID=""
 
@@ -69,9 +73,22 @@ COVERAGE_PERCENT="0"
 TASK_COVERAGE_PERCENT="0"
 MIN_COVERAGE="80"
 
+# Targeted-test scope (mid-task validation runs the NARROWEST relevant tests;
+# the full suite + coverage is deferred to /task-audit). Callers may pass these
+# explicitly; otherwise the command is auto-derived from the changed files.
+TEST_TARGET=""   # explicit make target, e.g. test-backend-unit
+TEST_FILES=""    # forwarded as FILES="..."
+TEST_FILTER=""   # forwarded as FILTER="..."
+
 # Progress state
 CHANGED_FILES=""
 COMMIT_HASH=""
+
+# Execution mode for --full: single | all | phase
+# - single: do one next work item (default, legacy behavior)
+# - all:    loop through every remaining item across all phases
+# - phase:  loop through the remaining items in the current incomplete phase
+EXECUTION_MODE="single"
 
 # Plan progress flags (passed to plan-progress.sh)
 COMPLETED_TASKS=""
@@ -159,7 +176,7 @@ section_verify_branch() {
     print_header "Verifying Branch State"
 
     # Get default branch
-    DEFAULT_BRANCH=$(get_default_branch)
+    DEFAULT_BRANCH=$(get_default_branch_interactive)
 
     # Verify current branch
     local current_git_branch=$(git branch --show-current)
@@ -184,9 +201,14 @@ section_verify_branch() {
     local uncommitted_count
     uncommitted_count=$(git status --porcelain | wc -l | tr -d ' ')
 
-    # Pull latest changes
-    git fetch origin >/dev/null 2>&1 || true
-    git pull origin "$CURRENT_BRANCH" >/dev/null 2>&1 || true
+    # Pull latest changes — only for the full context-load path. run-tests/
+    # gather/commit call this section too but re-syncing with origin on every
+    # one of those calls is unnecessary network I/O and can silently rewrite
+    # the branch mid-loop; full load (start of a session) is the right place.
+    if [[ "$SECTION" == "full" ]] || [[ "$SECTION" == "verify-branch" ]]; then
+        git fetch origin >/dev/null 2>&1 || true
+        git pull origin "$CURRENT_BRANCH" >/dev/null 2>&1 || true
+    fi
 
     # Doc-index regeneration intentionally skipped here (also in section_commit).
     # `update-docs.sh` is O(docs) bash regex and takes minutes on large repos;
@@ -208,7 +230,10 @@ section_find_plan() {
     all_docs=$(find_by_id "$TASK_ID")
 
     # Find the plan document (PLN type)
-    PLAN_DOC=$(echo "$all_docs" | grep "\-PLN\-" | head -1 || true)
+    # newest_doc, not `head -1`: find_by_id emits paths in directory order, so a task
+    # with two PLNs would load the OLDEST one — and --commit marks completions in
+    # whatever this resolves to. See newest_doc in doc-utils.sh.
+    PLAN_DOC=$(echo "$all_docs" | grep -- "-PLN-" | newest_doc || true)
 
     if [[ -z "$PLAN_DOC" ]]; then
         log "${YELLOW}⚠${NC} No plan document found for task ID $TASK_ID"
@@ -218,28 +243,122 @@ section_find_plan() {
 }
 
 # Section 4: Run tests and validate coverage
+# Build a TARGETED test command for mid-task validation.
+#
+# Philosophy: /task-continue runs the NARROWEST relevant tests between work items
+# so the edit→test→commit loop stays fast. The FULL suite (all services, e2e) and
+# coverage validation are deferred to /task-audit at the end of the task. Running
+# the whole suite after every subtask is the slowness this deliberately avoids.
+#
+# Priority:
+#   1. Explicit --test-target (+ optional --test-files / --test-filter) from caller
+#   2. Auto-derived per-service unit target(s) for the dir(s) that changed
+#   3. Generic project-wide unit target (test-unit) if present
+#   4. (caller falls back to the project/full command only as a last resort)
+#
+# Echoes the command on stdout, or empty string if nothing targeted could be derived.
+build_targeted_test_command() {
+    local available="$1"   # comma-separated make target names
+
+    local files_filter=""
+    [[ -n "$TEST_FILES" ]]  && files_filter+=" FILES=\"${TEST_FILES}\""
+    [[ -n "$TEST_FILTER" ]] && files_filter+=" FILTER=\"${TEST_FILTER}\""
+
+    # 1. Explicit caller-provided target
+    if [[ -n "$TEST_TARGET" ]]; then
+        echo "make ${TEST_TARGET} FORMAT=json${files_filter}"
+        return 0
+    fi
+
+    [[ -f "Makefile" ]] || { echo ""; return 1; }
+
+    # 2. Auto-derive from the top-level service dirs that have changed source files
+    local changed_dirs
+    changed_dirs=$( { git diff --name-only HEAD 2>/dev/null; \
+                      git diff --name-only --cached 2>/dev/null; \
+                      git ls-files --others --exclude-standard 2>/dev/null; } \
+        | grep -E '\.(js|jsx|ts|tsx|py|go|rb|php|rs|java|c|cpp|h|cs)$' 2>/dev/null \
+        | cut -d/ -f1 | sort -u || echo "" )
+
+    local targets=""
+    local dir
+    for dir in $changed_dirs; do
+        if [[ ",$available," == *",test-${dir}-unit,"* ]]; then
+            targets+=" test-${dir}-unit"
+        elif [[ ",$available," == *",test-${dir},"* ]]; then
+            targets+=" test-${dir}"
+        fi
+    done
+    targets=$(echo "$targets" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    if [[ -n "$targets" ]]; then
+        echo "make ${targets} FORMAT=json${files_filter}"
+        return 0
+    fi
+
+    # 3. Generic project-wide unit target
+    if [[ ",$available," == *",test-unit,"* ]]; then
+        echo "make test-unit FORMAT=json${files_filter}"
+        return 0
+    fi
+
+    echo ""
+    return 1
+}
+
 section_run_tests() {
-    print_header "Running Tests"
+    print_header "Running Tests (targeted)"
 
     local min_coverage="80"
+    local project_command=""
 
-    # Load config from PROJECT.yaml if available
+    # Load config from PROJECT.yaml if available. NOTE: testing.command is the
+    # FULL-suite command — it is only a last-resort fallback here, NOT the primary
+    # mid-task command. /task-audit is what runs testing.command + coverage.
     if [[ -f "PROJECT.yaml" ]]; then
-        local yaml_command
-        yaml_command=$(yaml_get '.testing.command' PROJECT.yaml)
+        project_command=$(yaml_get '.testing.command' PROJECT.yaml)
         min_coverage=$(yaml_get_default '.testing.min_coverage' '80' PROJECT.yaml)
         [[ "$min_coverage" == "null" ]] && min_coverage="80"
+    fi
 
-        # If PROJECT.yaml specifies a test command, use it
-        if [[ -n "$yaml_command" ]] && [[ "$yaml_command" != "null" ]]; then
-            TEST_COMMAND="$yaml_command"
+    # Discover available Make test targets (also surfaced to the LLM)
+    local available_targets=""
+    if [[ -f "Makefile" ]]; then
+        available_targets=$(grep -oE '^test[-a-zA-Z]*:' Makefile | sed 's/://' | tr '\n' ',' | sed 's/,$//' || echo "")
+    fi
+
+    # 1-3. Prefer a targeted command scoped to what changed
+    local test_scope="targeted"
+    TEST_COMMAND=$(build_targeted_test_command "$available_targets" || true)
+
+    # If no targeted scope was derived, decide between skipping (nothing source-level
+    # changed) and falling back to a broader command (source changed but unmapped).
+    if [[ -z "$TEST_COMMAND" ]] || [[ "$TEST_COMMAND" == "null" ]]; then
+        if [[ -z "$TEST_TARGET" ]]; then
+            local changed_source_count
+            changed_source_count=$( { git diff --name-only HEAD 2>/dev/null; \
+                                      git diff --name-only --cached 2>/dev/null; \
+                                      git ls-files --others --exclude-standard 2>/dev/null; } \
+                | grep -cE '\.(js|jsx|ts|tsx|py|go|rb|php|rs|java|c|cpp|h|cs)$' 2>/dev/null || true )
+            changed_source_count=${changed_source_count:-0}
+            if [[ "$changed_source_count" -eq 0 ]]; then
+                log "${BLUE}ℹ${NC} No source files changed — skipping tests (docs/config only)"
+                TEST_PASSED=true
+                if [[ "$SECTION" == "run-tests" ]]; then
+                    exit_with_json "success" "No source changes - tests skipped" "" \
+                        "\"tests_skipped\":true,\"reason\":\"no_source_changes\",\"test_scope\":\"skipped\""
+                fi
+                return
+            fi
         fi
     fi
 
-    # Default: use Makefile test targets (FORMAT=json auto-detected for AI callers)
-    # Never run test tools directly — always go through Make targets
+    # 4. Last-resort fallback (may be the full suite) when source changed but unmapped
     if [[ -z "$TEST_COMMAND" ]] || [[ "$TEST_COMMAND" == "null" ]]; then
-        if [[ -f "Makefile" ]] && grep -q "^test:" Makefile; then
+        test_scope="fallback"
+        if [[ -n "$project_command" ]] && [[ "$project_command" != "null" ]]; then
+            TEST_COMMAND="$project_command"
+        elif [[ -f "Makefile" ]] && grep -q "^test:" Makefile; then
             TEST_COMMAND="make test"
         elif [[ -f "package.json" ]]; then
             TEST_COMMAND="npm test"
@@ -259,14 +378,13 @@ section_run_tests() {
             fi
             return
         fi
+        log "${YELLOW}ℹ${NC} No targeted scope derived — falling back to broader command"
     fi
 
-    log "${BLUE}ℹ${NC} Using test command: $TEST_COMMAND"
-
-    # Discover available Make test targets for the LLM
-    local available_targets=""
-    if [[ -f "Makefile" ]]; then
-        available_targets=$(grep -oE '^test[-a-zA-Z]*:' Makefile | sed 's/://' | tr '\n' ',' | sed 's/,$//' || echo "")
+    if [[ "$test_scope" == "targeted" ]]; then
+        log "${BLUE}ℹ${NC} Targeted test command: $TEST_COMMAND"
+    else
+        log "${BLUE}ℹ${NC} Using test command: $TEST_COMMAND"
     fi
 
     # Run tests and capture output
@@ -323,6 +441,7 @@ print(json.dumps(out))" 2>/dev/null || echo "{}")
   "section": "run-tests",
   "message": "Tests failed - ${passed} passed, ${failed} failed",
   "test_command": "$TEST_COMMAND",
+  "test_scope": "$test_scope",
   "available_targets": "$available_targets",
   "passed": $passed,
   "failed": $failed,
@@ -331,9 +450,9 @@ print(json.dumps(out))" 2>/dev/null || echo "{}")
   "services": $services_json,
   "next_steps": [
     "Read failures array to identify what broke",
-    "Use narrowest make target to re-run: e.g. make test-backend",
+    "Re-run just the failing file/test: task-continue.sh --json --run-tests --test-target <target> --test-files \"<file>\" --task-id $INPUT_ARG",
     "Fix the failing tests",
-    "Re-run: task-continue.sh --json --run-tests --task-id $INPUT_ARG"
+    "Full suite + coverage run later via /task-audit — do NOT run it here"
   ],
   "timestamp": "$(date -Iseconds)"
 }
@@ -361,11 +480,12 @@ EOF
   "section": "run-tests",
   "message": "Tests failed - fix required before committing",
   "test_command": "$TEST_COMMAND",
+  "test_scope": "$test_scope",
   "available_targets": "$available_targets",
   "test_output": $output_escaped,
   "next_steps": [
     "Fix the failing tests",
-    "Re-run: task-continue.sh --json --run-tests --task-id $INPUT_ARG"
+    "Re-run just the failing scope: task-continue.sh --json --run-tests --test-target <target> --task-id $INPUT_ARG"
   ],
   "timestamp": "$(date -Iseconds)"
 }
@@ -375,37 +495,15 @@ EOF
         fi
     fi
 
-    # Validate coverage if configured
-    local coverage_command=""
-    if [[ -f "PROJECT.yaml" ]]; then
-        coverage_command=$(yaml_get '.testing.coverage_command' PROJECT.yaml)
-    fi
-
-    if [[ -n "$coverage_command" ]] && [[ "$coverage_command" != "null" ]]; then
-        log "${BLUE}ℹ${NC} Checking test coverage..."
-
-        if eval "$coverage_command" > /tmp/coverage.txt 2>&1; then
-            COVERAGE_PERCENT=$(grep -oE '[0-9]+%' /tmp/coverage.txt | head -1 | sed 's/%//' || echo "0")
-            log "${BLUE}ℹ${NC} Coverage: ${COVERAGE_PERCENT}%"
-
-            if [[ "${COVERAGE_PERCENT}" -lt "${min_coverage}" ]]; then
-                exit_with_json "intervention_needed" \
-                    "Coverage ${COVERAGE_PERCENT}% is below minimum ${min_coverage}%" \
-                    "Add more tests to increase coverage" \
-                    "\"coverage_percent\":${COVERAGE_PERCENT},\"min_coverage\":${min_coverage}"
-            fi
-
-            log "${GREEN}✓${NC} Coverage meets minimum (${COVERAGE_PERCENT}% >= ${min_coverage}%)"
-        else
-            log "${YELLOW}⚠${NC} Coverage check failed (continuing anyway)"
-        fi
-    else
-        log "${BLUE}ℹ${NC} No coverage command configured - skipping"
-    fi
+    # Coverage validation is intentionally NOT run here. min_coverage is governed by
+    # PROJECT.yaml (validated by the project-config schema) and enforced by /task-audit,
+    # which runs the full suite + coverage_command at end of task. Running coverage after
+    # every subtask is exactly the slowness this targeted path avoids.
+    log "${BLUE}ℹ${NC} Coverage deferred to /task-audit (full-suite validation)"
 
     if [[ "$SECTION" == "run-tests" ]]; then
-        exit_with_json "success" "Tests passed" "" \
-            "\"tests_passing\":true,\"coverage_percent\":${COVERAGE_PERCENT},\"test_command\":\"$TEST_COMMAND\",\"available_targets\":\"$available_targets\""
+        exit_with_json "success" "Targeted tests passed" "" \
+            "\"tests_passing\":true,\"test_scope\":\"${test_scope}\",\"test_command\":\"$TEST_COMMAND\",\"available_targets\":\"$available_targets\",\"coverage_note\":\"deferred to /task-audit\""
     fi
 }
 
@@ -467,7 +565,9 @@ check_tdd_compliance() {
     local tdd_req=""
     if [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
         local plan_info
-        plan_info=$("${SCRIPT_DIR}/plan-progress.sh" --json --file "$PLAN_DOC" 2>/dev/null || echo "null")
+        # plan-progress.sh renders TOON for AI callers (CLAUDECODE set); convert to
+        # JSON so the jq parsing below works regardless of the emitted format.
+        plan_info=$("${SCRIPT_DIR}/plan-progress.sh" --json --file "$PLAN_DOC" 2>/dev/null | python3 "${SCRIPT_DIR}/lib/toon2json.py" 2>/dev/null || echo "null")
 
         if [[ -n "$COMPLETED_TASKS" ]]; then
             # Check TDD requirement of the tasks we just completed.
@@ -552,12 +652,34 @@ section_commit() {
             # Split on comma and add each as separate --mark-complete
             IFS=',' read -ra tasks <<< "$COMPLETED_TASKS"
             for task in "${tasks[@]}"; do
-                progress_args+=("--mark-complete" "$(echo "$task" | xargs)")
+                progress_args+=("--mark-complete" "$(echo "$task" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')")
             done
         fi
 
         if [[ -n "$ACTUAL_TIME" ]]; then
-            progress_args+=("--actual-time" "$ACTUAL_TIME")
+            # plan-progress.sh expects keyed pairs ("1.1=15m,1.2=30m"). The /task-continue
+            # contract accepts a bare value like "15m" — translate by attaching it to each
+            # task listed in --completed-tasks. Already-keyed values pass through unchanged.
+            local actual_time_arg="$ACTUAL_TIME"
+            if [[ "$ACTUAL_TIME" != *"="* ]]; then
+                if [[ -n "$COMPLETED_TASKS" ]]; then
+                    local _at_keyed=""
+                    IFS=',' read -ra _at_tasks <<< "$COMPLETED_TASKS"
+                    for _at_task in "${_at_tasks[@]}"; do
+                        _at_task=$(echo "$_at_task" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                        [[ -z "$_at_task" ]] && continue
+                        if [[ -z "$_at_keyed" ]]; then
+                            _at_keyed="${_at_task}=${ACTUAL_TIME}"
+                        else
+                            _at_keyed="${_at_keyed},${_at_task}=${ACTUAL_TIME}"
+                        fi
+                    done
+                    [[ -n "$_at_keyed" ]] && actual_time_arg="$_at_keyed"
+                else
+                    log "${YELLOW}⚠${NC} --actual-time given without --completed-tasks; PLN won't be updated"
+                fi
+            fi
+            progress_args+=("--actual-time" "$actual_time_arg")
         fi
 
         if [[ -n "$PROGRESS_NOTE" ]]; then
@@ -588,42 +710,86 @@ section_commit() {
             progress_args+=("--patterns" "$PATTERNS")
         fi
 
-        local pp_rc=0
-        "${SCRIPT_DIR}/plan-progress.sh" "${progress_args[@]}" >/dev/null 2>&1 || pp_rc=$?
-        if [[ $pp_rc -eq 0 ]]; then
-            PLAN_UPDATED=true
-            log "${GREEN}✓${NC} Plan updated"
-        else
-            # Don't abort — plan-progress.sh failing is usually benign (nothing
-            # to advance, old format, etc.) and commits should still proceed.
-            # But track the actual result so the output JSON doesn't falsely
-            # claim plan_updated:true.
+        # Do NOT silence this call. When it fails, the completed item never
+        # gets marked in the PLN, so the next loop iteration re-loads the SAME
+        # next_items[0] and re-does or re-verifies finished work. Failing loudly
+        # here is what halts the loop instead of letting it spin.
+        local plan_update_output plan_update_rc=0
+        plan_update_output=$("${SCRIPT_DIR}/plan-progress.sh" "${progress_args[@]}" 2>&1) || plan_update_rc=$?
+        if [[ $plan_update_rc -ne 0 ]]; then
             PLAN_UPDATED=false
-            log "${YELLOW}⚠${NC} plan-progress.sh returned $pp_rc — continuing without plan update"
+            log "${RED}✗${NC} Plan update FAILED (exit ${plan_update_rc})"
+            exit_with_json "error" \
+                "Plan update failed — PLN not marked complete; commit aborted" \
+                "plan-progress.sh exit ${plan_update_rc}: $(echo "$plan_update_output" | head -5 | tr '\n' ' ' | cut -c1-300)"
         fi
+        PLAN_UPDATED=true
+        log "${GREEN}✓${NC} Plan updated"
     fi
 
-    # Stage changed files. Previously this used
-    #   git status --porcelain | awk '{print $2}' | xargs git add --
-    # which mishandles renames ("R old -> new" parsed as two paths), filenames
-    # with spaces (split on whitespace), and quoted paths. Use NUL-delimited
-    # porcelain output plus xargs -0 so every path is unambiguous.
-    if [[ -z "$(git status --porcelain)" ]]; then
+    # Stage changed files.
+    #
+    # NOTE ON SCOPE: with no --files, the list below is derived from the WHOLE
+    # `git status --porcelain`, so this stages every changed path in the tree — it is
+    # `git add -A` with extra steps, not a narrow stage. That breaks the one-commit-
+    # per-subtask checkpoint the /task-continue loop relies on: after a parallel
+    # dispatch, several finished subtasks coexist in the tree and the first commit
+    # swallows all of them (it also sweeps in another session's concurrent edits when
+    # two sessions share a checkout). Callers that know which paths belong to the
+    # subtask should pass `--files "path1,path2"` to stage exactly those.
+    #
+    # Rename-aware: `git status --porcelain` renders a rename as
+    #   "R  old -> new"  (or "RM old -> new")
+    # The old naive `awk '{print $2}'` grabbed the OLD path; since `git mv`
+    # already removed it from the worktree, `git add -- <old>` fatals with
+    # "pathspec did not match" and aborts the commit. We strip the 3-char status
+    # prefix and, for rename lines, keep ONLY the new (right) path — the old
+    # path's deletion is already staged by `git mv`, so re-adding it is both
+    # unnecessary and the source of the fatal. (A plain `mv` instead surfaces the
+    # old path as its own " D old" line, which stays a valid `git add` target.)
+    # `git add -A -- <paths>` then records the rename and handles deletions.
+    local files_to_stage
+    if [[ -n "$COMMIT_FILES" ]]; then
+        # Caller named the paths: accept comma- or newline-separated, trim blanks.
+        files_to_stage=$(echo "$COMMIT_FILES" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d')
+        if [[ -z "$files_to_stage" ]]; then
+            exit_with_json "error" "--files was passed but resolved to no paths" \
+                "Supply comma- or newline-separated paths relative to the repo root"
+        fi
+        # Fail loudly on a path that has no change — a typo'd path would otherwise
+        # commit silently without the work the caller believed they were recording.
+        local _missing=""
+        while IFS= read -r _cf; do
+            [[ -n "$_cf" ]] || continue
+            if ! git status --porcelain -- "$_cf" | grep -q .; then
+                _missing="${_missing}${_cf} "
+            fi
+        done <<< "$files_to_stage"
+        if [[ -n "$_missing" ]]; then
+            exit_with_json "error" "--files named path(s) with no pending change" \
+                "No git status entry for: ${_missing% }"
+        fi
+    else
+        files_to_stage=$(git status --porcelain | sed -e 's/^...//' -e 's/^.* -> //')
+    fi
+
+    if [[ -z "$files_to_stage" ]]; then
         exit_with_json "success" "Nothing to commit - working tree clean"
     fi
 
-    # Stage tracked modifications/deletions, then add untracked paths
-    # individually so renames and spaces survive.
-    git add -u
-    git status -z --porcelain | awk -v RS='\0' '/^\?\? / { sub(/^\?\? /, ""); printf "%s\0", $0 }' \
-        | xargs -0 -r git add --
+    # Line-by-line into an array so paths with spaces survive (xargs split them).
+    local -a stage_paths=()
+    while IFS= read -r _stage_path; do
+        [[ -n "$_stage_path" ]] && stage_paths+=("$_stage_path")
+    done <<< "$files_to_stage"
+    git add -A -- "${stage_paths[@]}"
 
     check_tdd_compliance
 
-    # Get list of staged files for the commit message
-    CHANGED_FILES=$(git diff --cached --name-only | head -20 || echo "")
+    # Full staged count — the old `| head -20` silently capped files_changed
+    # at 20 for large commits.
     local changed_count
-    changed_count=$(echo "$CHANGED_FILES" | grep -c . 2>/dev/null || true)
+    changed_count=$(git diff --cached --name-only | grep -c . 2>/dev/null || true)
     [[ -z "$changed_count" ]] && changed_count=0
 
     # Build commit message
@@ -661,8 +827,21 @@ section_commit() {
     if [[ "$SECTION" == "commit" ]]; then
         local tdd_warning_field=""
         [[ -n "$TDD_WARNING" ]] && tdd_warning_field=",\"tdd_warning\":\"$TDD_WARNING\""
+
+        # Return the POST-commit plan state so loop callers can take the next
+        # item straight from this response instead of re-running --full — one
+        # fewer script call and model round-trip per iteration. This satisfies
+        # the "re-load the PLN fresh every iteration" rule: the state below is
+        # parsed from the PLN as it exists after this commit mutated it.
+        local next_plan_context="null"
+        if [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
+            next_plan_context=$("${SCRIPT_DIR}/plan-progress.sh" --json --file "$PLAN_DOC" 2>/dev/null \
+                | python3 "${SCRIPT_DIR}/lib/toon2json.py" 2>/dev/null || echo "null")
+            [[ -z "$next_plan_context" ]] && next_plan_context="null"
+        fi
+
         exit_with_json "success" "Changes committed" "" \
-            "\"commit_hash\":\"$COMMIT_HASH\",\"files_changed\":$changed_count,\"task_id\":\"$TASK_ID\",\"plan_updated\":$PLAN_UPDATED$tdd_warning_field"
+            "\"commit_hash\":\"$COMMIT_HASH\",\"files_changed\":$changed_count,\"task_id\":\"$TASK_ID\",\"plan_updated\":${PLAN_UPDATED:-false},\"plan_context\":$next_plan_context$tdd_warning_field"
     fi
 }
 
@@ -685,7 +864,9 @@ section_full() {
     local plan_info="null"
     if [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
         # Use plan-progress.sh to get structured plan state
-        plan_info=$("${SCRIPT_DIR}/plan-progress.sh" --json --file "$PLAN_DOC" 2>/dev/null || echo "null")
+        # plan-progress.sh renders TOON for AI callers (CLAUDECODE set); convert to
+        # JSON so the jq parsing below works regardless of the emitted format.
+        plan_info=$("${SCRIPT_DIR}/plan-progress.sh" --json --file "$PLAN_DOC" 2>/dev/null | python3 "${SCRIPT_DIR}/lib/toon2json.py" 2>/dev/null || echo "null")
     fi
 
     # Testing info from PROJECT.yaml
@@ -705,12 +886,18 @@ section_full() {
     fi
 
     # Work/test agent and review config from per-task config (falls back to doc-level)
-    local work_agent="opus"
+    local work_agent="sonnet"
     local test_agent="sonnet"
     local review_type="single"
     local fresh_context="no"
     local auto_review="no"
     local tdd_required="no"
+    # Tracks whether work_agent/test_agent were set from config (per-task or
+    # doc-level) so the doc-level header fallback below only fires when
+    # nothing has explicitly configured a model — distinguishing an explicit
+    # "opus" from the untouched default.
+    local work_agent_source="default"
+    local test_agent_source="default"
 
     # Per-task config from plan-progress.sh (always returns defaults even for old PLNs)
     if [[ "$plan_info" != "null" ]]; then
@@ -725,8 +912,8 @@ section_full() {
                 .next_task_config.tdd_required // ""
             ] | join(" ")' 2>/dev/null
         )
-        [[ -n "$ntc_work" ]] && work_agent="$ntc_work"
-        [[ -n "$ntc_test" && "$ntc_test" != "n/a" ]] && test_agent="$ntc_test"
+        if [[ -n "$ntc_work" ]]; then work_agent="$ntc_work"; work_agent_source="config"; fi
+        if [[ -n "$ntc_test" && "$ntc_test" != "n/a" ]]; then test_agent="$ntc_test"; test_agent_source="config"; fi
         [[ -n "$ntc_review" ]] && review_type="$ntc_review"
         [[ -n "$ntc_fresh" ]] && fresh_context="$ntc_fresh"
         [[ -n "$ntc_auto" ]] && auto_review="$ntc_auto"
@@ -734,15 +921,15 @@ section_full() {
     fi
 
     # Last-resort fallback: doc-level ## Work Agent / ## Test Agent headers.
-    # Only triggers when plan_info is null (no plan found) — plan-progress.sh
-    # returns defaults (work_model=sonnet) even for old flat-checklist PLNs,
-    # so these headers are bypassed when any plan exists.
-    if [[ "$work_agent" == "opus" ]] && [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
+    # Only triggers when no config (per-task or plan_info) already set the
+    # model — plan_info returning a config value means it should win even if
+    # that value happens to be "opus".
+    if [[ "$work_agent_source" == "default" ]] && [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
         local wa
         wa=$(grep -i "work.agent" "$PLAN_DOC" | head -1 | grep -oE '(haiku|sonnet|opus)' || echo "")
         if [[ -n "$wa" ]]; then work_agent="$wa"; fi
     fi
-    if [[ "$test_agent" == "sonnet" ]] && [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
+    if [[ "$test_agent_source" == "default" ]] && [[ -n "$PLAN_DOC" ]] && [[ -f "$PLAN_DOC" ]]; then
         local ta
         ta=$(grep -i "test.agent" "$PLAN_DOC" | head -1 | grep -oE '(haiku|sonnet|opus)' || echo "")
         if [[ -n "$ta" ]]; then test_agent="$ta"; fi
@@ -759,7 +946,9 @@ section_full() {
   "task_doc": "$TASK_DOC",
   "task_type": "$TASK_TYPE",
   "branch": "$CURRENT_BRANCH",
+  "worktree_dir": "$(pwd)",
   "plan_doc": $([ -n "$PLAN_DOC" ] && echo "\"$PLAN_DOC\"" || echo "null"),
+  "execution_mode": "$EXECUTION_MODE",
   "work_agent": "$work_agent",
   "test_agent": "$test_agent",
   "review_type": "$review_type",
@@ -795,10 +984,20 @@ main() {
             --identify) SECTION="identify"; shift ;;
             --verify-branch) SECTION="verify-branch"; shift ;;
             --run-tests) SECTION="run-tests"; shift ;;
+            --test-target) TEST_TARGET="$2"; shift 2 ;;
+            --test-files) TEST_FILES="$2"; shift 2 ;;
+            --test-filter) TEST_FILTER="$2"; shift 2 ;;
             --gather) SECTION="gather"; shift ;;
             --commit) SECTION="commit"; shift ;;
             --full) SECTION="full"; shift ;;
+            --mode)
+                case "$2" in
+                    single|all|phase) EXECUTION_MODE="$2" ;;
+                    *) EXECUTION_MODE="single" ;;
+                esac
+                shift 2 ;;
             --completed-tasks) COMPLETED_TASKS="$2"; shift 2 ;;
+            --files) COMMIT_FILES="$2"; shift 2 ;;
             --actual-time) ACTUAL_TIME="$2"; shift 2 ;;
             --lessons) LESSONS="$2"; shift 2 ;;
             --progress-note) PROGRESS_NOTE="$2"; shift 2 ;;
@@ -808,13 +1007,26 @@ main() {
             --differently) DO_DIFFERENTLY="$2"; shift 2 ;;
             --patterns) PATTERNS="$2"; shift 2 ;;
             --task-id) INPUT_ARG="$2"; shift 2 ;;
+            --dir) WORK_DIR="$2"; shift 2 ;;
             -h|--help)
-                echo "Usage: $0 [--json|--raw] [--full|--section] [--task-id <id>]" >&2
+                echo "Usage: $0 [--json|--raw] [--full|--section] [--task-id <id>] [--dir <worktree>] [--files <p1,p2>]" >&2
                 exit 0
                 ;;
             *) echo "Unknown option: $1" >&2; exit 2 ;;
         esac
     done
+
+    # --dir makes every section cwd-independent: the caller never has to cd.
+    # Transcript analysis found the same worktree being cd'd into 100+ times in
+    # one session (the "cd exactly ONCE" rule decays as context compacts) —
+    # each a wasted model round-trip. Passing --dir removes the need entirely.
+    if [[ -n "${WORK_DIR:-}" ]]; then
+        if [[ ! -d "$WORK_DIR" ]]; then
+            exit_with_json "error" "Directory not found: $WORK_DIR" \
+                "Pass --dir the worktree path from the --full response's worktree_dir field"
+        fi
+        cd "$WORK_DIR"
+    fi
 
     # Execute sections based on flag
     case "$SECTION" in

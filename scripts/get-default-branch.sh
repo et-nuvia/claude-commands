@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Only apply strict shell options when executed directly — this file is also
+# sourced by other scripts, and a sourced `set -e` would mutate their shell.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  set -euo pipefail
+fi
 
 # get-default-branch.sh - Determine the default/development branch for git operations
 # Supports different branch naming conventions across projects
 #
 # Usage:
 #   source ~/.claude/scripts/get-default-branch.sh
-#   DEFAULT_BRANCH=$(get_default_branch [override])
-#   DEFAULT_BRANCH=$(get_default_branch "main")        # Force specific branch
-#   DEFAULT_BRANCH=$(get_default_branch)               # Auto-detect
+#   DEFAULT_BRANCH=$(get_default_branch_interactive [override])
+#   DEFAULT_BRANCH=$(get_default_branch_interactive "main")        # Force specific branch
+#   DEFAULT_BRANCH=$(get_default_branch_interactive)               # Auto-detect
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source shared non-interactive detection
 source "${SCRIPT_DIR}/lib/git-utils.sh"
 
-# Override get_default_branch with interactive version that falls back to prompt
-get_default_branch() {
+# Interactive version that falls back to a prompt; distinct name so it doesn't
+# shadow the non-interactive get_default_branch() defined in lib/git-utils.sh
+get_default_branch_interactive() {
   local override="${1:-}"
 
   # Tier 1: Use override if provided
@@ -91,5 +96,5 @@ get_default_branch() {
 
 # If script is run directly (not sourced), execute the function
 if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
-  get_default_branch "$@"
+  get_default_branch_interactive "$@"
 fi

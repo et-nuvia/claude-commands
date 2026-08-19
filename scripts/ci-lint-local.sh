@@ -258,6 +258,34 @@ for name, svc in services.items():
 }
 
 #------------------------------------------------------------------------------
+# Audit documentation drift
+#
+# /docker-audit and /pipeline-audit run on every project, and LLMs build new
+# projects from the wiki tables rather than from the audit scripts. If a weight
+# changed in a script without regenerating the published tables, the standard
+# every future project is built against is silently wrong — so this is an error,
+# not a warning.
+#------------------------------------------------------------------------------
+
+section_audit_specs() {
+    local sync_script="${HOME}/.claude/scripts/audit-spec-sync.py"
+    [[ -x "$sync_script" ]] || return 0
+
+    local drift
+    if ! drift=$("$sync_script" --check 2>&1); then
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            case "$line" in
+                *drifted*|*no_markers*|*unknown_block*|*missing*|*error*)
+                    add_issue "error" "audit-spec" "audit-spec-sync" \
+                        "Audit docs out of sync with script: ${line}. Run: audit-spec-sync.py --write"
+                    ;;
+            esac
+        done <<< "$drift"
+    fi
+}
+
+#------------------------------------------------------------------------------
 # Parse Arguments
 #------------------------------------------------------------------------------
 
@@ -287,6 +315,7 @@ case "$SECTION" in
         section_ci
         section_dockerfiles
         section_compose
+        section_audit_specs
         ;;
     ci) section_ci ;;
     dockerfiles) section_dockerfiles ;;

@@ -19,8 +19,9 @@ cd "$DOCS_DIR"
 
 [[ ! -d "docs" ]] && { echo "Error: docs/ directory not found"; exit 1; }
 
-# macOS/BSD compatibility
-if [[ "$(uname -s)" == "Darwin" ]]; then
+# macOS/BSD compatibility (PLATFORM axis — see lib/platform.sh)
+source "${HOME}/.claude/scripts/lib/platform.sh"
+if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else
     sedi() { sed -i "$@"; }
@@ -51,13 +52,15 @@ trap "rm -f $TEMP_DATA" EXIT
 # Scan all docs and write to temp file (using process substitution to avoid subshell)
 while read -r filepath; do
   filename=$(basename "$filepath")
-  seq=$(echo "$filename" | grep -oE '^[0-9]{4}' || true)
+  # V4 doc names use a 6-hex-uppercase Task ID prefix; legacy V3 docs use a
+  # 4-digit sequence number.
+  seq=$(echo "$filename" | grep -oE '^[A-F0-9]{6}' || echo "$filename" | grep -oE '^[0-9]{4}' || true)
   [[ -z "$seq" ]] && continue
 
   # Extract parts - handle both V3 (12-digit YYYYMMDDHHMM) and V4 (10-digit YYMMDDHHMM) datetime
-  datetime=$(echo "$filename" | sed -E 's/^[0-9]{4}-([0-9]{10,12})-.*/\1/')
-  type=$(echo "$filename" | sed -E 's/^[0-9]{4}-[0-9]{10,12}-([A-Z]{3,}).*/\1/')
-  desc=$(echo "$filename" | sed -E 's/^[0-9]{4}-[0-9]{10,12}-[A-Z]{3,}-(.*)\.md$/\1/')
+  datetime=$(echo "$filename" | sed -E 's/^[A-F0-9]{6}-([0-9]{10,12})-.*/\1/; s/^[0-9]{4}-([0-9]{10,12})-.*/\1/')
+  type=$(echo "$filename" | sed -E 's/^[A-F0-9]{6}-[0-9]{10,12}-([A-Z]{3,}).*/\1/; s/^[0-9]{4}-[0-9]{10,12}-([A-Z]{3,}).*/\1/')
+  desc=$(echo "$filename" | sed -E 's/^[A-F0-9]{6}-[0-9]{10,12}-[A-Z]{3,}-(.*)\.md$/\1/; s/^[0-9]{4}-[0-9]{10,12}-[A-Z]{3,}-(.*)\.md$/\1/')
 
   status="completed"
   [[ "$filepath" =~ /active/ ]] && status="active"

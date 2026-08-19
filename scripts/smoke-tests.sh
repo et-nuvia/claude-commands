@@ -211,15 +211,9 @@ except Exception as e:
 print('echo \"\"')
 print('echo \"[3/3] Container Status\"')
 print('echo \"------------------------------------------\"')
-# Count containers whose State field is exactly \"running\" — match the
-# fixed token \"State\":\"running\", not substrings like Status containing
-# the word \"running\". Built via a Python variable so the triple-nested
-# quoting (bash -> python -c -> printed bash) stays readable.
-_running_pat = chr(34) + 'State' + chr(34) + ':' + chr(34) + 'running' + chr(34)
-_restart_pat = chr(34) + 'State' + chr(34) + ':' + chr(34) + 'restarting' + chr(34)
-print(f'RUNNING=\$(docker compose ps --format json 2>/dev/null | grep -cF {chr(39)}{_running_pat}{chr(39)} || echo 0)')
+print('RUNNING=\$(docker compose ps --format json 2>/dev/null | grep -c \\\"running\\\") || RUNNING=0')
 print('if [ \"\$RUNNING\" -ge 3 ]; then pass \"All \$RUNNING containers running\"; else fail \"Only \$RUNNING containers running\"; fi')
-print(f'RESTARTS=\$(docker compose ps --format json 2>/dev/null | grep -cF {chr(39)}{_restart_pat}{chr(39)} || echo 0)')
+print('RESTARTS=\$(docker compose ps --format \"{{.Name}}: {{.Status}}\" 2>/dev/null | grep -c \"Restarting\") || RESTARTS=0')
 print('if [ \"\$RESTARTS\" -eq 0 ]; then pass \"No containers restarting\"; else fail \"\$RESTARTS container(s) restarting\"; fi')
 
 # Version check

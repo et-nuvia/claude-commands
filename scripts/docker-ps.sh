@@ -5,6 +5,12 @@ set -euo pipefail
 # Uses docker inspect for ports (docker ps {{.Ports}} is extremely slow)
 # Usage: docker-ps.sh [docker ps flags, e.g. -a, --filter]
 
+# Requires bash >= 4 (mapfile, declare -A). macOS ships bash 3.2 by default.
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: docker-ps.sh requires bash >= 4 (brew install bash)" >&2
+  exit 1
+fi
+
 fmt="%-14s %-30s %-40s %s\n"
 printf "${fmt}" "CONTAINER ID" "NAME" "STATUS" "HOST PORTS"
 

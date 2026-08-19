@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/lib"
 source "${LIB_DIR}/common.sh"
 source "${LIB_DIR}/project-config.sh"
+source "${LIB_DIR}/output-framework.sh"  # log_json: TOON for AI callers
 
 # Configuration
 STAGE="all"
@@ -749,8 +750,8 @@ report_stage() {
 EOF
 )
 
-  echo "$result" > "$OUTPUT_FILE"
-  echo "$result"
+  echo "$result" > "$OUTPUT_FILE"   # file stays JSON for programmatic consumers
+  log_json "$result"                # stdout = TOON in AI context, JSON otherwise
 
   print_info "Report written to: $OUTPUT_FILE"
 }

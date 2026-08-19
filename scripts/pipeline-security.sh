@@ -17,8 +17,9 @@ map_status_to_action() {
 }
 source "${SCRIPT_DIR}/lib/output-framework.sh"
 
-# macOS/BSD sed compatibility
-if [[ "$(uname -s)" == "Darwin" ]]; then
+# macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
+source "${HOME}/.claude/scripts/lib/platform.sh"
+if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else
     sedi() { sed -i "$@"; }

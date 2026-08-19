@@ -29,6 +29,12 @@ source "${SCRIPT_DIR}/lib/yaml.sh" || {
     exit 1
 }
 
+# shellcheck source=lib/platform.sh
+source "${SCRIPT_DIR}/lib/platform.sh" || {
+    echo "{\"status\":\"error\",\"message\":\"Failed to load platform.sh\"}" >&2
+    exit 1
+}
+
 # shellcheck source=lib/output-framework.sh
 source "${SCRIPT_DIR}/lib/output-framework.sh" || {
     echo "{\"status\":\"error\",\"message\":\"Failed to load output-framework.sh\"}" >&2
@@ -103,7 +109,7 @@ show_schedule() {
         local strategy; strategy=$(yaml_get ".secrets.rotation.schedules.${bucket}.strategy" PROJECT.yaml)
         local last_rotation; last_rotation=$(get_last_rotation "$bucket")
         local last_rotated_date="Never" next_due_date="N/A"
-        [[ $last_rotation -gt 0 ]] && { last_rotated_date=$(date -d "@$last_rotation" +%Y-%m-%d); next_due_date=$(date -d "@$((last_rotation + frequency * 86400))" +%Y-%m-%d); }
+        [[ $last_rotation -gt 0 ]] && { last_rotated_date=$(portable_date_parse "$last_rotation"); next_due_date=$(portable_date_parse "$((last_rotation + frequency * 86400))"); }
         schedules+=("{\"bucket\":\"$bucket\",\"frequency_days\":$frequency,\"warning_days\":$warning,\"auto_rotate\":$auto_rotate,\"strategy\":\"$strategy\",\"last_rotated\":\"$last_rotated_date\",\"next_due\":\"$next_due_date\"}")
     done
     if [[ "$OUTPUT_MODE" == "raw" ]]; then

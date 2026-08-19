@@ -9,14 +9,16 @@ set -euo pipefail
 #   ~/.claude/scripts/deploy-to-stage.sh [--json|--raw] [--full|--section]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output when LLM needs more details
 #
 # Section Flags (run specific section only):
 #   --validate:      Validate git state only
 #   --risk-analysis: Run automated risk analysis only
 #   --merge:         Attempt merge only (returns conflict details if needed)
-#   --deploy:        Run pipeline + health + version (after merge)
+#   --deploy:        Push merge commit + monitor pipeline to completion (after merge).
+#                    Health/version are NOT re-checked here — the pipeline's
+#                    deploy + smoke jobs already gate them.
 #   --full:          Run all sections end-to-end (default)
 #
 # Workflow:
@@ -29,7 +31,6 @@ set -euo pipefail
 #   - Orchestrates existing reusable scripts
 #   - LLM intervention at merge conflicts (only when needed)
 #   - Auto-flow when everything succeeds (no user input)
-#   - Idempotent: re-running --full after partial success resumes cleanly
 #   - --raw mode for debugging when --json insufficient
 
 # Global variables
@@ -50,32 +51,12 @@ map_status_to_action() {
 }
 
 source "${SCRIPT_DIR}/lib/output-framework.sh"
-
-# Cleanup on unexpected exit: abort any in-progress merge and return to the
-# original branch.
-_ORIG_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
-_cleanup_on_error() {
-    local rc=$?
-    [[ $rc -eq 0 ]] && return 0
-    git merge --abort >/dev/null 2>&1 || true
-    if [[ -n "$_ORIG_BRANCH" ]]; then
-        local current
-        current=$(git branch --show-current 2>/dev/null || echo "")
-        if [[ "$current" != "$_ORIG_BRANCH" ]]; then
-            git checkout "$_ORIG_BRANCH" >/dev/null 2>&1 || true
-        fi
-    fi
-    return $rc
-}
-trap '_cleanup_on_error' EXIT INT TERM
-
+source "${SCRIPT_DIR}/lib/deploy-stash.sh"
 RISK_SCORE=0
 RISK_STATUS="unknown"
 MERGE_COMMIT=""
 MERGE_STATUS="unknown"
 PIPELINE_STATUS="unknown"
-HEALTH_STATUS="unknown"
-VERSION_STATUS="unknown"
 
 # Deployment config variables
 DEV_BRANCH=""
@@ -84,6 +65,9 @@ PRODUCTION_BRANCH=""
 CI_PLATFORM=""
 VERSION=""
 STAGING_URL=""
+
+# Conflict details
+CONFLICT_FILES=()
 
 #------------------------------------------------------------------------------
 # Section Functions
@@ -101,6 +85,10 @@ section_validate() {
     if ! source "${SCRIPT_DIR}/lib/deployment-config.sh" 2>&1; then
         exit_with_json "error" "Failed to load deployment configuration"
     fi
+
+    # Stash a dirty working tree (marked) so the merge/branch-switch runs clean;
+    # the user is offered a pop-into-dev-or-drop choice on success.
+    deploy_autostash "deploy-to-stage"
 
     # Ensure target (inactive) instances are running for blue-green deployments
     if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
@@ -217,41 +205,6 @@ EOF
 # Section 3: Merge (LLM intervention point if conflicts or divergence)
 section_merge() {
     log "${BLUE}Merging to Staging${NC}"
-
-    # Idempotency guard: if source is already merged into target on origin, skip.
-    # Lets re-runs of --full after a partial success proceed straight to deploy.
-    git fetch origin "$DEV_BRANCH" "$STAGING_BRANCH" >/dev/null 2>&1 || true
-    local _src_sha _tgt_sha
-    _src_sha=$(git rev-parse "origin/$DEV_BRANCH" 2>/dev/null || echo "")
-    _tgt_sha=$(git rev-parse "origin/$STAGING_BRANCH" 2>/dev/null || echo "")
-    if [[ -n "$_src_sha" && -n "$_tgt_sha" ]] && \
-       git merge-base --is-ancestor "$_src_sha" "$_tgt_sha" 2>/dev/null; then
-        MERGE_STATUS="success"
-        MERGE_COMMIT="$_tgt_sha"
-        log "${GREEN}✓${NC} $DEV_BRANCH already merged into $STAGING_BRANCH ($_tgt_sha) — skipping merge"
-
-        if [[ "$SECTION" == "merge" ]]; then
-            local json=$(cat <<EOF
-{
-  "status": "success",
-  "next_action": "display_summary",
-  "section": "merge",
-  "message": "Already merged (idempotent skip)",
-  "merge_commit": "$MERGE_COMMIT",
-  "dev_branch": "$DEV_BRANCH",
-  "staging_branch": "$STAGING_BRANCH",
-  "next_steps": [
-    "Continue deployment: deploy-to-stage.sh --json --deploy"
-  ],
-  "timestamp": "$(date -Iseconds)"
-}
-EOF
-)
-            log_json "$json"
-            exit 0
-        fi
-        return 0
-    fi
 
     # Attempt merge — capture stdout (JSON) separately from stderr (logs)
     local merge_output
@@ -380,24 +333,6 @@ EOF
         log "${YELLOW}⚠${NC} Push to origin/$STAGING_BRANCH returned non-zero (may already be pushed)"
     fi
 
-    # Verify the merge actually landed on origin — without this, a silently
-    # rejected push (branch protection, auth, race) lets section_deploy monitor
-    # a SHA only present locally and report false success against the previous
-    # build. Symmetric to deploy-to-prod.sh.
-    if ! git fetch origin "$STAGING_BRANCH" >/dev/null 2>&1; then
-        exit_with_json "error" "Failed to fetch $STAGING_BRANCH after merge" "Cannot verify merge was pushed"
-    fi
-    local _remote_head
-    _remote_head=$(git rev-parse "origin/$STAGING_BRANCH" 2>/dev/null || echo "")
-    if [[ -z "$MERGE_COMMIT" || "$MERGE_COMMIT" == "null" ]]; then
-        MERGE_COMMIT="$_remote_head"
-    fi
-    if [[ "$_remote_head" != "$MERGE_COMMIT" ]]; then
-        exit_with_json "error" \
-            "Merge commit not found on remote" \
-            "Local merge: $MERGE_COMMIT, origin/$STAGING_BRANCH: $_remote_head. Push may have failed or been rejected."
-    fi
-
     if [[ "$SECTION" == "merge" ]]; then
         # Return success
         local json=$(cat <<EOF
@@ -426,14 +361,6 @@ EOF
 # Section 4: Deploy (pipeline + health + version)
 section_deploy() {
     log "${BLUE}Deploying to Staging${NC}"
-
-    # Refuse to start a deploy section with a dirty working tree — a prior
-    # interrupted run could have left half-staged files that would corrupt
-    # the SHA we're about to monitor.
-    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        exit_with_json "error" "Working tree is dirty" \
-            "Resolve uncommitted changes before re-running --deploy (git status to inspect)"
-    fi
 
     # Resolve the commit we expect the pipeline to build. Set by section_merge
     # during --full; fall back to local STAGING_BRANCH HEAD when called
@@ -470,78 +397,80 @@ section_deploy() {
     # Monitor pipeline for THIS commit. Matching by SHA prevents the monitor
     # from matching a stale run on the branch (which would return immediate
     # false-positive success when the push didn't actually land).
-    if ! ~/.claude/scripts/monitor-pipeline.sh --branch "$STAGING_BRANCH" --head-sha "$MERGE_COMMIT" 2>&1; then
+    # Distinguish the monitor's three exit codes: 0=success, 1=failure,
+    # 2=timeout. Collapsing 2 into 1 reports a still-running pipeline as a
+    # failed deploy and sends people hunting a break that doesn't exist.
+    local _monitor_rc=0
+    ~/.claude/scripts/monitor-pipeline.sh --branch "$STAGING_BRANCH" --head-sha "$MERGE_COMMIT" 2>&1 || _monitor_rc=$?
+    if [[ $_monitor_rc -eq 2 ]]; then
+        # The merge is already pushed and the pipeline is still going, so this
+        # is "unverified", not "broken" — it may well go green on its own.
+        PIPELINE_STATUS="timeout"
+        exit_with_json "error" "Pipeline still RUNNING when the monitor stopped watching — this is NOT a failure. Watch it to completion with '~/.claude/scripts/pipeline-watch.sh --branch ${STAGING_BRANCH} --head-sha ${MERGE_COMMIT}' (those flags keep it on the deploy run rather than another workflow on the same commit), then re-run this script with --deploy to finish the post-deploy steps. If this pipeline is legitimately this slow, raise ci.pipeline_timeout in PROJECT.yaml (default 540s, capped at 540s so this message can reach you before the Bash tool's 600s limit — for longer waits use pipeline-watch.sh)."
+    elif [[ $_monitor_rc -ne 0 ]]; then
         PIPELINE_STATUS="failed"
         exit_with_json "error" "Pipeline failed"
     fi
     PIPELINE_STATUS="success"
-    log "${GREEN}✓${NC} Pipeline succeeded"
+    log "${GREEN}✓${NC} Pipeline succeeded — build + deploy + smoke (health + version canary) all gated in-pipeline"
 
-    # Check health
-    if [[ -n "$STAGING_URL" ]]; then
-        if ~/.claude/scripts/check-health.sh --url "$STAGING_URL" --health-path "$HEALTH_CHECK_PATH" 2>&1; then
-            HEALTH_STATUS="healthy"
-        else
-            HEALTH_STATUS="unhealthy"
-            log "${YELLOW}⚠${NC} Health check failed (non-blocking)"
-        fi
-    else
-        HEALTH_STATUS="skipped"
-    fi
-
-    # Verify version
-    #
-    # The check has to target the URL the deploy actually went to:
-    #   - blue-green: the *inactive* color's domain (e.g. clearance-staging-blue).
-    #     STAGING_URL is the roving domain, which still serves the
-    #     previously-active color until DNS cutover, so checking it here
-    #     would always fail.
-    #   - other strategies: the deploy goes directly to STAGING_URL.
-    # Mismatch is non-blocking on staging (warning only), unlike production.
-    local _verify_url=""
-    if [[ "$DEPLOY_STRATEGY" == "blue-green" ]]; then
-        _verify_url=$(dc_get_target_url staging || true)
-        if [[ -z "$_verify_url" ]]; then
-            VERSION_STATUS="skipped"
-            log "${YELLOW}⚠${NC} Could not resolve target color URL — skipping version check"
-        fi
-    else
-        _verify_url="$STAGING_URL"
-    fi
-
-    if [[ -n "$_verify_url" ]]; then
-        log "${BLUE}→${NC} Verifying version at: $_verify_url"
-        if ~/.claude/scripts/check-deployed-version.sh --url "$_verify_url" --expected-version "$VERSION" --version-path "$VERSION_PATH" 2>&1; then
-            VERSION_STATUS="verified"
-        else
-            VERSION_STATUS="unverified"
-            log "${YELLOW}⚠${NC} Version verification failed (non-blocking)"
-        fi
-    elif [[ -z "${VERSION_STATUS:-}" || "$VERSION_STATUS" == "unknown" ]]; then
-        VERSION_STATUS="skipped"
-    fi
+    # NOTE: health and deployed-version are deliberately NOT re-checked here.
+    # The staging pipeline's deploy + smoke jobs already gate on Docker health
+    # status and the version canary; re-running check-health.sh /
+    # check-deployed-version.sh from the client would just duplicate work the
+    # pipeline already performed (and gated the deploy on). Pipeline success IS
+    # the health+version gate.
 
     if [[ "$SECTION" == "deploy" ]]; then
+        local _stash_ref _next_action _stash_json
+        _stash_ref=$(deploy_find_marked_stash)
+        if [[ -n "$_stash_ref" ]]; then
+            _next_action="prompt_stash"
+            _stash_json=$(deploy_stash_details_json "$_stash_ref")
+        else
+            _next_action="display_summary"
+            _stash_json="null"
+        fi
         # Return deployment results
         local json=$(cat <<EOF
 {
   "status": "success",
-  "next_action": "display_summary",
+  "next_action": "$_next_action",
+  "stash": $_stash_json,
   "section": "deploy",
   "pipeline_status": "$PIPELINE_STATUS",
-  "health_status": "$HEALTH_STATUS",
-  "version_status": "$VERSION_STATUS",
   "staging_url": "${STAGING_URL}",
   "version": "$VERSION",
   "timestamp": "$(date -Iseconds)"
 }
 EOF
 )
+        return_to_dev
         log_json "$json"
         exit 0
     fi
 
+    return_to_dev
     log "${GREEN}✓${NC} Deployment complete"
+}
+
+# On successful completion, return the working tree to the dev branch. The merge
+# step leaves us on the staging branch; callers expect to resume work on dev.
+# The dev branch NAME is sourced from PROJECT.yaml (DEV_BRANCH), never hardcoded.
+return_to_dev() {
+    if [[ -z "$DEV_BRANCH" ]]; then
+        return
+    fi
+    local current
+    current=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ "$current" == "$DEV_BRANCH" ]]; then
+        return
+    fi
+    if git checkout "$DEV_BRANCH" >/dev/null 2>&1; then
+        log "${GREEN}✓${NC} Returned to ${DEV_BRANCH} branch"
+    else
+        log "${YELLOW}⚠${NC} Could not switch back to ${DEV_BRANCH} (left on ${current:-current branch})"
+    fi
 }
 
 #------------------------------------------------------------------------------
@@ -560,10 +489,7 @@ main() {
             --merge) SECTION="merge"; shift ;;
             --deploy) SECTION="deploy"; shift ;;
             --full) SECTION="full"; shift ;;
-            *)
-                exit_with_json "error" "Unknown argument: $1" \
-                    "Valid flags: --json|--toon|--raw, --validate|--risk-analysis|--merge|--deploy|--full"
-                ;;
+            *) shift ;;
         esac
     done
 
@@ -599,28 +525,25 @@ main() {
             section_merge
             section_deploy
 
-            # Collect any post-deploy warnings (skipped checks that weren't configured are OK)
-            local issues_json="[]"
-            local issues=()
-            [[ "$HEALTH_STATUS" == "unhealthy" ]] && issues+=("\"health check failed\"")
-            [[ "$VERSION_STATUS" == "unverified" ]] && issues+=("\"deployed version did not match expected $VERSION\"")
-            if [[ ${#issues[@]} -gt 0 ]]; then
-                issues_json="[$(IFS=,; echo "${issues[*]}")]"
-            fi
-
-            local final_status final_action
-            if [[ "$issues_json" == "[]" ]]; then
-                final_status="success"
-                final_action="display_summary"
+            # Pipeline success IS the gate — its deploy + smoke jobs already
+            # validated health + version. No client-side post-deploy checks to
+            # collect, so a green pipeline is an unqualified success.
+            # section_deploy already returned us to dev; if we auto-stashed a
+            # dirty tree at the start, prompt to pop-into-dev or drop it.
+            local _stash_ref _next_action _stash_json
+            _stash_ref=$(deploy_find_marked_stash)
+            if [[ -n "$_stash_ref" ]]; then
+                _next_action="prompt_stash"
+                _stash_json=$(deploy_stash_details_json "$_stash_ref")
             else
-                final_status="warning"
-                final_action="display_summary"
+                _next_action="display_summary"
+                _stash_json="null"
             fi
-
             local json=$(cat <<EOF
 {
-  "status": "$final_status",
-  "next_action": "$final_action",
+  "status": "success",
+  "next_action": "$_next_action",
+  "stash": $_stash_json,
   "deployment": "staging",
   "dev_branch": "$DEV_BRANCH",
   "staging_branch": "$STAGING_BRANCH",
@@ -629,9 +552,6 @@ main() {
   "risk_score": $RISK_SCORE,
   "risk_status": "$RISK_STATUS",
   "pipeline_status": "$PIPELINE_STATUS",
-  "health_status": "$HEALTH_STATUS",
-  "version_status": "$VERSION_STATUS",
-  "issues": $issues_json,
   "staging_url": "${STAGING_URL}",
   "ci_platform": "$CI_PLATFORM",
   "timestamp": "$(date -Iseconds)"

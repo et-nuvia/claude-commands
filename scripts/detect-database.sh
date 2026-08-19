@@ -149,8 +149,9 @@ detect_databases_from_compose() {
         fi
     done <<< "$service_names"
 
-    # Output results
-    printf '%s\n' "${databases[@]}"
+    # Output results (guard against empty array under set -u on bash < 4.4)
+    ((${#databases[@]})) && printf '%s\n' "${databases[@]}"
+    return 0
 }
 
 detect_migration_tools() {
@@ -169,8 +170,9 @@ detect_migration_tools() {
         tools+=("knex")
     fi
 
-    # Output results
-    printf '%s\n' "${tools[@]}"
+    # Output results (guard against empty array under set -u on bash < 4.4)
+    ((${#tools[@]})) && printf '%s\n' "${tools[@]}"
+    return 0
 }
 
 #------------------------------------------------------------------------------
@@ -222,11 +224,17 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
     exit 1
 fi
 
-# Detect databases
-mapfile -t databases < <(detect_databases_from_compose "$COMPOSE_FILE")
+# Detect databases (portable read loop instead of mapfile, for bash < 4)
+databases=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && databases+=("$line")
+done < <(detect_databases_from_compose "$COMPOSE_FILE")
 
-# Detect migration tools
-mapfile -t migration_tools < <(detect_migration_tools)
+# Detect migration tools (portable read loop instead of mapfile, for bash < 4)
+migration_tools=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && migration_tools+=("$line")
+done < <(detect_migration_tools)
 
 # Output results
 if [[ "$JSON_OUTPUT" == "true" ]]; then

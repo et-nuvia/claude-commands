@@ -69,9 +69,13 @@ def detect_frameworks(paths: List[Path]) -> Set[str]:
                 with open(pyproject, "rb") as f:
                     data = tomllib.load(f)
 
-                # Check dependencies
+                # Check dependencies (PEP 621 [project.dependencies] and
+                # Poetry's [tool.poetry.dependencies], which uses a dict
+                # rather than a list)
                 deps = data.get("project", {}).get("dependencies", [])
+                poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
                 deps_str = " ".join(str(d) for d in deps).lower()
+                deps_str += " " + " ".join(str(k) for k in poetry_deps).lower()
 
                 if "fastapi" in deps_str:
                     frameworks.add("fastapi")

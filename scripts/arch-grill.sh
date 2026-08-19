@@ -16,7 +16,7 @@ set -euo pipefail
 #   --save-state:  Checkpoint grilling decisions to .arch-grill-state.json
 #   --load-state:  Load checkpoint if present
 #   --write-adr:   Create docs/adr/NNNN-<slug>.md from template
-#   --commit:      Stage + commit ARC update (and ADR/PROJECT-KNOWLEDGE if touched)
+#   --commit:      Stage + commit ARC update (and ADR if written)
 #   --full:        Run identify
 #
 # Workflow:
@@ -24,7 +24,9 @@ set -euo pipefail
 #   2. LLM grills the chosen candidate w/ user (conversational)
 #   3. LLM may call --save-state between topics
 #   4. If user rejects w/ load-bearing reason: LLM calls --write-adr
-#   5. LLM Edits ARC doc to fill Grilled Design section + optionally edits PROJECT-KNOWLEDGE.md
+#   5. LLM Edits ARC doc to fill Grilled Design section (new domain terms are
+#      parked there as proposed terms — PROJECT-KNOWLEDGE.md is current-state
+#      only and gets updated by /task-close when the work lands)
 #   6. LLM calls --commit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -298,10 +300,9 @@ section_commit() {
 
     git add "$ARC_DOC"
     [[ -d "$ADR_DIR" ]] && git add "$ADR_DIR" 2>/dev/null || true
-    [[ -f "$KNOWLEDGE_DOC" ]] && git add "$KNOWLEDGE_DOC" 2>/dev/null || true
 
     if git diff --cached --quiet; then
-        exit_with_json "error" "No changes to commit" "Edit ARC doc / write ADR / update PROJECT-KNOWLEDGE.md first"
+        exit_with_json "error" "No changes to commit" "Edit ARC doc / write ADR first"
     fi
 
     "${SCRIPT_DIR}/update-docs.sh" >/dev/null 2>&1 || true

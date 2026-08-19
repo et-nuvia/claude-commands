@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: requires bash >= 4 (on macOS: brew install bash)" >&2
+  exit 1
+fi
+
 # Update Sequence Tracker
 # Auto-generates SEQUENCE-TRACKER.md from filesystem scan
 # Usage: update-sequence-tracker.sh [--docs-dir <dir>]

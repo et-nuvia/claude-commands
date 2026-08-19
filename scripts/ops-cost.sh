@@ -45,8 +45,17 @@ while [[ $# -gt 0 ]]; do
     --gather) SECTION="--gather"; shift ;;
     --analyze) SECTION="--analyze"; shift ;;
     --report) SECTION="--report"; shift ;;
+    # Section parameters. These were previously readable only as pre-exported
+    # environment variables, so the documented
+    # `--report --provider aws --total-cost 5000 ...` call exited 2 below.
+    --provider)   PROVIDER="$2";   shift 2 ;;
+    --total-cost) TOTAL_COST="$2"; shift 2 ;;
+    --instances)  INSTANCES="$2";  shift 2 ;;
+    --dbs)        DBS="$2";        shift 2 ;;
+    --nats)       NATS="$2";       shift 2 ;;
     -h|--help)
       echo "Usage: $0 [--json|--raw] [--full|--detect|--gather|--analyze|--report]" >&2
+      echo "       [--provider <p>] [--total-cost <n>] [--instances <n>] [--dbs <n>] [--nats <n>]" >&2
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac

@@ -6,7 +6,6 @@ set -euo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_FORMAT="json"
 OUTPUT_MODE="json"
 SECTION="full"
 SECTIONS=()
@@ -28,7 +27,7 @@ source "${SCRIPT_DIR}/lib/output-framework.sh"
 # ============================================================================
 
 log_raw() {
-  if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+  if [[ "$OUTPUT_MODE" == "raw" ]]; then
     echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $*" >&2
   fi
 }
@@ -77,7 +76,7 @@ section_config() {
   export RETENTION_DAYS="${retention_days:-30}"
   export CONNECTION_STRING="$connection_string"
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
     log_json "{\"status\":\"success\",\"section\":\"config\",\"message\":\"Configuration loaded\",\"next_action\":\"display_summary\",\"timestamp\":\"$(date -Iseconds)\",\"db_type\":\"$db_type\",\"backup_dir\":\"$backup_dir\",\"retention_days\":$RETENTION_DAYS}"
   fi
 
@@ -140,14 +139,14 @@ section_list() {
 
     backups_json="$backups_json{\"filename\":\"$filename\",\"path\":\"$backup_file\",\"size\":$size,\"modified\":\"$modified_date\"}"
 
-    if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+    if [[ "$OUTPUT_MODE" == "raw" ]]; then
       echo "  $filename ($(numfmt --to=iec-i --suffix=B $size 2>/dev/null || echo "${size}B"), modified: $modified_date)"
     fi
   done
 
   backups_json="$backups_json]"
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
     log_json "{\"status\":\"success\",\"section\":\"list\",\"message\":\"Backups listed\",\"next_action\":\"display_summary\",\"timestamp\":\"$(date -Iseconds)\",\"backup_count\":$backup_count,\"backups\":$backups_json}"
   fi
 
@@ -284,7 +283,7 @@ section_verify() {
     status="error"
   fi
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
     log_json "{\"status\":\"$status\",\"section\":\"verify\",\"message\":\"Verification complete\",\"next_action\":\"$(map_status_to_action "$status")\",\"timestamp\":\"$(date -Iseconds)\",\"backup_file\":\"$(basename "$latest_backup")\",\"checks_passed\":$passed,\"checks_failed\":$failed,\"results\":$results_json}"
   fi
 
@@ -399,7 +398,7 @@ section_test_restore() {
   esac
 
   if [[ "$restore_success" == "true" ]]; then
-    if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
       log_json "{\"status\":\"success\",\"section\":\"test-restore\",\"message\":\"Restore test passed\",\"next_action\":\"display_summary\",\"timestamp\":\"$(date -Iseconds)\",\"backup_file\":\"$(basename "$latest_backup")\",\"test_database\":\"$test_db\"}"
     fi
     return 0
@@ -437,7 +436,7 @@ section_retention() {
       ((old_backups++))
       old_backup_files+=("$(basename "$backup_file")")
 
-      if [[ "$OUTPUT_FORMAT" == "raw" ]]; then
+      if [[ "$OUTPUT_MODE" == "raw" ]]; then
         local age_days=$(( ($(date +%s) - modified) / 86400 ))
         echo "  Old backup: $(basename "$backup_file") (${age_days} days old)"
       fi
@@ -460,7 +459,7 @@ section_retention() {
   done
   old_backups_json="$old_backups_json]"
 
-  if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
     log_json "{\"status\":\"success\",\"section\":\"retention\",\"message\":\"Retention check complete\",\"next_action\":\"display_summary\",\"timestamp\":\"$(date -Iseconds)\",\"total_backups\":$total_backups,\"old_backups\":$old_backups,\"retention_days\":$retention_days,\"old_backup_files\":$old_backups_json}"
   fi
 
@@ -478,7 +477,7 @@ Usage: $0 [OPTIONS]
 Database backup verification script.
 
 OPTIONS:
-  --json              Output in JSON format (default)
+  --json              Structured output (default; TOON for AI callers, JSON otherwise)
   --raw               Output in human-readable format with colors
 
   --full              Run all sections (config, list, verify, test-restore, retention)
@@ -524,12 +523,10 @@ main() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json)
-        OUTPUT_FORMAT="json"
         OUTPUT_MODE="json"
         shift
         ;;
       --raw)
-        OUTPUT_FORMAT="raw"
         OUTPUT_MODE="raw"
         shift
         ;;
@@ -599,7 +596,7 @@ main() {
   done
 
   # If we got here and using JSON, output final success
-  if [[ "$OUTPUT_FORMAT" == "json" ]] && [[ ${#SECTIONS[@]} -gt 1 ]]; then
+  if [[ "$OUTPUT_MODE" == "json" ]] && [[ ${#SECTIONS[@]} -gt 1 ]]; then
     exit_with_json "success" "All verification checks complete" "" "\"sections_run\":${#SECTIONS[@]}"
   fi
 }

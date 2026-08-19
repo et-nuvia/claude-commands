@@ -341,9 +341,17 @@ generate_summary() {
     local task_slug
     task_slug=$(echo "$TASK_TITLE" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/^-\|-$//' | cut -c1-40)
 
-    # Create summary document filename
-    SUMMARY_FILENAME="${TASK_ID}-${datetime}-SUM-${task_slug}.md"
-    SUMMARY_PATH="$(dirname "$task_doc")/${SUMMARY_FILENAME}"
+    # Resolve the SUM path via new-doc.sh — it anchors on the CURRENT worktree
+    # (find_docs_dir), so the doc is created here even when task_doc resolved
+    # to the main checkout via find_primary's fallback.
+    local doc_json
+    doc_json=$("${HOME}/.claude/scripts/new-doc.sh" --type SUM --description "${task_slug}" --id "$TASK_ID" --json 2>/dev/null || echo "")
+    SUMMARY_PATH=$(echo "$doc_json" | jq -r '.filepath // empty' 2>/dev/null || echo "")
+    if [[ -z "$SUMMARY_PATH" ]]; then
+        # Fallback: sibling of the TSK doc (pre-worktree behavior)
+        SUMMARY_PATH="$(dirname "$task_doc")/${TASK_ID}-${datetime}-SUM-${task_slug}.md"
+    fi
+    SUMMARY_FILENAME="$(basename "$SUMMARY_PATH")"
 
     # Generate summary document
     cat > "$SUMMARY_PATH" <<EOF
@@ -600,7 +608,7 @@ Task: ${TASK_TITLE}
 Status: ${STATUS}
 
 Summary Document: ${SUMMARY_FILENAME}
-Location: $(dirname "$TASK_DOC")/
+Location: $(dirname "$SUMMARY_PATH")/
 Summary Type: ${SUMMARY_TYPE}
 
 Timeline:

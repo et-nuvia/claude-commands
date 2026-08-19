@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -uo pipefail
 # tdd-precheck.sh — PreToolUse hook for TDD enforcement on Write tool calls.
 #
 # Per DSN 0C4B72:

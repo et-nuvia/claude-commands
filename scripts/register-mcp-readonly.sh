@@ -37,15 +37,7 @@ READ_ONLY_TOOLS=(
   "mcp__invoice-ninja__get_settings"
   "mcp__invoice-ninja__download_invoice"
 
-  # Asana - Read operations
-  "mcp__asana__list_workspaces"
-  "mcp__asana__list_projects"
-  "mcp__asana__list_tasks"
-  "mcp__asana__get_task"
-  "mcp__asana__get_current_user"
-  "mcp__asana__get_user"
-  "mcp__asana__search_tasks"
-  "mcp__asana__list_comments"
+  # Asana: retired MCP — replaced by ~/.claude/scripts/asana.sh shim
 
   # Bitwarden - Read operations (if MCP exists)
   "mcp__bitwarden__list_items"

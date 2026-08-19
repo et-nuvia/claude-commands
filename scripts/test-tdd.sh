@@ -271,7 +271,12 @@ run_full_workflow() {
     echo "=== Detecting Testing Framework ==="
   fi
 
-  local framework_result=$(OUTPUT_MODE=json detect_framework)
+  local framework_result
+  framework_result=$(OUTPUT_MODE=json detect_framework) || true
+  if [[ "$(echo "$framework_result" | jq -r '.status')" == "error" ]]; then
+    echo "$framework_result"
+    exit 1
+  fi
   local framework=$(echo "$framework_result" | jq -r '.framework')
 
   if [[ "$OUTPUT_MODE" == "raw" ]]; then
@@ -349,7 +354,7 @@ Usage: test-tdd.sh [OPTIONS]
 Generate failing tests for TDD workflow (RED phase)
 
 OPTIONS:
-  --json              Output in JSON format (default)
+  --json              Structured output (default; TOON for AI callers, JSON otherwise)
   --raw               Output in raw/verbose format
   --full              Run full workflow (detect + load context)
   --detect-framework  Only detect testing framework

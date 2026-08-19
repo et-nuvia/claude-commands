@@ -27,7 +27,7 @@ Analyze a code review, implementation plan, or task document and prepare
 structured data for implementing fixes.
 
 OPTIONS:
-  --json          Output JSON format (default)
+  --json          Structured output (default; TOON for AI callers, JSON otherwise)
   --raw           Output raw text format for debugging
   --full          Run full analysis (default)
   --parse         Parse document only (extract items)

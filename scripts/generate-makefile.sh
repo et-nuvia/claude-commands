@@ -215,6 +215,49 @@ generate_component_makefile() {
     fi
 }
 
+# Copy the runner scripts the generated Makefiles depend on into <output>/scripts/.
+# The canonical JSON test contract lives in these scripts (see makefile.md); the
+# Makefiles are thin and delegate all framework specifics here.
+TEMPLATE_SCRIPTS_DIR="${SCRIPT_DIR}/../templates/makefiles/scripts"
+
+generate_runner_scripts() {
+    local languages="$1"   # space-separated list, e.g. "python nodejs"
+    local dest="${OUTPUT_DIR}/scripts"
+
+    # Language-agnostic scripts always needed.
+    local scripts=(run-aggregate.sh init.sh)
+
+    # Per-language runner scripts.
+    case " $languages " in
+        *" python "*)  scripts+=(run-pytest.sh reset-test-db.sh) ;;
+    esac
+    case " $languages " in
+        *" nodejs "*)  scripts+=(run-jest.sh run-playwright.sh run-newman.sh) ;;
+    esac
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        print_info "Would copy runner scripts to ${dest}/: ${scripts[*]}"
+        return 0
+    fi
+
+    ensure_directory "$dest"
+    local s src out
+    for s in "${scripts[@]}"; do
+        src="${TEMPLATE_SCRIPTS_DIR}/${s}"
+        out="${dest}/${s}"
+        if [[ ! -f "$src" ]]; then
+            print_warning "Runner template missing: ${src} (skipped)"
+            continue
+        fi
+        if [[ -f "$out" && "$FORCE" != "true" ]]; then
+            confirm_overwrite "$out" || continue
+        fi
+        cp "$src" "$out"
+        chmod +x "$out"
+        print_success "Generated: $out"
+    done
+}
+
 generate_root_makefile() {
     local components=("$@")
 
@@ -340,6 +383,16 @@ for component in "${component_array[@]}"; do
     print_debug "Component: $name @ $path ($language)"
 done
 
+# Collect the set of languages across components (drives runner-script copy).
+LANGUAGES=""
+for component in "${component_array[@]}"; do
+    IFS=':' read -r name path language <<< "$component"
+    case " $LANGUAGES " in
+        *" $language "*) : ;;
+        *) LANGUAGES="${LANGUAGES}${language} " ;;
+    esac
+done
+
 # Generate component Makefiles
 if [[ "$ROOT_ONLY" != "true" ]]; then
     for component in "${component_array[@]}"; do
@@ -352,6 +405,10 @@ fi
 # Generate root Makefile
 print_info "Generating root Makefile"
 generate_root_makefile "${component_array[@]}"
+
+# Copy the runner scripts the Makefiles delegate to.
+print_info "Generating runner scripts"
+generate_runner_scripts "$LANGUAGES"
 
 if [[ "$DRY_RUN" != "true" ]]; then
     echo ""

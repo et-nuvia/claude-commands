@@ -7,7 +7,7 @@
 #   ~/.claude/scripts/project-context.sh [--json|--raw] [--full|--services|--routes|--frontend|--models]
 #
 # Output Modes:
-#   --json: Structured JSON output for LLM (default)
+#   --json: Structured output for LLM, default (TOON when the caller is an AI agent, JSON otherwise)
 #   --raw:  Verbose debugging output
 #
 # Sections:

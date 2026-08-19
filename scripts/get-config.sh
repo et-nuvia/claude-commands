@@ -64,6 +64,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/load-profile.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/load-profile.sh"
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 FIELD=""
@@ -130,7 +133,7 @@ yq_get() {
 }
 
 env_type() {
-  [[ "$(uname -s)" == "Darwin" ]] && echo "work" || echo "home"
+  profile_active_environment
 }
 
 # Returns: blue-green | standard | single | none
@@ -528,7 +531,13 @@ handle_app_name() {
 
 handle_secrets_backend() {
   local v; v=$(yq_get ".secrets.backend")
-  [[ -z "$v" ]] && { [[ "$(uname -s)" == "Darwin" ]] && echo "aws" || echo "infisical"; return; }
+  # PROJECT.yaml wins; otherwise the active profile's environment declares the
+  # backend. Never guess from the OS — which secrets manager a team uses is a
+  # policy choice, not a kernel capability.
+  if [[ -z "$v" ]]; then
+    v=$(profile_env_get .secrets.backend 2>/dev/null || true)
+    [[ -z "$v" || "$v" == "null" ]] && v="none"
+  fi
   echo "$v"
 }
 

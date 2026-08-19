@@ -24,6 +24,7 @@ Exit Codes:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -200,18 +201,28 @@ def process_schema_errors(
             seen_paths.add(full_path)
 
         elif validator == "additionalProperties":
-            extra = error.message.split("'")[1] if "'" in error.message else str(error.message)
-            full_path = f"{error_path}.{extra}" if error_path != "(root)" else extra
-            issues.append(
-                make_issue(
-                    "error",
-                    code,
-                    full_path,
-                    f"Unknown property: {extra}",
-                    fix=f"Remove: {full_path}",
+            # jsonschema reports every unknown key of an object in ONE message
+            # ("'a', 'b' were unexpected"), so taking only the first quoted name
+            # hid all but one per section — the rest looked schema-clean and got
+            # committed. Report each key as its own issue.
+            extras = re.findall(r"'([^']+)'", error.message)
+            if not extras:
+                extras = [str(error.message)]
+
+            for extra in extras:
+                full_path = f"{error_path}.{extra}" if error_path != "(root)" else extra
+                if full_path in seen_paths:
+                    continue
+                issues.append(
+                    make_issue(
+                        "error",
+                        code,
+                        full_path,
+                        f"Unknown property: {extra}",
+                        fix=f"Remove: {full_path}",
+                    )
                 )
-            )
-            seen_paths.add(full_path)
+                seen_paths.add(full_path)
 
         elif validator == "enum":
             allowed = error.schema.get("enum", [])
@@ -384,14 +395,14 @@ def runtime_checks(config: dict) -> list[dict[str, Any]]:
                 )
             )
     elif tm_backend == "gitlab":
-        token_path = Path.home() / ".gitlab-token"
+        token_path = Path.home() / ".secrets/gitlab-token"
         if not token_path.exists():
             issues.append(
                 make_issue(
                     "warning",
                     "TOKEN_NOT_FOUND",
                     "task_management.gitlab",
-                    "~/.gitlab-token not found",
+                    "~/.secrets/gitlab-token not found",
                     fix="Create token at GitLab settings",
                 )
             )

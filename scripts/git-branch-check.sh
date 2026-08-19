@@ -109,7 +109,7 @@ if [[ "$CHECK_CLEAN" == "true" ]]; then
 
   if [[ "$CURRENT_BRANCH" == "$BRANCH" ]]; then
     # Check for uncommitted changes
-    UNCOMMITTED_FILES=$(git status --porcelain | wc -l)
+    UNCOMMITTED_FILES=$(git status --porcelain | wc -l | tr -d ' ')
 
     if [[ $UNCOMMITTED_FILES -eq 0 ]]; then
       CHECKS_PASSED=$((CHECKS_PASSED + 1))

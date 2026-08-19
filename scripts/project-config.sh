@@ -68,7 +68,7 @@ detect_project_values() {
     [[ -f "docker-compose.yml" ]] && { local svc_array=(); while IFS= read -r svc; do [[ -n "$svc" ]] && svc_array+=("\"$svc\""); done < <(yaml_get_array '.services | keys' docker-compose.yml); [[ ${#svc_array[@]} -gt 0 ]] && services="[$(IFS=,; echo "${svc_array[*]}")]"; }
     local platform="gitlab" backend="infisical"
     git remote get-url origin 2>/dev/null | grep -q "github\.com" && platform="github"
-    [[ "$(uname -s)" == "Darwin" ]] && backend="aws"
+    env_is_work && backend="aws"
     echo "{\"name\":\"$name\",\"languages\":$languages,\"services\":$services,\"platform\":\"$platform\",\"backend\":\"$backend\"}"
 }
 

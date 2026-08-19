@@ -44,9 +44,14 @@ def validate_project_yaml(project_yaml_path: str, schema_path: str) -> tuple[boo
     if not errors:
         return True, []
 
-    # Extract paths from errors
+    # Extract paths from errors. Emit a human-readable reason per error to
+    # stderr (stdout stays the machine contract: "true" / "false\n<paths>").
+    # This makes backend-conditional failures legible — e.g. an aws-backend
+    # project that wrongly defines secrets.infisical, which the schema forbids
+    # via the secretsBackendAws conditional.
     invalid_paths = set()
     for error in errors:
+        path = '.root'
         # Build path from error.path (list of property names/indices)
         if error.path:
             path = '.' + '.'.join(str(p) for p in error.path)
@@ -56,8 +61,7 @@ def validate_project_yaml(project_yaml_path: str, schema_path: str) -> tuple[boo
             path = '.' + '.'.join(str(p) for p in error.absolute_path)
             invalid_paths.add(path)
 
-        # Debug: print error message to stderr (uncomment for debugging)
-        # print(f"DEBUG: {path}: {error.message}", file=sys.stderr)
+        print(f"{path}: {error.message}", file=sys.stderr)
 
     return False, sorted(invalid_paths)
 
