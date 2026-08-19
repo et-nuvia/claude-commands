@@ -3,6 +3,37 @@
 # Source this file for portable sed, date, and numfmt operations
 # Works on both macOS (Darwin) and Linux
 
+# Kernel/OS axis only — darwin | linux | wsl | unknown.
+#
+# This answers "what syntax and capabilities does this machine have"
+# (sed -i '', date -v, launchd vs systemd), NEVER "which environment am I
+# in". Policy — git host, registry, secrets backend, task tracker, deploy
+# method — is declared in the profile; read it via load-profile.sh, not here.
+__env_platform_cache=""
+env_platform() {
+    if [[ -n "$__env_platform_cache" ]]; then
+        printf '%s\n' "$__env_platform_cache"
+        return 0
+    fi
+    local kernel
+    kernel=$(uname -s 2>/dev/null || echo unknown)
+    case "$kernel" in
+        Darwin) __env_platform_cache="darwin" ;;
+        Linux)
+            # Both WSL1 and WSL2 stamp the marker into the kernel release
+            # string; /proc/version is the fallback for older builds.
+            if [[ "$(uname -r 2>/dev/null)" == *[Mm]icrosoft* ]] \
+               || grep -qi microsoft /proc/version 2>/dev/null; then
+                __env_platform_cache="wsl"
+            else
+                __env_platform_cache="linux"
+            fi
+            ;;
+        *) __env_platform_cache="unknown" ;;
+    esac
+    printf '%s\n' "$__env_platform_cache"
+}
+
 # Portable sed -i (macOS requires '' argument)
 # Usage: sedi 's/foo/bar/' file.txt
 sedi() {
