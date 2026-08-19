@@ -12,6 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/git-api.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/gh-runs.sh"
 
 PIPELINE_ID=""
 
@@ -31,7 +33,17 @@ if ! load_git_adapter; then
 fi
 
 if [[ -z "$PIPELINE_ID" ]]; then
-  PIPELINE_ID=$(git_pipeline_list --limit 1 | jq -r '.[0].id // empty')
+  # On GitHub, "the latest run" is whichever workflow happened to start last on
+  # this branch — often Dependabot or CodeQL rather than the run you mean.
+  # Prefer the newest run for HEAD's SHA, then fall back to the raw latest.
+  if [[ "$(git_adapter_name)" == "github" ]]; then
+    _sha=$(git rev-parse HEAD 2>/dev/null || echo '')
+    _branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')
+    PIPELINE_ID=$(gh_runs_fetch "$_branch" 50 \
+      | gh_runs_select "$_sha" "" "" \
+      | jq -r '.[0].databaseId // empty')
+  fi
+  [[ -z "$PIPELINE_ID" ]] && PIPELINE_ID=$(git_pipeline_list --limit 1 | jq -r '.[0].id // empty')
   if [[ -z "$PIPELINE_ID" ]]; then
     echo "Error: no recent pipelines found" >&2
     exit 1
