@@ -25,6 +25,7 @@ setup() {
 #### Task 1.1: [ ] [AC1] Create config file
 - **Description**: Create the config file.
 - **Files**: `config.yaml`
+- **Dependencies**: none
 - **Work Model**: Haiku
 - **Test Model**: n/a
 - **Complexity**: XS

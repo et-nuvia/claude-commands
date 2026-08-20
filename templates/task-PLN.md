@@ -34,6 +34,7 @@
 #### Task 1.1: [ ] [Task Title]
 - **Description**: [Detailed instructions for a junior developer. Explain patterns and design decisions.]
 - **Files**: `[path/to/file]`
+- **Dependencies**: [none | Task N.M | Phase N complete]
 - **Work Model**: [Opus/Sonnet/Haiku]
 - **Test Model**: [Opus/Sonnet/Haiku/n/a]
 - **Complexity**: [XS/S/M/L/XL]
@@ -48,6 +49,7 @@
 #### Task 1.2: [ ] [Task Title]
 - **Description**: [Instructions...]
 - **Files**: `[path/to/file]`
+- **Dependencies**: [none | Task N.M | Phase N complete]
 - **Work Model**: [Opus/Sonnet/Haiku]
 - **Test Model**: [Opus/Sonnet/Haiku/n/a]
 - **Complexity**: [Complexity]

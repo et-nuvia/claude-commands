@@ -63,6 +63,9 @@ teardown() {
 - **Auto Review**: yes
 - **Review Type**: two-stage
 - **Fresh Context**: yes
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -87,6 +90,9 @@ EOF
 #### Task 1.2: [ ] Next task
 - **Work Model**: Haiku
 - **Test Model**: Sonnet
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -111,6 +117,9 @@ EOF
 ### Phase 1: Work
 - [x] 1.1 Done item
 - [ ] 1.2 Next item
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -130,6 +139,9 @@ EOF
 
 ### Phase 1: Work
 - [ ] 1.1 Only item
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -163,6 +175,9 @@ sonnet
 ### Phase 1
 - [x] 1.1 Done
 - [ ] 1.2 Next item
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -187,6 +202,9 @@ sonnet
 ### Phase 1
 - [x] 1.1 Done
 - [ ] 1.2 Next item
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -217,6 +235,9 @@ sonnet
 #### Task 1.2: [ ] Next task
 - **Work Model**: Haiku
 - **Test Model**: Haiku
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -244,6 +265,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **Auto Review**: yes
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -266,6 +290,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **Auto Review**: no
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -286,6 +313,9 @@ EOF
 ### Phase 1: Work
 - [x] 1.1 Done item
 - [ ] 1.2 Next item
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -310,6 +340,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **TDD Required**: yes
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -330,6 +363,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **TDD Required**: no
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -350,6 +386,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **Work Model**: Sonnet
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -370,6 +409,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **TDD Required**: yes
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -394,6 +436,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **TDD Required**: yes
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -418,6 +463,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **TDD Required**: recommend
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
@@ -443,6 +491,9 @@ EOF
 
 #### Task 1.2: [ ] Next task
 - **TDD Required**: no
+
+## Progress & Lessons Learned
+
 EOF
 
     git add -A && git commit -q -m "add plan"
