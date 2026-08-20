@@ -83,12 +83,20 @@ detect_base_branch() {
 get_default_branch() {
     local override="${1:-}"
 
-    # Tier 1: Use override if provided and valid
+    # Tier 1: Use override if provided.
+    #
+    # An override that does not resolve is an ERROR, not a reason to fall
+    # through. The caller named a branch; quietly substituting a different one
+    # and returning 0 means a merge or deploy targets somewhere the caller
+    # never asked for, with nothing in the output to say so. Tiers 2+ exist to
+    # answer "which branch?" when nobody said — not to overrule someone who did.
     if [[ -n "$override" ]]; then
         if git rev-parse --verify "$override" &>/dev/null; then
             echo "$override"
             return 0
         fi
+        echo "get_default_branch: override branch '${override}' does not exist" >&2
+        return 1
     fi
 
     # Tier 2: PROJECT.yaml ci.branches.dev

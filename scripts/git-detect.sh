@@ -78,7 +78,17 @@ GIT_PROJECT_PATH=""
 
 case "$GIT_PLATFORM" in
     gitlab)
-        GIT_TOKEN_FILE="${HOME}/.secrets/gitlab-token"
+        # Where the token lives is a per-machine choice, so it comes from the
+        # profile (git.token_file) rather than being hardcoded here — one
+        # person's ~/.secrets/gitlab-token is another's ~/.gitlab-token, and
+        # baking either in silently sends every other machine to a path that
+        # does not exist. ~/.gitlab-token is the documented default.
+        GIT_TOKEN_FILE=""
+        if declare -f profile_env_get >/dev/null 2>&1; then
+            GIT_TOKEN_FILE=$(profile_env_get .git.token_file 2>/dev/null || true)
+        fi
+        [[ -z "$GIT_TOKEN_FILE" || "$GIT_TOKEN_FILE" == "null" ]] && GIT_TOKEN_FILE="${HOME}/.gitlab-token"
+        GIT_TOKEN_FILE="${GIT_TOKEN_FILE/#\~/$HOME}"
         GIT_API_URL="https://${GIT_INSTANCE}/api/v4"
         GIT_PROJECT_PATH=$(echo "$GIT_REPO" | sed 's|/|%2F|g')
         ;;
