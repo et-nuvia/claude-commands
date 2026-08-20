@@ -144,10 +144,58 @@ get_strategy() {
   # Auto-detect from structure
   local et
   et=$(env_type)
-  if   [[ -n "$(yq_get ".deployment.${et}.staging.active")" ]];       then echo "blue-green"
+  # Blue-green is detected from STRUCTURE (a blue/green pair, or the roving
+  # domain that fronts them), not from a stored `active:` key. A project that
+  # correctly lets DNS decide which side is live has no `active:` to find, and
+  # keying detection on it classified exactly those projects as "standard".
+  if   [[ -n "$(yq_get ".deployment.${et}.staging.blue.instance_id")" ]] \
+    || [[ -n "$(yq_get ".deployment.${et}.staging.roving_domain")" ]] \
+    || [[ -n "$(yq_get ".deployment.${et}.staging.active")" ]];       then echo "blue-green"
   elif [[ -n "$(yq_get ".deployment.${et}.staging.instance_id")" ]];  then echo "standard"
   elif [[ -n "$(yq_get ".deployment.${et}.server.instance_id")" ]];   then echo "single"
   else echo "none"
+  fi
+}
+
+# Which color is live, according to DNS.
+#
+# DNS IS THE SOURCE OF TRUTH for blue-green. A cutover repoints the roving
+# domain; nothing writes the result back into PROJECT.yaml, so a stored
+# `active:` key is only ever as fresh as the last person who remembered to
+# edit it. Reading it would hand callers a stale color after every cutover —
+# and the caller most likely to ask is a deploy, which would then target the
+# live side. lib/deployment-config.sh already resolves this way; this keeps
+# get-config.sh from being a second, disagreeing source of truth.
+#
+# Echoes "blue" or "green". Returns 1 when DNS cannot settle it (no dig, no
+# roving_domain, unconfigured IPs, resolution failure, or an address matching
+# neither color) so the caller can fall back and say so.
+#
+# Both layouts are accepted: this script's environment-scoped tree
+# (.deployment.<env_type>.<env>.*) and the flat one deployment-config.sh reads
+# (.deployment.<env>.*).
+dns_active_color() {
+  local et="$1" env="$2"
+  command -v dig >/dev/null 2>&1 || return 1
+
+  local roving blue_ip green_ip resolved
+  roving=$(yq_get ".deployment.${et}.${env}.roving_domain")
+  [[ -z "$roving" ]] && roving=$(yq_get ".deployment.${env}.roving_domain")
+  blue_ip=$(yq_get ".deployment.${et}.${env}.blue.public_ip")
+  [[ -z "$blue_ip" ]] && blue_ip=$(yq_get ".deployment.${env}.blue.public_ip")
+  green_ip=$(yq_get ".deployment.${et}.${env}.green.public_ip")
+  [[ -z "$green_ip" ]] && green_ip=$(yq_get ".deployment.${env}.green.public_ip")
+
+  [[ -z "$roving" || -z "$blue_ip" || -z "$green_ip" ]] && return 1
+
+  # Public resolver, so a local cache lagging a cutover cannot answer for us.
+  resolved=$(dig +short "$roving" @1.1.1.1 2>/dev/null \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -1)
+  [[ -z "$resolved" ]] && return 1
+
+  if   [[ "$resolved" == "$blue_ip" ]];  then echo "blue"
+  elif [[ "$resolved" == "$green_ip" ]]; then echo "green"
+  else return 1
   fi
 }
 
@@ -157,18 +205,30 @@ resolve_color() {
   [[ "$strat" != "blue-green" ]] && return  # color only matters for blue-green
   local et
   et=$(env_type)
+
   case "$COLOR" in
-    blue|green) echo "$COLOR" ;;
-    active)
-      local c
-      c=$(yq_get ".deployment.${et}.${ENV}.active")
-      [[ -z "$c" ]] && { echo "ERROR: deployment.$(env_type).${ENV}.active not set in $PROJECT_FILE" >&2; exit 1; }
-      echo "$c" ;;
-    inactive)
-      local a
-      a=$(yq_get ".deployment.${et}.${ENV}.active")
-      [[ -z "$a" ]] && { echo "ERROR: deployment.$(env_type).${ENV}.active not set in $PROJECT_FILE" >&2; exit 1; }
-      [[ "$a" == "green" ]] && echo "blue" || echo "green" ;;
+    blue|green) echo "$COLOR"; return ;;
+  esac
+
+  local live
+  if ! live=$(dns_active_color "$et" "$ENV"); then
+    # Fall back to the stored key ONLY so a project that has not configured
+    # roving_domain/public_ip still works. It is explicitly a fallback: name it
+    # as one, so a stale answer is never mistaken for a resolved one.
+    live=$(yq_get ".deployment.${et}.${ENV}.active")
+    [[ -z "$live" ]] && live=$(yq_get ".deployment.${ENV}.active")
+    if [[ -z "$live" ]]; then
+      echo "ERROR: cannot determine the active color for ${ENV}." >&2
+      echo "  DNS is the source of truth — set deployment.${ENV}.roving_domain plus" >&2
+      echo "  blue.public_ip and green.public_ip in $PROJECT_FILE (and install dig)." >&2
+      exit 1
+    fi
+    echo "WARN: DNS could not resolve the active color for ${ENV}; falling back to the stored deployment.${ENV}.active=${live}, which is only as current as the last manual edit" >&2
+  fi
+
+  case "$COLOR" in
+    active)   echo "$live" ;;
+    inactive) [[ "$live" == "green" ]] && echo "blue" || echo "green" ;;
   esac
 }
 

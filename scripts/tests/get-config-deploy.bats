@@ -20,12 +20,25 @@ SCRIPT="${BATS_TEST_DIRNAME}/../get-config.sh"
 setup() {
   TMPDIR="$(mktemp -d)"
 
-  # Determine platform key: env_type() returns "work" on Darwin, "home" on Linux
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    PLATFORM_KEY="work"
-  else
-    PLATFORM_KEY="home"
-  fi
+  # Pin the environment the fixtures are keyed by, via a real profile.
+  #
+  # env_type() used to infer this from `uname -s` (Darwin => work, else home),
+  # so the fixture inferred it too. It now reads the profile, because which
+  # environment you are in is declared rather than implied by the kernel.
+  #
+  # Declaring one here does two things: it keys the fixture the same way the
+  # script reads it, and — because CLAUDE_PROFILE is set — load_profile never
+  # falls back to the bundled example, so its "no active profile" warning stays
+  # off stderr. bats folds stderr into $output, so that warning would otherwise
+  # prefix every exact-output assertion in this file and fail it.
+  PLATFORM_KEY="testenv"
+  export CLAUDE_PROFILE="${TMPDIR}/profile.yaml"
+  cat > "$CLAUDE_PROFILE" << PROFILE
+active_environment: ${PLATFORM_KEY}
+environments:
+  ${PLATFORM_KEY}:
+    description: "get-config-deploy fixture"
+PROFILE
 
   # Wrap yq to always pass -r (raw output) so jq-wrapper yq (kislyuk/yq)
   # returns unquoted strings like mikefarah/yq does natively.
@@ -43,10 +56,29 @@ else
 fi
 WRAPPER
   chmod +x "${YQ_BIN}/yq"
+
+  # Stub dig so the active color is deterministic and both cutover states are
+  # exercised: staging resolves to green's public IP, production to blue's.
+  # Real DNS in a unit test would make these assertions depend on the network
+  # and on whoever last cut over.
+  cat > "${YQ_BIN}/dig" << 'DIGSTUB'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    stg.example.com)  echo "54.4.5.6";  exit 0 ;;   # staging  -> green
+    prod.example.com) echo "54.7.8.9";  exit 0 ;;   # production -> blue
+  esac
+done
+exit 0
+DIGSTUB
+  chmod +x "${YQ_BIN}/dig"
   export PATH="${YQ_BIN}:${PATH}"
 
   # ── Fixture: Blue-green (canonical) ──────────────────────────────────────
-  # staging: active=green  |  production: active=blue
+  # DNS decides which side is live, so the fixture declares a roving domain
+  # rather than an `active:` key. The stubbed dig below points staging's roving
+  # domain at green's public IP and production's at blue's — the states the old
+  # `active: green` / `active: blue` keys used to assert.
   # ip_access: private (default)  |  region: us-west-1 at top level
   F_BG="${TMPDIR}/blue-green.yaml"
   cat > "$F_BG" << EOF
@@ -58,7 +90,7 @@ deployment:
   ${PLATFORM_KEY}:
     staging:
       method: ssm
-      active: green
+      roving_domain: stg.example.com
       blue:
         instance_id: i-stg-blue
         private_ip: 172.16.1.10
@@ -72,7 +104,7 @@ deployment:
       containers: [frontend, backend]
     production:
       method: ssm
-      active: blue
+      roving_domain: prod.example.com
       blue:
         instance_id: i-prod-blue
         private_ip: 172.16.1.30
@@ -101,7 +133,7 @@ deployment:
   ${PLATFORM_KEY}:
     staging:
       method: ssm
-      active: green
+      roving_domain: stg.example.com
       region: eu-west-1
       blue:
         instance_id: i-stg-blue
@@ -115,7 +147,7 @@ deployment:
       containers: [frontend]
     production:
       method: ssm
-      active: blue
+      roving_domain: prod.example.com
       region: eu-west-1
       blue:
         instance_id: i-prod-blue
@@ -140,7 +172,7 @@ deployment:
   ${PLATFORM_KEY}:
     staging:
       method: ssm
-      active: green
+      roving_domain: stg.example.com
       blue:
         instance_id: i-stg-blue
         private_ip: 172.16.1.10
@@ -155,7 +187,7 @@ deployment:
       containers: [frontend]
     production:
       method: ssm
-      active: blue
+      roving_domain: prod.example.com
       blue:
         instance_id: i-prod-blue
         private_ip: 172.16.1.30
@@ -180,7 +212,7 @@ deployment:
   ${PLATFORM_KEY}:
     staging:
       method: ssm
-      active: green
+      roving_domain: stg.example.com
       blue:
         instance_id: i-stg-blue
         private_ip: 172.16.1.10
@@ -193,7 +225,7 @@ deployment:
       containers: [frontend]
     production:
       method: ssm
-      active: blue
+      roving_domain: prod.example.com
       blue:
         instance_id: i-prod-blue
         private_ip: 172.16.1.30
@@ -218,7 +250,7 @@ deployment:
   method: ssh
   ${PLATFORM_KEY}:
     staging:
-      active: green
+      roving_domain: stg.example.com
       blue:
         instance_id: i-stg-blue
         private_ip: 172.16.1.10
@@ -230,7 +262,7 @@ deployment:
       rds_host: staging.rds.example.com
       containers: [frontend]
     production:
-      active: blue
+      roving_domain: prod.example.com
       blue:
         instance_id: i-prod-blue
         private_ip: 172.16.1.30
@@ -757,10 +789,16 @@ teardown() {
 # STRATEGY AUTO-DETECTION (no explicit strategy field)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "auto-detect: has active field → blue-green" {
+@test "auto-detect: blue/green pair → blue-green, legacy active: still honored" {
+  # This fixture has no roving_domain, so DNS cannot answer and the stored
+  # `active:` key is used as a fallback. It must still resolve — a project that
+  # has not configured the roving domain should keep working — but it must SAY
+  # it fell back, because a stored color is only as fresh as the last hand edit.
   run "$SCRIPT" --deploy-instance --file "$F_AUTO_BG" --env staging
   [ "$status" -eq 0 ]
-  [ "$output" = "i-auto-stg-green" ]  # green is active → confirmed blue-green behavior
+  [[ "$output" == *"i-auto-stg-green" ]]
+  [[ "$output" == *"WARN"* ]]
+  [[ "$output" == *"falling back"* ]]
 }
 
 @test "auto-detect: has env-level instance_id → standard" {
