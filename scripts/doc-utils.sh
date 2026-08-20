@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 # Document utility functions for V4 naming convention (6-char hex Task IDs)
 # Source this file in command scripts: source ~/.claude/scripts/doc-utils.sh
 
-source "${HOME}/.claude/scripts/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 # Find project docs directory
 # Priority: 1) PROJECT.yaml docs_dir field  2) Auto-detect from directory structure

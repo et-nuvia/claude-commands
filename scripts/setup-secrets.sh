@@ -124,7 +124,7 @@ load_project_config() {
 
     # Auto-detect backend
     if [[ "$SECRETS_BACKEND" == "__MISSING__" || "$SECRETS_BACKEND" == "__INVALID__" || "$SECRETS_BACKEND" == "__BLANK__" ]]; then
-        source "${HOME}/.claude/scripts/lib/platform.sh"
+        source "${SCRIPT_DIR}/lib/platform.sh"
         if env_is_work; then
             SECRETS_BACKEND="aws"
         else

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 # macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
-source "${HOME}/.claude/scripts/lib/platform.sh"
+source "${SCRIPT_DIR}/lib/platform.sh"
 if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else

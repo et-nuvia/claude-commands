@@ -140,7 +140,7 @@ test_common_sh() {
   fi
 
   # Test 1.1.11: Works on current OS
-  source "${HOME}/.claude/scripts/lib/platform.sh"
+  source "${SCRIPT_DIR}/lib/platform.sh"
   if env_is_darwin || env_is_linux; then
     pass "Works on macOS or Linux (detected: $(env_platform))"
   else

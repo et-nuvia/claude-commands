@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 # Global document creation script for V4 naming convention
 # Format: <TASK_ID>-<DATETIME>-<TYPE>-<description>.md
 #
@@ -25,11 +27,11 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Source shared utilities
-source "${HOME}/.claude/scripts/common.sh"
-source "${HOME}/.claude/scripts/doc-utils.sh"
+source "${SCRIPT_DIR}/common.sh"
+source "${SCRIPT_DIR}/doc-utils.sh"
 
 # macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
-source "${HOME}/.claude/scripts/lib/platform.sh"
+source "${SCRIPT_DIR}/lib/platform.sh"
 if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else
@@ -142,7 +144,21 @@ EOF
             exit 0
             ;;
         *)
-            echo -e "${RED}Error: Unknown argument '$1'${NC}" >&2
+            # In --json mode the caller is a program parsing stdout, so an
+            # argument error has to arrive in the same shape as every other
+            # response. A colored plain-text line on stderr reads to that
+            # caller as "no output" rather than "you passed a bad flag".
+            #
+            # The flag may appear after the bad argument (`--full --json`), so
+            # scan the whole argv rather than trusting parse order.
+            for _a in "$@"; do
+                [[ "$_a" == "--json" || "$_a" == "--write-skeleton" ]] && OUTPUT_MODE="json"
+            done
+            if [[ "$OUTPUT_MODE" == "json" ]]; then
+                printf '{"status":"error","next_action":"fix_error","message":"Unknown argument: %s","details":"Run new-doc.sh --help for the supported flags"}\n' "$1"
+            else
+                echo -e "${RED}Error: Unknown argument '$1'${NC}" >&2
+            fi
             exit 1
             ;;
     esac

@@ -59,7 +59,7 @@ get_webhook_url() {
 
         if [[ -n "${bucket}" && "${bucket}" != "null" ]]; then
             # Fetch from secrets manager based on environment
-            source "${HOME}/.claude/scripts/lib/platform.sh"
+            source "${SCRIPT_DIR}/lib/platform.sh"
             if env_is_work; then
                 # AWS Secrets Manager (work)
                 local app_name
@@ -116,7 +116,7 @@ get_email_credentials() {
     bucket=$(get_email_config "secret_bucket")
     bucket="${bucket:-notifications}"
 
-    source "${HOME}/.claude/scripts/lib/platform.sh"
+    source "${SCRIPT_DIR}/lib/platform.sh"
     if env_is_work; then
         # AWS - credentials are implicit via IAM
         echo "aws"

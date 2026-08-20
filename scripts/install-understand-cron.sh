@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 # install-understand-cron.sh — idempotently register the understand-auto-update cron entry
 #
 # Default schedule: nightly at 3am local time.
@@ -39,7 +41,7 @@ done
 # installed. macOS cron is launchd-managed and always available, so only
 # check on Linux (WSL commonly ships cron installed but not started).
 check_cron_daemon() {
-    source "${HOME}/.claude/scripts/lib/platform.sh"
+    source "${SCRIPT_DIR}/lib/platform.sh"
     env_is_darwin && return 0
     if pgrep -x cron >/dev/null 2>&1 || pgrep -x crond >/dev/null 2>&1; then
         return 0

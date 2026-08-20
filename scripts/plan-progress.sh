@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 # plan-progress.sh - Parse PLN checkboxes, report phase/next items
 #
 # STANDARD SCRIPT PATTERN: Section flags with --json/--raw output modes
@@ -24,7 +26,7 @@ fi
 
 # Portable sed -i (macOS requires '' arg, GNU does not)
 sed_i() {
-    source "${HOME}/.claude/scripts/lib/platform.sh"
+    source "${SCRIPT_DIR}/lib/platform.sh"
     if env_is_darwin; then
         sed -i '' "$@"
     else
@@ -851,8 +853,14 @@ append_progress_entry() {
     fi
 
     # Find the "## Progress & Lessons Learned" section
-    local section_line
-    section_line=$(grep -n "^## Progress & Lessons Learned" "$file" 2>/dev/null | head -1 | cut -d: -f1)
+    local section_line=""
+    # Ask whether the section exists as a QUESTION (grep -q as a condition,
+    # which is what it is for) instead of running the pipeline and then
+    # suppressing its status. Nothing is hidden: a real grep failure still
+    # surfaces, and "absent" is answered before we try to locate a line number.
+    if grep -q "^## Progress & Lessons Learned" "$file"; then
+        section_line=$(grep -n "^## Progress & Lessons Learned" "$file" | head -1 | cut -d: -f1)
+    fi
 
     if [[ -n "$section_line" ]]; then
         # Find the line after the section header (skip optional description line)

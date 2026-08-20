@@ -34,6 +34,12 @@ env_platform() {
     printf '%s\n' "$__env_platform_cache"
 }
 
+env_is_darwin() { [[ "$(env_platform)" == "darwin" ]]; }
+env_is_wsl()    { [[ "$(env_platform)" == "wsl" ]]; }
+# Anything GNU-coreutils-shaped. Callers branching on sed/date/stat syntax want
+# THIS, not an equality test against "linux" that a WSL machine would fail.
+env_is_linux()  { local p; p=$(env_platform); [[ "$p" == "linux" || "$p" == "wsl" ]]; }
+
 # Portable sed -i (macOS requires '' argument)
 # Usage: sedi 's/foo/bar/' file.txt
 sedi() {

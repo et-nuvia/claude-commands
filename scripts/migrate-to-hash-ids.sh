@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 # migrate-to-hash-ids.sh
 # One-time migration: converts 4-digit seqnum documents to 6-char hash-based Task IDs
 # with date-based YYYY-MM subfolders.
@@ -15,7 +17,7 @@
 set -euo pipefail
 
 # Source shared utilities
-source "${HOME}/.claude/scripts/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 # Parse args
 DRY_RUN=false
@@ -47,7 +49,7 @@ echo "Git repo root: $REPO_ROOT"
 echo ""
 
 # macOS/BSD sed compatibility (PLATFORM axis — see lib/platform.sh)
-source "${HOME}/.claude/scripts/lib/platform.sh"
+source "${SCRIPT_DIR}/lib/platform.sh"
 if env_is_darwin; then
   sedi() { sed -i '' "$@"; }
 else

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_SD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-$_SD}"
 set -euo pipefail
 
 # update-index.sh - Regenerate DOCUMENT-INDEX.md in descending order
@@ -20,7 +22,7 @@ cd "$DOCS_DIR"
 [[ ! -d "docs" ]] && { echo "Error: docs/ directory not found"; exit 1; }
 
 # macOS/BSD compatibility (PLATFORM axis — see lib/platform.sh)
-source "${HOME}/.claude/scripts/lib/platform.sh"
+source "${SCRIPT_DIR}/lib/platform.sh"
 if env_is_darwin; then
     sedi() { sed -i '' "$@"; }
 else
