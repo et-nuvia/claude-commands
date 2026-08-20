@@ -44,9 +44,16 @@ echo ""
 
 # ── Strategy 1: uv run (handles all deps automatically) ──────────────────────
 if command -v uv &>/dev/null; then
+  # The dep list must cover what the modules UNDER TEST import, not just what
+  # pytest needs. validate-project.py declares jsonschema in its own `uv run`
+  # shebang, but the tests import it via importlib under plain pytest, so that
+  # shebang never runs and the dep has to be supplied here. Omitting it made
+  # both validate-project suites fail at COLLECTION — reported as an error, not
+  # a test failure, so the suite looked broken rather than red.
   exec uv run \
     --with pytest \
     --with pyyaml \
+    --with 'jsonschema[format]' \
     --quiet \
     python -m pytest \
     --tb=short \
@@ -76,6 +83,7 @@ fi
 MISSING=()
 "$PYTHON" -c "import pytest" &>/dev/null 2>&1 || MISSING+=("pytest")
 "$PYTHON" -c "import yaml" &>/dev/null 2>&1 || MISSING+=("pyyaml")
+"$PYTHON" -c "import jsonschema" &>/dev/null 2>&1 || MISSING+=("jsonschema[format]")
 
 if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo "Installing: ${MISSING[*]}..." >&2
