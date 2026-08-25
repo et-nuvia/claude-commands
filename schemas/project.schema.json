@@ -4,9 +4,18 @@
   "title": "PROJECT.yaml",
   "description": "Claude Code project configuration schema. Defines project identity, tech stack, testing, deployment, secrets, and integrations.",
   "type": "object",
-  "required": ["name", "testing", "secrets"],
+  "required": [
+    "name",
+    "testing",
+    "secrets"
+  ],
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "PROJECT.yaml schema version. Bump when a backwards-incompatible field shape change ships. Missing/1 = current shape; loaders should warn when this drifts from the latest known version so consumers can detect stale configs."
+    },
     "name": {
       "type": "string",
       "minLength": 1,
@@ -22,7 +31,10 @@
     },
     "version_source": {
       "type": "string",
-      "enum": ["git-tags", "file"],
+      "enum": [
+        "git-tags",
+        "file"
+      ],
       "description": "How version is determined. git-tags (recommended): derived from conventional commits. file: read from version_file"
     },
     "languages": {
@@ -63,7 +75,9 @@
           "description": "Praxis ProjectRegistry UUID; used by sync-feature-flags.sh to fetch the flag manifest."
         }
       },
-      "required": ["praxis_project_id"],
+      "required": [
+        "praxis_project_id"
+      ],
       "additionalProperties": false
     },
     "databases": {
@@ -94,32 +108,106 @@
     "commands": {
       "$ref": "#/$defs/commands"
     },
+    "security": {
+      "$ref": "#/$defs/security"
+    },
     "docs_dir": {
       "type": "string",
       "description": "Project documentation directory path relative to project root. Defaults to 'docs' if not set. Used by task management, doc utilities, and all scripts that create/read documentation.",
       "default": "docs",
-      "examples": ["docs", "documentation", "doc"]
+      "examples": [
+        "docs",
+        "documentation",
+        "doc"
+      ]
+    },
+    "sprint": {
+      "$ref": "#/$defs/sprintConfig"
     },
     "schema_sync": {
       "$ref": "#/$defs/schemaSync"
+    },
+    "release_notes": {
+      "$ref": "#/$defs/releaseNotes"
+    },
+    "binaries": {
+      "type": "array",
+      "description": "Opt-in: standalone binaries to build (linux/amd64) and attach to the GitLab release on a version tag. Omit the section to skip the binary stage entirely.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "builder_image",
+          "build",
+          "artifact"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Published asset filename, e.g. myapp-linux-x64"
+          },
+          "target": {
+            "type": "string",
+            "description": "Target platform (informational), e.g. linux-amd64"
+          },
+          "builder_image": {
+            "type": "string",
+            "description": "Docker image the binary is built inside"
+          },
+          "build": {
+            "type": "string",
+            "description": "Build command run inside builder_image at the repo root; must produce `artifact`"
+          },
+          "artifact": {
+            "type": "string",
+            "description": "Path to the built binary relative to repo root"
+          },
+          "self_update": {
+            "type": "boolean",
+            "default": false,
+            "description": "Binary supports `<bin> update` self-update from the GitLab release"
+          }
+        }
+      }
     }
   },
-
   "allOf": [
-    { "$ref": "#/$defs/conditionals/deploymentScript" },
-    { "$ref": "#/$defs/conditionals/deploymentSsh" },
-    { "$ref": "#/$defs/conditionals/deploymentSsm" },
-    { "$ref": "#/$defs/conditionals/taskManagementAsana" },
-    { "$ref": "#/$defs/conditionals/taskManagementGitlab" },
-    { "$ref": "#/$defs/conditionals/taskManagementTaskforge" },
-    { "$ref": "#/$defs/conditionals/infrastructureEnabled" }
+    {
+      "$ref": "#/$defs/conditionals/deploymentScript"
+    },
+    {
+      "$ref": "#/$defs/conditionals/deploymentSsh"
+    },
+    {
+      "$ref": "#/$defs/conditionals/deploymentSsm"
+    },
+    {
+      "$ref": "#/$defs/conditionals/deploymentAnsible"
+    },
+    {
+      "$ref": "#/$defs/conditionals/secretsBackendAws"
+    },
+    {
+      "$ref": "#/$defs/conditionals/taskManagementAsana"
+    },
+    {
+      "$ref": "#/$defs/conditionals/taskManagementGitlab"
+    },
+    {
+      "$ref": "#/$defs/conditionals/taskManagementTaskforge"
+    },
+    {
+      "$ref": "#/$defs/conditionals/infrastructureEnabled"
+    }
   ],
-
   "$defs": {
     "language": {
       "type": "object",
       "description": "A programming language used in the project",
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -137,11 +225,14 @@
         }
       }
     },
-
     "component": {
       "type": "object",
       "description": "A project component (service, module, or sub-project)",
-      "required": ["name", "path", "language"],
+      "required": [
+        "name",
+        "path",
+        "language"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -183,17 +274,321 @@
           "type": "string",
           "description": "Make target for pre-merge testing (e.g., test-backend-unit). If unset, falls back to test-{name}"
         },
+        "generated": {
+          "description": "Opt into generated-artifact drift gates for this component: committed files that are really derived copies of something else (an emitted client, a mirrored constant catalog, a bundled schema). Each entry runs its make target, which must regenerate and fail when the committed copy is stale. Generalises the openapi snapshot-drift leg; omit or set to false to skip. A list because one component routinely owns several independent artifacts, each needing its own reviewable failure.",
+          "oneOf": [
+            {
+              "const": false
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "check_target"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "description": "Slug identifying this gate; becomes the CI job-name fragment (e.g., rbac-scope-catalog). Must be unique within the component."
+                  },
+                  "check_target": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "description": "Make target that regenerates the artifact and exits non-zero when the committed copy differs (e.g., known-scopes-check). Run from the repo root, so a generator reading across component trees works unchanged."
+                  },
+                  "artifact": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*(^|/)\\.\\.($|/)).+$",
+                    "description": "The committed generated file, path relative to the repo root — documentation and reporting only; check_target owns the actual comparison. Still existence-validated, so a declaration that has drifted from the tree fails loudly."
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "secrets_manifest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Backend declaration source for the secrets-contract check: the secrets manifest, path relative to the repo root (e.g., backend/secrets-manifest.json). Omit to use <component path>/secrets-manifest.json."
+        },
+        "dockerfile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Frontend declaration source for the secrets-contract check: the Dockerfile whose ARG/ENV lines declare the build-arg surface, path relative to the repo root. Omit to use <component path>/Dockerfile."
+        },
+        "config_factory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "NestJS configuration factory used to resolve dotted configService.get() paths to env keys, path relative to the repo root. Omit to use <component path>/src/config/configuration.ts."
+        },
+        "flag_manifest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Declaration source for the feature-flags-contract check: the COMMITTED mirror of the Praxis flag manifest (the file `make sync-flags` writes and the flag registry imports), path relative to the repo root. Omit to use <component path>/feature-flags.json. The check reads only this committed file — it never calls Praxis or Unleash, so it needs no credential and behaves identically on a fork PR. A component that references no feature flags at all is asked for nothing: no manifest, no Unleash dependency, no wiring, and the check is clean. The moment one flag reference exists, the manifest must resolve and parse, the referenced key must be declared in it, and the consumer wiring must be present."
+        },
+        "scan_exclude": {
+          "type": "array",
+          "description": "Paths the secrets-contract check must NOT scan, as fnmatch globs against the component-relative path (note: * crosses directory separators). REPLACES the built-in default list wholesale rather than extending it, so the effective list is always exactly what is written here. Omit to use the defaults (test/spec trees plus build and container-runtime tooling entrypoints); set to [] to scan everything.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "conventional_keys": {
+          "type": "array",
+          "description": "Keys the framework or container runtime supplies for itself, exempt from R1 (referenced-but-undeclared) only — they are still judged by R2 and R3. REPLACES the built-in default list ([\"NODE_ENV\"]) wholesale. Set to [] to judge every key under R1.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "loader_accessors": {
+          "type": "array",
+          "description": "Generic secret/config ACCESSOR functions whose dynamic key argument is correct by construction (e.g. a getValue(key) doing process.env[key]) — the declaration obligation belongs to their callers, not to them, so the secrets-contract check does not report reads inside their bodies. Each entry is '<path glob>::<function name>', relative to the component path; the '::<function name>' half is required, because an entry naming only a file would exempt every read in it, which is scan_exclude's job. Call sites are never exempt: a caller passing a literal key is still fully judged.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^:]+::[A-Za-z_$][A-Za-z0-9_$]*$"
+          }
+        },
+        "extra_dockerfile_declarations": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An ADDITIONAL declaration source for this component: a Dockerfile whose ARG/ENV names count as declared alongside the component's primary source (a backend that bakes a key as an ENV in its own Dockerfile genuinely declares it), path relative to the repo root. Opt-in per component, never automatic, or any Dockerfile in the tree could quietly satisfy the manifest contract. Widens what may be REFERENCED (R1) only — unused names here are not the component's drift, so they never raise R5."
+        },
+        "cross_role_allow": {
+          "type": "array",
+          "description": "Keys excluded from the CROSS-ROLE comparison (R4) for this component. Two components legitimately having a same-named but unrelated key — a backend runtime PORT and a frontend build-arg PORT — is a naming collision, not the shared dependency R4 exists to catch. The key still falls through to R1, so it does not vanish from the report; pair it with conventional_keys if the platform supplies it.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "declared_exempt": {
+          "type": "array",
+          "description": "Keys this component may reference without declaring, because they are undeclarable by definition — a bootstrap selector such as SECRETS_ENVIRONMENT chooses WHICH manifest buckets to load, so it cannot live inside the manifest it selects. Exempt from every rule, like the tool's built-in platform-injected set (ENVIRONMENT, REGION, DEPLOYED_AT, DEPLOYMENT_COLOR), but declared per component so the exemption is visible in review rather than hidden in the tool.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "description": "THE authoritative coverage gate for this component: floor, the target that measures it, and which metrics the floor applies to. Declaring it here rather than project-wide is the whole point — a single project-wide floor is dragged down to the weakest component, so the floor then reads as a gate the strongest component no longer has, and each service must carry its own achieved level and ratchet independently. Prefer this block over the deprecated project-wide `testing.min_coverage` / `testing.coverage_command`, which remain only as a fallback for configs that declare no component coverage. The historical split — floor per component but ONE project-wide coverage command — is what made coverage hard to consume correctly: a single command emits one aggregate row per component and nothing said which row belonged to which floor, so consumers guessed (and got it wrong).",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Whether the coverage gate runs for this component (default: true). Set false to measure-and-report without failing the build — for a component whose suite exists but whose level is not yet defensible. Prefer this over setting min_coverage to 0, which reads as 'gated at zero' rather than 'deliberately not gated yet'."
+            },
+            "min_coverage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Minimum coverage percentage for this component, applied to the metrics named in `metrics`. Set it just under the component's actual achieved number so per-run variance does not flake the gate, and ratchet it up as coverage grows — never down to make a failing build pass."
+            },
+            "target": {
+              "type": "string",
+              "description": "Make target that measures THIS component's coverage (e.g. test-backend-cov). Defaults to `test-{name}-cov`. Declared per component so a consumer never has to attribute one project-wide command's output across several components — a component-scoped target emits exactly one aggregate row, which removes the ambiguity entirely. A consumer that needs one component's number (a task-scoped audit, for instance) should run this target rather than the project-wide command and then guess."
+            },
+            "metrics": {
+              "type": "array",
+              "description": "Which coverage metrics `min_coverage` actually gates (default: [\"lines\", \"statements\"], matching what the Jest threshold has historically enforced). Declared explicitly because the omission was actively misleading: a floor of 88 with only lines and statements gated says NOTHING about branch coverage, which can sit 13+ points lower while the gate reads green. If you want branches gated, name them here — and expect to set a lower floor, since branch coverage is almost always the thinnest metric.",
+              "items": {
+                "type": "string",
+                "enum": ["lines", "statements", "branches", "functions"]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        },
         "lint_target": {
           "type": "string",
           "description": "Make target for pre-merge linting (e.g., lint-backend). If unset, falls back to lint-{name}"
+        },
+        "typecheck_target": {
+          "type": "string",
+          "description": "Make target for the opt-in pre-merge typecheck leg (e.g., typecheck-backend). Omit to exclude this component from the typecheck job."
+        },
+        "lint_fast_target": {
+          "type": "string",
+          "description": "Make target for the opt-in fast-lint (oxlint) pre-pass (e.g., lint-fast-backend). Omit to exclude this component from the fast-lint job."
+        },
+        "setup_target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Opt-in make target run before this component's lint/test/typecheck legs to install its dependencies (e.g., setup-ai-ci). The pipeline only runs `make <target>`; which installer it drives (uv, poetry, pip, in-container) is the project's business. Omit when the component's targets self-bootstrap."
+        },
+        "openapi": {
+          "description": "Opt into the OpenAPI spec gates (snapshot-drift, Spectral quality lint, oasdiff breaking-change check) for this component. Omit or set to false to skip them entirely.",
+          "oneOf": [
+            {
+              "const": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "spec"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "spec": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(^|/)\\.\\.($|/)).+$",
+                  "description": "Committed spec snapshot, path relative to the repo root (e.g., backend/openapi.json). Must exist in the tree or CI fails loudly rather than skipping the gate."
+                },
+                "check_target": {
+                  "type": "string",
+                  "description": "Make target that regenerates the spec from code and fails when the committed snapshot is stale (e.g., openapi-check). Omit to skip the drift gate and keep only the quality/breaking-change checks."
+                },
+                "spectral_ruleset": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(^|/)\\.\\.($|/)).+$",
+                  "description": "Spectral ruleset path relative to the repo root (e.g., backend/.spectral.yaml). Omit to skip the quality lint."
+                },
+                "breaking_changes": {
+                  "type": "boolean",
+                  "description": "Run the oasdiff breaking-change check against the PR base branch (default: true). Pull requests only."
+                },
+                "breaking_fail_on": {
+                  "type": "string",
+                  "enum": [
+                    "ERR",
+                    "WARN",
+                    "INFO"
+                  ],
+                  "description": "oasdiff severity that fails the breaking-change check (default: ERR)."
+                },
+                "breaking_ignore": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(^|/)\\.\\.($|/)).+$",
+                  "description": "Path to an oasdiff err-ignore file, relative to the repo root (e.g., backend/.oasdiff-ignore). Forgives named breaking changes that are reviewed and intended, leaving the gate ERR-strict everywhere else. Omit to allow no exceptions."
+                }
+              }
+            }
+          ]
+        },
+        "integration": {
+          "description": "Opt into the database-backed integration suite (starts the declared service containers, optionally builds the schema, then runs the integration make target) for this component. Omit or set to false to skip it entirely — the job is not created at all, so no check appears on the PR.",
+          "type": [
+            "object",
+            "boolean"
+          ],
+          "not": {
+            "const": true
+          },
+          "required": [
+            "services"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "services": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Backing service containers started before the suite (e.g. a MySQL instance). At least one is required: an integration job with no service is just the unit suite under another name.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "image"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                    "description": "Container name, also the target of the health probe (e.g. mysql)."
+                  },
+                  "image": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Fully-qualified image reference including tag (e.g. mysql:8.0)."
+                  },
+                  "env": {
+                    "type": "object",
+                    "description": "Environment passed to the container — image bootstrap variables such as MYSQL_ROOT_PASSWORD / MYSQL_DATABASE. CI-only throwaway values, never real credentials.",
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    }
+                  },
+                  "ports": {
+                    "type": "array",
+                    "description": "Port mappings published to the runner as HOST:CONTAINER (e.g. 3306:3306) so the suite can reach the service on 127.0.0.1.",
+                    "items": {
+                      "type": [
+                        "string",
+                        "integer"
+                      ],
+                      "pattern": "^[0-9]+(:[0-9]+)?(/(tcp|udp))?$"
+                    }
+                  },
+                  "health_cmd": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Command run inside the container (via sh -c) until it succeeds, e.g. 'mysqladmin ping -h localhost -u root -p<pass>'. Omit to start the container without waiting."
+                  },
+                  "health_interval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Seconds between health probes (default: 5)."
+                  },
+                  "health_retries": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Probe attempts before the job fails (default: 30)."
+                  }
+                }
+              }
+            },
+            "setup_target": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Make target that builds the schema before the suite runs — e.g. one applying the full migration set. Omit when the suite creates its own schema."
+            },
+            "test_target": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Make target running the integration suite. If unset, falls back to test-{name}-integration."
+            },
+            "env": {
+              "type": "object",
+              "description": "Environment exported to the setup and test steps — how the suite is told where the service is (host, port, user, password, database). These names are project-specific, so they are declared here rather than assumed by the pipeline.",
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          }
         }
       }
     },
-
     "testing": {
       "type": "object",
       "description": "Testing configuration",
-      "required": ["command"],
+      "required": [
+        "command"
+      ],
       "additionalProperties": false,
       "properties": {
         "command": {
@@ -203,13 +598,13 @@
         },
         "coverage_command": {
           "type": "string",
-          "description": "Coverage report command (e.g., pytest --cov, npm run test:coverage)"
+          "description": "DEPRECATED — prefer `components[].coverage.target`. Project-wide coverage command (e.g., pytest --cov, npm run test:coverage). Retained as a fallback for single-component projects and for configs that declare no component coverage block. Do not use it in a multi-component project: it emits one aggregate row per component with nothing to attribute rows to floors, so a consumer wanting one component's number must guess. That guessing is a proven source of wrong verdicts — a consumer scraping the first percentage out of combined output once reported 1% for a project at 91%, having matched a URL-encoded path in a log line."
         },
         "min_coverage": {
           "type": "number",
           "minimum": 0,
           "maximum": 100,
-          "description": "Minimum coverage percentage (default: 80)"
+          "description": "DEPRECATED as a gate — prefer `components[].coverage.min_coverage`. Project-wide fallback floor (default: 80), inherited only by components that declare no `coverage:` block of their own. A single shared number is dragged down to the weakest component, which silently removes the gate from the strongest; per-component floors exist precisely to stop that. Consumers MUST resolve a component's floor from its own block first and fall back here only when it has none."
         },
         "e2e_command": {
           "type": "string",
@@ -231,10 +626,13 @@
         "server_e2e_command": {
           "type": "string",
           "description": "Server-side E2E test command"
+        },
+        "smoke_command": {
+          "type": "string",
+          "description": "Post-deploy smoke test command (e.g. make smoke). Read by the service-pipeline smoke stage / /test-smoke."
         }
       }
     },
-
     "docker": {
       "type": "object",
       "description": "Docker configuration",
@@ -252,12 +650,57 @@
           "type": "string",
           "description": "ECR namespace prefix for image repos (e.g., 'nuvia' -> nuvia/project/service)"
         },
+        "container_prefix": {
+          "type": "string",
+          "description": "Host container name prefix (host container = <prefix>-<service>, e.g. 'medclear' -> medclear-backend). Defaults to the top-level `name` when absent. Set this only when container names diverge from the project name; ECR repos, the Secrets Manager prefix, and the deploy path always follow `name`, not this field."
+        },
         "services": {
           "type": "array",
-          "description": "Expected Docker service names for health checks",
+          "description": "Expected Docker service names for health checks. For the service-pipeline component this is also the BUILT-image list the pipeline tags/pushes/rotates/deploys — list only services with a build: section (pulled images like postgres are excluded). CANONICAL form is an object per entry (`- name: backend`, optionally with `kind`); the bare-string form (`- backend`) remains valid for backward compatibility. Names are BARE Compose service names — the host container name is derived as `<container_name_prefix>-<service>` (see the sibling `container_name_prefix` field, which defaults to the top-level `name`), never declared here.",
           "items": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Bare Compose service name (e.g. 'backend')."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "application",
+                      "configured-third-party",
+                      "pure-third-party"
+                    ],
+                    "description": "What the service is: 'application' = built from this repo; 'configured-third-party' = an off-the-shelf image this project configures; 'pure-third-party' = an off-the-shelf image run as-is."
+                  }
+                }
+              }
+            ]
           }
+        },
+        "writable_paths": {
+          "type": "object",
+          "description": "Paths each container may write to under a read-only root filesystem — the tmpfs mounts declared in compose. Keyed by service, values are absolute container paths. Documentation of the hardening contract, so a reviewer can tell an intended writable path from an accidental one; no script consumes it today.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "keep_tags": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of rotated image tags to retain per environment (service-pipeline tag rotation; default 5)."
         },
         "registry": {
           "$ref": "#/$defs/dockerRegistry",
@@ -281,7 +724,6 @@
         }
       }
     },
-
     "dockerRegistry": {
       "type": "object",
       "description": "Docker registry configuration",
@@ -298,10 +740,14 @@
         "repo": {
           "type": "string",
           "description": "Repository name/path"
+        },
+        "repos": {
+          "type": "array",
+          "description": "Explicit ECR repository paths (host/tag stripped), e.g. [\"medical-clearance/backend\", \"medical-clearance/frontend\"]. Use for split (multiple) or combined (single) repo layouts. Overrides derived repo names.",
+          "items": { "type": "string" }
         }
       }
     },
-
     "dockerEnvironment": {
       "type": "object",
       "description": "Per-environment Docker overrides",
@@ -324,7 +770,6 @@
         }
       }
     },
-
     "gitConfig": {
       "type": "object",
       "description": "Git repository configuration",
@@ -332,7 +777,10 @@
       "properties": {
         "platform": {
           "type": "string",
-          "enum": ["github", "gitlab"],
+          "enum": [
+            "github",
+            "gitlab"
+          ],
           "description": "Git hosting platform"
         },
         "instance": {
@@ -349,7 +797,6 @@
         }
       }
     },
-
     "ciConfig": {
       "type": "object",
       "description": "CI/CD configuration",
@@ -357,7 +804,11 @@
       "properties": {
         "platform": {
           "type": "string",
-          "enum": ["github", "gitlab", ""],
+          "enum": [
+            "github",
+            "gitlab",
+            ""
+          ],
           "description": "CI/CD platform (auto-detected from git remote if empty)"
         },
         "branches": {
@@ -366,34 +817,208 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "secrets_contract": {
+          "type": "boolean",
+          "description": "Opt into the secrets-contract job, which checks every components[] entry's env/config references against its declaration source (backend secrets manifest, frontend Dockerfile build args) and fails on error-severity findings. Default false: adopting the pipeline must not silently start failing a gate the project has not yet cleaned up. Warnings are always rendered in the job summary regardless of this gate's effect on the exit code."
+        },
+        "flags_contract": {
+          "type": "boolean",
+          "description": "Opt into the flags-contract job, which extracts every feature-flag gate in each components[] entry (@RequireFlag / flagService.isEnabled, useFlag / FlagsContext, the Unleash Python SDK) and reconciles it against the project's flag manifest, failing on error-severity findings (F1 undeclared flag, F5 missing consumer wiring, and an unresolvable dynamic flag key). F2 (a route gate with no paired UI gate), F3 (a manifest flag nobody references) and F4 (a reference past the flag's remove_by date) are warnings: always rendered in the job summary, never affecting the exit code. Default false: adopting the pipeline must not silently start failing a gate the project has not yet reconciled. Requires no secret -- the scan is source-level and never calls Praxis or Unleash, so it also runs on fork PRs."
+        },
+        "workflows": {
+          "type": "object",
+          "description": "Environment-to-workflow mapping: which CI workflow actually gates each environment. Keyed by the same roles as `branches` (dev/staging/production) — `branches` says which branch deploys an environment, `workflows` says which workflow's result decides whether that deploy passed. Values are unanchored case-insensitive regexes matched against the workflow name, so anchor them (^Deploy to Production$) unless a substring match is intended. Set this whenever a commit triggers more than one workflow: without it, monitor-pipeline.sh falls back to excluding `ignore_workflows`, and with neither configured a deploy can be judged by whichever unrelated workflow finished first.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "ignore_workflows": {
+          "type": "array",
+          "description": "Workflow names that run on the same commit as a deploy but say nothing about it (Dependabot, CodeQL, pages builds). Unanchored case-insensitive regexes. Only consulted when no `workflows` entry matches the branch being watched; prefer naming the gating workflow in `workflows` over blacklisting noise here, since a new noise workflow silently rejoins the watch set. Defaults to a built-in list when unset.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verify_readonly": {
+          "type": "boolean",
+          "description": "Opt-in gate that asserts every service in the caller's docker-compose.yml runs read_only with tmpfs mounts and no-new-privileges. Defaults to false/absent: the verify-readonly reusable workflow resolves this into an empty matrix when unset, so the job does not exist for repos that never opted in (no new required check)."
+        },
+        "npm_install_root": {
+          "type": "string",
+          "description": "Directory (relative to the repository root) in which to run `npm ci` for a JS/TS component that commits no lockfile of its own. Set it for npm-workspaces repos, which commit ONE lockfile at the root and keep workspace overrides in the root package.json: without it those components get a Node runtime with no node_modules and every `npm run ...` leg fails. Omitted (the default), each component installs from its own package-lock.json exactly as before. Distinct from `security.sca.npm_install_root`, which governs only where the dependency AUDIT resolves its tree — a repo may audit at the root while its components install per-component, so the two are not merged.",
+          "examples": [
+            ".",
+            "frontend"
+          ]
+        },
+        "commit_validation": {
+          "type": "boolean",
+          "description": "Opt-in gate that enforces Conventional Commits subjects on every commit in the PR/push range. Defaults to false/absent: the commit-validation job in lint.yml resolves this into an empty matrix when unset, so the job does not exist for repos that never opted in (no new required check)."
+        },
+        "commit_validation_types": {
+          "type": "array",
+          "description": "Allowed Conventional Commit type prefixes for the commit_validation gate. Defaults to [feat, fix, perf, refactor, docs, style, test, build, ci, chore] when unset.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "extra_gates": {
+          "type": "array",
+          "description": "Repo-level gates that are just `make <target>`, for consumer-specific checks the shared pipeline cannot model generically (a fixture-copy equality assertion, a bats suite over the repo's own CI scripts). Absent or empty: the extra-gates job in lint.yml resolves this into an empty matrix, so the job does not exist for repos that never opted in (no new required check). The check itself stays defined in the consumer's Makefile so it can be run locally; only the requirement that CI run it lives here.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "target"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Label for this gate, shown in the job's matrix leg."
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "description": "Make target to run at the repo root. Restricted to a plain target name so it can never be read as a flag, a path or a shell word."
+              },
+              "apt_packages": {
+                "type": "array",
+                "description": "Packages to apt-get install before running the target, for tooling the runner image lacks (bats is not preinstalled on ubuntu-latest, and a Makefile that skips its specs when the binary is missing passes vacuously). Plain Debian package names only — version pins, paths and shell metacharacters are refused, because this installs software as root on the runner.",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9+.-]+$"
+                }
+              }
+            }
+          }
+        },
+        "pre_merge_verify": {
+          "type": "boolean",
+          "description": "Opt-in gate in deploy-production.yml that confirms the most recent deploy-staging.yml run on the staging branch succeeded before promoting to production. Defaults to false/absent: the pre-merge-verify job resolves this into an empty matrix when unset, so the job does not exist for repos that never opted in (no new required check). Skippable per-run via the workflow_call `force` input (threaded from the caller's own workflow_dispatch) for true emergencies."
         }
       }
     },
-
     "secrets": {
       "type": "object",
       "description": "Secrets management configuration",
-      "required": ["backend"],
+      "required": [
+        "backend"
+      ],
       "additionalProperties": false,
       "properties": {
         "backend": {
           "type": "string",
-          "enum": ["aws", "infisical"],
+          "enum": [
+            "aws",
+            "infisical"
+          ],
           "description": "Secrets backend (aws for macOS/work, infisical for Linux/home)"
         },
         "required": {
           "type": "array",
-          "description": "Secret bucket names this project uses",
+          "description": "Secret bucket names this project uses (loaded fail-fast at startup)",
           "items": {
             "type": "string"
           }
+        },
+        "optional": {
+          "type": "array",
+          "description": "Secret bucket names enumerated in the manifest but tolerated if absent at startup (promoted to required as they populate).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "manifest": {
+          "type": "string",
+          "description": "Path to the secrets manifest file (e.g. backend/secrets.manifest.yaml) that is the machine-read source of truth for every key per bucket and the required/optional split."
+        },
+        "infisical": {
+          "$ref": "#/$defs/secretsInfisical"
         },
         "refresh": {
           "$ref": "#/$defs/secretsRefresh"
         }
       }
     },
-
+    "secretsInfisical": {
+      "type": "object",
+      "description": "Infisical-specific project identity (backend=infisical). Optional; bare backend+required is valid when url/project_id come from ~/.secrets bootstrap files or global config.",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Infisical instance URL (e.g., https://secrets.turnersrus.com)"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Infisical project UUID"
+        },
+        "slug": {
+          "type": "string",
+          "description": "Infisical project slug (human-readable identifier)"
+        },
+        "environment": {
+          "type": "string",
+          "description": "Default Infisical environment scope to read at deploy/runtime (e.g., prod, staging, dev). Default: prod"
+        },
+        "secret_files": {
+          "type": "array",
+          "description": "Infisical keys materialized as Docker secret FILES at ${SECRETS_PATH}/ on deploy (for containers that can't self-fetch, e.g. postgres). Fail-fast if a key is missing.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "file"
+            ],
+            "properties": {
+              "folder": {
+                "type": "string",
+                "default": "/"
+              },
+              "key": {
+                "type": "string",
+                "description": "Infisical secret key"
+              },
+              "file": {
+                "type": "string",
+                "description": "Docker secret filename written under ${SECRETS_PATH}/"
+              }
+            }
+          }
+        },
+        "deploy_env": {
+          "type": "array",
+          "description": "Deploy-time secret injection for third-party service images (e.g. an uptime-kuma sidecar) that read plain env vars and cannot self-fetch from Infisical. The deploy job pulls these folders/keys and writes them into the host .env. App services that self-fetch at runtime do NOT need this.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "folder",
+              "keys"
+            ],
+            "properties": {
+              "folder": {
+                "type": "string",
+                "description": "Infisical secret folder/path (e.g., /kuma)"
+              },
+              "keys": {
+                "type": "array",
+                "minItems": 1,
+                "description": "Secret key names to fetch from the folder and write to .env",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "secretsRefresh": {
       "type": "object",
       "description": "Automatic secret refresh configuration",
@@ -417,7 +1042,6 @@
         }
       }
     },
-
     "secretsRefreshStrategy": {
       "type": "object",
       "description": "Framework-specific secret refresh strategy",
@@ -425,7 +1049,10 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["inline", "file"],
+          "enum": [
+            "inline",
+            "file"
+          ],
           "description": "Refresh type: inline (memory) or file (env file rewrite)"
         },
         "cache_driver": {
@@ -453,11 +1080,13 @@
         }
       }
     },
-
     "database": {
       "type": "object",
       "description": "Database configuration",
-      "required": ["name", "type"],
+      "required": [
+        "name",
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -467,7 +1096,14 @@
         },
         "type": {
           "type": "string",
-          "enum": ["postgresql", "mysql", "mongodb", "redis", "minio", "sqlite"],
+          "enum": [
+            "postgresql",
+            "mysql",
+            "mongodb",
+            "redis",
+            "minio",
+            "sqlite"
+          ],
           "description": "Database type"
         },
         "engine_version": {
@@ -504,11 +1140,21 @@
       "allOf": [
         {
           "if": {
-            "properties": { "type": { "const": "sqlite" } },
-            "required": ["type"]
+            "properties": {
+              "type": {
+                "const": "sqlite"
+              }
+            },
+            "required": [
+              "type"
+            ]
           },
           "then": {
-            "required": ["name", "type", "file"],
+            "required": [
+              "name",
+              "type",
+              "file"
+            ],
             "properties": {
               "users": false
             }
@@ -519,23 +1165,32 @@
             "properties": {
               "migrations": {
                 "type": "object",
-                "properties": { "enabled": { "const": true } },
-                "required": ["enabled"]
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
               }
             },
-            "required": ["migrations"]
+            "required": [
+              "migrations"
+            ]
           },
           "then": {
             "properties": {
               "migrations": {
-                "required": ["enabled"]
+                "required": [
+                  "enabled"
+                ]
               }
             }
           }
         }
       ]
     },
-
     "databaseUser": {
       "type": "object",
       "description": "Database user credentials reference",
@@ -554,19 +1209,25 @@
         }
       }
     },
-
     "databaseMigrations": {
       "type": "object",
-      "description": "Database migration configuration. The per-DB runtime details (tool, path, command) are encoded as conventions in the project (e.g., typeorm.config.<db-name>.prod.js) — this schema only tracks the on/off flag.",
+      "description": "Per-database migration configuration. Each database owns its migration tool + directory so multi-DB projects keep migrations isolated and run them independently.",
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean",
           "description": "Whether migrations are enabled for this database"
+        },
+        "tool": {
+          "type": "string",
+          "description": "Migration tool for this database (e.g. typeorm, prisma, alembic, flyway, knex)"
+        },
+        "directory": {
+          "type": "string",
+          "description": "Path to this database's migration files (isolated per database)"
         }
       }
     },
-
     "deployment": {
       "type": "object",
       "description": "Deployment configuration",
@@ -574,17 +1235,41 @@
       "properties": {
         "method": {
           "type": "string",
-          "enum": ["script", "ssh", "ssm", "pipeline", ""],
-          "description": "Deployment method: pipeline (CI/CD), script (local), ssh (direct), ssm (AWS Systems Manager)"
+          "enum": [
+            "script",
+            "ssh",
+            "ssm",
+            "pipeline",
+            "ansible",
+            ""
+          ],
+          "description": "Deployment method: pipeline (CI/CD), script (local), ssh (direct), ssm (AWS Systems Manager), ansible (operator runs playbooks against inventory)"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "ssm",
+            "ssh"
+          ],
+          "description": "How deploy commands reach the target host: ssm (AWS Systems Manager, implemented) or ssh (declared, deferred). Independent of `method`, which describes orchestration. Defaults to ssm, or is derived from `method` when unset."
         },
         "strategy": {
           "type": "string",
-          "enum": ["blue-green", "staging-production", "prod-only", "none"],
-          "description": "Deployment strategy. blue-green: deploy to inactive color and swap. staging-production: promote through staging first. prod-only: deploy directly to production. none: no deployment configured"
+          "enum": [
+            "blue-green",
+            "staging-production",
+            "prod-only",
+            "none",
+            "operator-driven"
+          ],
+          "description": "Deployment strategy. blue-green: deploy to inactive color and swap. staging-production: promote through staging first. prod-only: deploy directly to production. operator-driven: operator runs playbooks/scripts on demand (no pipeline). none: no deployment configured"
         },
         "active": {
           "type": "string",
-          "enum": ["blue", "green"],
+          "enum": [
+            "blue",
+            "green"
+          ],
           "description": "Currently active color for blue-green deployments. Deployments target the inactive color"
         },
         "region": {
@@ -599,11 +1284,20 @@
           "type": "string",
           "description": "Version endpoint path (default: /api/version)"
         },
+        "extra_paths": {
+          "type": "array",
+          "description": "Files/dirs (relative to repo root) the deploy job ships to the target alongside docker-compose.yml \u2014 e.g. a config/ directory mounted as a volume. Never includes docker-compose.override.yml (local-dev only).",
+          "items": {
+            "type": "string"
+          }
+        },
         "cloudflare": {
           "type": "object",
           "description": "Cloudflare DNS settings (used by dns-cutover.sh for blue/green DNS switching)",
           "additionalProperties": false,
-          "required": ["zone_id"],
+          "required": [
+            "zone_id"
+          ],
           "properties": {
             "zone_id": {
               "type": "string",
@@ -618,9 +1312,106 @@
         "scripts": {
           "$ref": "#/$defs/deploymentScripts"
         },
+        "migrate": {
+          "type": "object",
+          "description": "Optional out-of-band migration one-shot the deploy job runs before bringing services up (service-pipeline deploy.sh runs `docker compose run --rm -T [-e K=V ...] <service> [command]`). Prefer running the APP service with an env gate (e.g. MIGRATE_ONLY=true) over a dedicated migrate service/container — the wiki ci-cd-pipeline.md forbids an idle migrate container in the stack.",
+          "additionalProperties": false,
+          "properties": {
+            "service": {
+              "type": "string",
+              "description": "Compose service the migration runs in (typically the app/backend service, gated by an env var below — NOT a dedicated standing migrate service)."
+            },
+            "env": {
+              "type": "object",
+              "description": "Environment variables injected into the one-shot migrate run (e.g. {MIGRATE_ONLY: \"true\"}). Used to trigger the app image's entrypoint migration gate without a dedicated service.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "command": {
+              "type": "string",
+              "description": "Optional migration command run in that service (e.g. `prisma migrate deploy`, `alembic upgrade head`). Omit when an env gate (above) drives the migration via the entrypoint."
+            }
+          }
+        },
+        "ansible": {
+          "type": "object",
+          "description": "Ansible deployment configuration (for method=ansible). Used when an operator runs playbooks from this repo against inventory hosts to deploy code (no CI/CD pipeline).",
+          "additionalProperties": false,
+          "properties": {
+            "playbooks_dir": {
+              "type": "string",
+              "description": "Directory containing playbooks, relative to repo root (e.g., 'ansible/playbooks')"
+            },
+            "inventory_dir": {
+              "type": "string",
+              "description": "Directory or file path for inventory, relative to repo root (e.g., 'ansible/inventory')"
+            },
+            "default_inventory": {
+              "type": "string",
+              "description": "Default inventory file or group to use when none specified"
+            },
+            "config": {
+              "type": "string",
+              "description": "Path to ansible.cfg, relative to repo root"
+            },
+            "vault_password_file": {
+              "type": "string",
+              "description": "Path to Ansible Vault password file (do NOT commit; reference path only)"
+            },
+            "deploys": {
+              "type": "array",
+              "description": "Named playbook-driven deploy targets. Each entry describes one fix-and-deploy workflow (often targeting a sibling repo's code).",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "playbook"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short identifier (e.g., 'dashboard', 'sms-worker')"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "What this deploy does and which source repo it ships"
+                  },
+                  "playbook": {
+                    "type": "string",
+                    "description": "Playbook path, relative to playbooks_dir or repo root"
+                  },
+                  "inventory": {
+                    "type": "string",
+                    "description": "Inventory file or group (overrides default_inventory)"
+                  },
+                  "limit": {
+                    "type": "string",
+                    "description": "Ansible host pattern (--limit)"
+                  },
+                  "source_repo": {
+                    "type": "string",
+                    "description": "Path or URL of the source code repo this deploy ships (e.g., '~/projects/txtwire/dashboard')"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Ansible tags to pass with --tags"
+                  }
+                }
+              }
+            }
+          }
+        },
         "ip_access": {
           "type": "string",
-          "enum": ["private", "public"],
+          "enum": [
+            "private",
+            "public"
+          ],
           "description": "Whether agents use private or public IPs to reach instances (private = inside VPC)"
         },
         "development": {
@@ -643,7 +1434,6 @@
         }
       }
     },
-
     "deploymentScripts": {
       "type": "object",
       "description": "Deployment script paths",
@@ -667,7 +1457,6 @@
         }
       }
     },
-
     "deploymentEnvironment": {
       "type": "object",
       "description": "Per-environment deployment configuration",
@@ -675,8 +1464,35 @@
       "properties": {
         "method": {
           "type": "string",
-          "enum": ["script", "ssh", "ssm", "pipeline", ""],
+          "enum": [
+            "script",
+            "ssh",
+            "ssm",
+            "pipeline",
+            "ansible",
+            ""
+          ],
           "description": "Per-environment method override"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "ssm",
+            "ssh"
+          ],
+          "description": "Per-environment transport override (ssm | ssh)"
+        },
+        "playbook": {
+          "type": "string",
+          "description": "Playbook path for this environment (for method=ansible)"
+        },
+        "inventory": {
+          "type": "string",
+          "description": "Inventory file or group for this environment (for method=ansible)"
+        },
+        "limit": {
+          "type": "string",
+          "description": "Ansible host pattern to limit play to (for method=ansible)"
         },
         "url": {
           "type": "string",
@@ -732,7 +1548,11 @@
         },
         "nginx_ssl_domain": {
           "type": "string",
-          "description": "SSL certificate domain for nginx configuration"
+          "description": "SSL certificate domain for nginx configuration (per-env server_name FQDN)"
+        },
+        "nginx_ssl_cert_name": {
+          "type": "string",
+          "description": "On-disk cert lineage dir under /etc/letsencrypt/live/. Defaults to nginx_ssl_domain; set explicitly for a wildcard cert whose lineage differs from the per-env FQDN (e.g. nuviasmiles.com)"
         },
         "nginx_server_name": {
           "type": "string",
@@ -745,7 +1565,9 @@
         "containers": {
           "type": "array",
           "description": "Container names expected in this environment",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "blue": {
           "$ref": "#/$defs/blueGreenInstance",
@@ -757,7 +1579,6 @@
         }
       }
     },
-
     "blueGreenInstance": {
       "type": "object",
       "description": "Instance configuration for one side of a blue-green deployment",
@@ -786,11 +1607,16 @@
         "url": {
           "type": "string",
           "description": "Direct URL for this instance (for health checks before swap)"
+        },
+        "nginx_ssl_cert_name": {
+          "type": "string",
+          "description": "On-disk cert lineage dir under /etc/letsencrypt/live/ for this color. Defaults to this color's domain; set explicitly when the lineage differs from the per-color FQDN. Takes precedence over deployment.<env>.nginx_ssl_cert_name"
         }
       },
-      "required": ["instance_id"]
+      "required": [
+        "instance_id"
+      ]
     },
-
     "deploymentNested": {
       "type": "object",
       "description": "Nested deployment config (work/home pattern)",
@@ -804,7 +1630,6 @@
         }
       }
     },
-
     "deploymentNestedEnvironment": {
       "type": "object",
       "description": "Nested per-environment deployment configuration",
@@ -812,7 +1637,15 @@
       "properties": {
         "method": {
           "type": "string",
-          "enum": ["script", "ssh", "ssm", "pipeline", "cloud-run", ""],
+          "enum": [
+            "script",
+            "ssh",
+            "ssm",
+            "pipeline",
+            "cloud-run",
+            "ansible",
+            ""
+          ],
           "description": "Deployment method for this environment"
         },
         "target": {
@@ -841,7 +1674,6 @@
         }
       }
     },
-
     "smokeTests": {
       "type": "object",
       "description": "Smoke test configuration for post-deployment validation",
@@ -850,43 +1682,62 @@
         "public_endpoints": {
           "type": "array",
           "description": "Endpoints that must be accessible from public IPs (legacy shape)",
-          "items": { "$ref": "#/$defs/smokeTestEndpoint" }
+          "items": {
+            "$ref": "#/$defs/smokeTestEndpoint"
+          }
         },
         "private_endpoints": {
           "type": "array",
           "description": "Endpoints restricted to private IPs only (legacy shape)",
-          "items": { "$ref": "#/$defs/smokeTestEndpoint" }
+          "items": {
+            "$ref": "#/$defs/smokeTestEndpoint"
+          }
         },
         "containers": {
           "type": "array",
           "description": "Docker container names that must report healthy",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "endpoints": {
           "type": "array",
           "description": "Health/API endpoints checked via docker exec (--server mode)",
-          "items": { "$ref": "#/$defs/dockerExecEndpoint" }
+          "items": {
+            "$ref": "#/$defs/dockerExecEndpoint"
+          }
         },
         "external_endpoints": {
           "type": "array",
           "description": "Endpoints checked from CI via domain (--full mode)",
-          "items": { "$ref": "#/$defs/externalEndpoint" }
+          "items": {
+            "$ref": "#/$defs/externalEndpoint"
+          }
         },
         "browser_tests": {
           "type": "object",
           "description": "Browser smoke tests (Playwright). Pipeline reads mode and runs accordingly.",
           "additionalProperties": false,
-          "required": ["mode"],
+          "required": [
+            "mode"
+          ],
           "properties": {
             "mode": {
               "type": "string",
-              "enum": ["disabled", "smoke", "list", "all"],
+              "enum": [
+                "disabled",
+                "smoke",
+                "list",
+                "all"
+              ],
               "description": "disabled: skip all. smoke: run frontend/e2e/smoke/. list: run only specs listed below. all: run frontend/e2e/."
             },
             "specs": {
               "type": "array",
               "description": "Spec paths to run (used only when mode: list)",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             }
           }
         },
@@ -907,50 +1758,108 @@
         }
       }
     },
-
     "dockerExecEndpoint": {
       "type": "object",
       "description": "Endpoint checked from inside the Docker network via docker exec",
-      "required": ["name", "container", "url"],
+      "required": [
+        "name",
+        "container",
+        "url"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "container": { "type": "string", "description": "Docker container to exec into" },
-        "url": { "type": "string", "description": "URL to fetch from inside the container (typically 127.0.0.1:port)" },
-        "type": { "type": "string", "enum": ["json", "html"] },
-        "runtime": { "type": "string", "enum": ["node", "python"], "description": "Runtime used to execute the curl-equivalent inside the container" },
-        "expect": { "$ref": "#/$defs/smokeExpect" },
-        "severity": { "type": "string", "enum": ["error", "warning"], "description": "warning: failure logged but doesn't fail the smoke test" }
+        "name": {
+          "type": "string"
+        },
+        "container": {
+          "type": "string",
+          "description": "Docker container to exec into"
+        },
+        "url": {
+          "type": "string",
+          "description": "URL to fetch from inside the container (typically 127.0.0.1:port)"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "json",
+            "html"
+          ]
+        },
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "node",
+            "python"
+          ],
+          "description": "Runtime used to execute the curl-equivalent inside the container"
+        },
+        "expect": {
+          "$ref": "#/$defs/smokeExpect"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "description": "warning: failure logged but doesn't fail the smoke test"
+        }
       }
     },
-
     "externalEndpoint": {
       "type": "object",
       "description": "Endpoint checked externally (from CI) via domain",
-      "required": ["name", "path"],
+      "required": [
+        "name",
+        "path"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "path": { "type": "string", "description": "Path appended to the deployment domain" },
-        "type": { "type": "string", "enum": ["json", "html"] },
-        "expect": { "$ref": "#/$defs/smokeExpect" }
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "Path appended to the deployment domain"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "json",
+            "html"
+          ]
+        },
+        "expect": {
+          "$ref": "#/$defs/smokeExpect"
+        }
       }
     },
-
     "smokeExpect": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "status_code": { "type": "integer", "description": "Expected HTTP status code" },
-        "fields": { "type": "object", "description": "JSON fields and expected values (supports dot.notation paths)", "additionalProperties": true },
-        "contains": { "type": "string", "description": "Substring expected in response body (HTML mode)" }
+        "status_code": {
+          "type": "integer",
+          "description": "Expected HTTP status code"
+        },
+        "fields": {
+          "type": "object",
+          "description": "JSON fields and expected values (supports dot.notation paths)",
+          "additionalProperties": true
+        },
+        "contains": {
+          "type": "string",
+          "description": "Substring expected in response body (HTML mode)"
+        }
       }
     },
-
     "smokeTestEndpoint": {
       "type": "object",
       "description": "A smoke test endpoint",
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "additionalProperties": false,
       "properties": {
         "path": {
@@ -963,7 +1872,6 @@
         }
       }
     },
-
     "taskManagement": {
       "type": "object",
       "description": "Task management configuration",
@@ -971,7 +1879,11 @@
       "properties": {
         "backend": {
           "type": "string",
-          "enum": ["asana", "gitlab", "taskforge"],
+          "enum": [
+            "asana",
+            "gitlab",
+            "taskforge"
+          ],
           "description": "Task management backend (asana, gitlab, or taskforge)"
         },
         "asana": {
@@ -985,7 +1897,6 @@
         }
       }
     },
-
     "taskforgeConfig": {
       "type": "object",
       "description": "TaskForge self-hosted task management configuration",
@@ -1005,12 +1916,15 @@
         }
       }
     },
-
     "asanaConfig": {
       "type": "object",
       "description": "Asana task management configuration",
       "additionalProperties": false,
       "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Asana workspace name (for display/validation)"
+        },
         "workspace_id": {
           "type": "string",
           "description": "Asana workspace GID"
@@ -1022,6 +1936,34 @@
         "project": {
           "type": "string",
           "description": "Asana project name (for display/validation)"
+        },
+        "default_view": {
+          "type": "string",
+          "enum": [
+            "list",
+            "board",
+            "timeline",
+            "calendar"
+          ],
+          "description": "Asana project default view"
+        },
+        "sections": {
+          "type": "object",
+          "description": "Named sections of the board, keyed by logical name (archive, current_sprint, bugs, backlog). The single source of truth for section naming, addressed logically so a renamed or recreated section only changes this config; sprint.sections overrides per project only when a board deviates.",
+          "additionalProperties": {
+            "$ref": "#/$defs/asanaSection"
+          }
+        },
+        "section_transitions": {
+          "type": "object",
+          "description": "Which logical section each lifecycle operation files a task into. Keys are operations (capture, start, close); values are logical section names from `sections`.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "default_section": {
+          "type": "string",
+          "description": "Logical section name (a key of `sections`) that new tasks are filed into"
         },
         "section_id": {
           "type": "string",
@@ -1051,7 +1993,21 @@
         }
       }
     },
-
+    "asanaSection": {
+      "type": "object",
+      "description": "An Asana list-view section (group header)",
+      "additionalProperties": false,
+      "properties": {
+        "gid": {
+          "type": "string",
+          "description": "Section GID"
+        },
+        "name": {
+          "type": "string",
+          "description": "Section name as it appears in Asana"
+        }
+      }
+    },
     "asanaCustomField": {
       "type": "object",
       "description": "Asana custom field definition",
@@ -1067,7 +2023,13 @@
         },
         "type": {
           "type": "string",
-          "enum": ["text", "enum", "number", "date", "multi_enum"],
+          "enum": [
+            "text",
+            "enum",
+            "number",
+            "date",
+            "multi_enum"
+          ],
           "description": "Custom field type"
         },
         "options": {
@@ -1079,7 +2041,6 @@
         }
       }
     },
-
     "gitlabTaskConfig": {
       "type": "object",
       "description": "GitLab task management configuration",
@@ -1099,18 +2060,143 @@
         "default_assignee": {
           "type": "string",
           "description": "Default assignee (e.g., @me)"
+        },
+        "sync_on_operations": {
+          "type": "array",
+          "description": "Task lifecycle operations that sync to GitLab Issues (e.g. capture, start, update, hold, close)",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
-
+    "sprintConfig": {
+      "type": "object",
+      "description": "Lightweight sprint planning (/sprint-plan). Capacity is measured in Asana Score points; the AI scores backlog relevance 1-10 against the project direction.",
+      "additionalProperties": false,
+      "properties": {
+        "goal": {
+          "type": "string",
+          "description": "Project direction statement backlog relevance is scored against. Lowest precedence: an interactive override wins, then goal_doc, then this."
+        },
+        "goal_doc": {
+          "type": "string",
+          "description": "Path (relative to project root) of a doc holding the direction narrative, e.g. docs/DIRECTION.md. Overrides .goal when present.",
+          "examples": [
+            "docs/DIRECTION.md"
+          ]
+        },
+        "length_days": {
+          "type": "integer",
+          "description": "Sprint length in days",
+          "default": 14
+        },
+        "capacity_points": {
+          "type": "integer",
+          "description": "Total Score points one sprint can absorb. Defaults to 20 when unset.",
+          "default": 20
+        },
+        "feature_ratio": {
+          "type": "number",
+          "description": "Fraction of capacity filled with planned backlog work; the remainder is reserved for bugs and fill.",
+          "default": 0.8,
+          "minimum": 0.1,
+          "maximum": 1
+        },
+        "default_points": {
+          "type": "integer",
+          "description": "Points assumed for a task whose Score field is empty and which the AI did not estimate.",
+          "default": 3
+        },
+        "sections": {
+          "type": "object",
+          "description": "Asana section names for the standardized sprint layout",
+          "additionalProperties": false,
+          "properties": {
+            "current_sprint": {
+              "type": "string",
+              "default": "Current Sprint"
+            },
+            "bugs": {
+              "type": "string",
+              "default": "Bugs"
+            },
+            "backlog": {
+              "type": "string",
+              "default": "Backlog"
+            }
+          }
+        },
+        "fields": {
+          "type": "object",
+          "description": "Logical custom-field keys used by sprint planning. Values resolve through asana.sh --field (config key, display name, or GID).",
+          "additionalProperties": false,
+          "properties": {
+            "score": {
+              "type": "string",
+              "description": "Effort points field (fibonacci enum)",
+              "default": "Score"
+            },
+            "sprint": {
+              "type": "string",
+              "description": "Text field stamped with the sprint label",
+              "default": "Sprint"
+            },
+            "relevance": {
+              "type": "string",
+              "description": "Optional field storing the 1-10 relevance score. Omit to record relevance in the SPN doc only."
+            }
+          }
+        },
+        "repos": {
+          "type": "array",
+          "description": "Additional repo paths whose docs/active and worktrees feed this Asana project's sprint. Use when several repos share one Asana project.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "releaseNotes": {
+      "type": "object",
+      "description": "Release-notes generation for the service-pipeline (generated pre-build, baked into the image, committed after smoke succeeds).",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the pipeline generates + bakes release notes"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Output directory for generated notes; MUST sit inside the image build context to be baked (e.g. backend/release-notes)"
+        },
+        "model": {
+          "type": "string",
+          "description": "LLM model used to summarize commits into audience-targeted notes (commit-history fallback when unreachable)"
+        },
+        "image_service": {
+          "type": "string",
+          "description": "Compose build service whose image bakes the notes; production extracts them from that exact artifact instead of regenerating. Omit to use the first entry in components[]."
+        },
+        "image_path": {
+          "type": "string",
+          "description": "Directory the notes live at INSIDE the image, as COPYd by that service's Dockerfile (default /app/release-notes)."
+        }
+      }
+    },
     "notifications": {
       "type": "object",
-      "description": "Notification configuration — supports CI/CD webhook format (provider/on_success/on_failure/channel) or app-level format (enabled/events/channels)",
+      "description": "Notification configuration \u2014 supports CI/CD webhook format (provider/on_success/on_failure/channel) or app-level format (enabled/events/channels)",
       "additionalProperties": false,
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["slack", "discord", "teams", "generic"],
+          "enum": [
+            "slack",
+            "discord",
+            "teams",
+            "generic"
+          ],
           "description": "CI/CD webhook notification provider (determines payload format)"
         },
         "on_success": {
@@ -1123,7 +2209,7 @@
         },
         "channel": {
           "type": "string",
-          "description": "Channel/room for notifications (documentation — routing configured in webhook)"
+          "description": "Channel/room for notifications (documentation \u2014 routing configured in webhook)"
         },
         "enabled": {
           "type": "boolean",
@@ -1144,7 +2230,6 @@
         }
       }
     },
-
     "notificationChannels": {
       "type": "object",
       "description": "Notification channel configurations",
@@ -1161,7 +2246,6 @@
         }
       }
     },
-
     "notificationChannelSlack": {
       "type": "object",
       "description": "Slack notification channel",
@@ -1192,7 +2276,6 @@
         }
       }
     },
-
     "notificationChannelCliq": {
       "type": "object",
       "description": "Zoho Cliq notification channel",
@@ -1219,7 +2302,6 @@
         }
       }
     },
-
     "notificationChannelEmail": {
       "type": "object",
       "description": "Email notification channel",
@@ -1231,7 +2313,13 @@
         },
         "provider": {
           "type": "string",
-          "enum": ["aws_ses", "resend", "mailgun", "sendgrid", ""],
+          "enum": [
+            "aws_ses",
+            "resend",
+            "mailgun",
+            "sendgrid",
+            ""
+          ],
           "description": "Email provider"
         },
         "from_address": {
@@ -1262,7 +2350,6 @@
         }
       }
     },
-
     "infrastructure": {
       "type": "object",
       "description": "Infrastructure configuration (separate repos, symlinks, IaC tools)",
@@ -1316,7 +2403,6 @@
         }
       }
     },
-
     "infrastructureRepo": {
       "type": "object",
       "description": "Infrastructure repository configuration",
@@ -1324,7 +2410,11 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["git", "local", ""],
+          "enum": [
+            "git",
+            "local",
+            ""
+          ],
           "description": "Repository type"
         },
         "url": {
@@ -1337,7 +2427,6 @@
         }
       }
     },
-
     "infrastructureLink": {
       "type": "object",
       "description": "Infrastructure symlink configuration",
@@ -1353,7 +2442,6 @@
         }
       }
     },
-
     "infrastructureTool": {
       "type": "object",
       "description": "Infrastructure tool configuration",
@@ -1417,7 +2505,6 @@
         }
       }
     },
-
     "quality": {
       "type": "object",
       "description": "Code quality tool configuration",
@@ -1437,7 +2524,202 @@
         }
       }
     },
-
+    "security": {
+      "type": "object",
+      "description": "Opt-in security gate configuration. Every field defaults to off, empty, or absent: a project that omits this section (or omits any individual key) gets exactly the security-gate behavior it had before the section existed. Used by the shared security-gates workflow.",
+      "additionalProperties": false,
+      "properties": {
+        "gitleaks": {
+          "type": "object",
+          "description": "Gitleaks secret-scanning inputs. The generic job runs 'detect --source /repo --redact --verbose' with no baseline and no custom config, so a consumer's already-triaged findings and its own allowlist rules are ignored and the job fails on known-accepted secrets. Set these to point the scan at the consumer's own triage state. Omit either key to leave the corresponding flag off the command line.",
+          "additionalProperties": false,
+          "properties": {
+            "baseline_path": {
+              "type": "string",
+              "description": "Path (relative to the repository root) of the gitleaks baseline report of triaged, accepted findings. Passed as --baseline-path so those findings no longer fail the job.",
+              "examples": [
+                ".gitleaks-baseline.json",
+                "security/gitleaks-baseline.json"
+              ]
+            },
+            "config_path": {
+              "type": "string",
+              "description": "Path (relative to the repository root) of the consumer's gitleaks TOML config, holding its own rules and allowlist suppressions. Passed as --config; without it gitleaks uses only its built-in ruleset.",
+              "examples": [
+                ".gitleaks.toml"
+              ]
+            }
+          }
+        },
+        "scanner_versions": {
+          "type": "object",
+          "description": "Explicit pins for the security scanners, which otherwise float (gitleaks at ':latest', semgrep and pip-audit installed unconstrained) and can change a build's verdict with no change to the code. Each key is independent because the scanners are released on unrelated cadences and a consumer usually needs to pin only the one that broke. Omit a key to keep that scanner floating, preserving today's behavior.",
+          "additionalProperties": false,
+          "properties": {
+            "gitleaks_image": {
+              "type": "string",
+              "description": "Fully-qualified gitleaks container image reference, tag or digest. Prefer a digest for a reproducible scan.",
+              "examples": [
+                "zricethezav/gitleaks:v8.28.0",
+                "zricethezav/gitleaks@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              ]
+            },
+            "semgrep": {
+              "type": "string",
+              "description": "Version specifier for the semgrep package installed by the SAST job (an exact version, or any pip-compatible constraint).",
+              "examples": [
+                "1.90.0",
+                "==1.90.0",
+                ">=1.90,<2.0"
+              ]
+            },
+            "pip_audit": {
+              "type": "string",
+              "description": "Version specifier for the pip-audit package installed by the Python dependency-audit job (an exact version, or any pip-compatible constraint).",
+              "examples": [
+                "2.7.3",
+                "==2.7.3"
+              ]
+            }
+          }
+        },
+        "codeql": {
+          "type": "object",
+          "description": "Opt-in CodeQL analysis. Omit this block and the CodeQL job does not exist for the consumer at all — it is never created implicitly from the 'languages' list, because CodeQL runs are long and require GitHub Advanced Security to be enabled on the repository.",
+          "additionalProperties": false,
+          "properties": {
+            "languages": {
+              "type": "array",
+              "description": "CodeQL languages to matrix over, one job per entry. Named explicitly rather than inferred from the top-level 'languages' list, since CodeQL's language identifiers and its supported set do not match the project's language names.",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "examples": [
+                [
+                  "javascript-typescript",
+                  "python"
+                ]
+              ]
+            },
+            "upload_results": {
+              "type": "boolean",
+              "description": "Upload the SARIF results to the repository's code-scanning alerts. Defaults to false so an initial rollout can run the analysis and read the job output without publishing alerts to the security tab.",
+              "default": false
+            }
+          },
+          "required": [
+            "languages"
+          ]
+        },
+        "license_denylist": {
+          "type": "array",
+          "description": "License identifiers that are forbidden outright, for consumers whose policy names the licenses directly rather than inferring prohibition from a scanner severity rating. A dependency carrying any listed identifier fails the license gate. Empty or omitted means no license is denied by name and the gate keeps its existing severity-based behavior.",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "examples": [
+            [
+              "GPL-3.0",
+              "AGPL-3.0",
+              "LGPL-3.0"
+            ]
+          ]
+        },
+        "advisory_gates": {
+          "type": "array",
+          "description": "Gates to run in advisory (report-only) mode instead of blocking the pipeline. Each entry carries an expiry date so the exemption is visibly temporary and can be audited; entries are a list of objects rather than bare gate names precisely so the date cannot be omitted. Empty or omitted means every gate blocks, which is the existing behavior.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "gate": {
+                "type": "string",
+                "description": "Name of the security gate to downgrade to advisory (matches the gate/job name in the security-gates workflow)",
+                "examples": [
+                  "gitleaks",
+                  "semgrep",
+                  "npm-audit",
+                  "pip-audit",
+                  "license-check",
+                  "codeql"
+                ]
+              },
+              "until": {
+                "type": "string",
+                "format": "date",
+                "description": "Date (YYYY-MM-DD) the exemption is expected to end. Records when the gate should return to blocking so a temporary waiver does not quietly become permanent.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "examples": [
+                  "2026-09-30"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why this gate is advisory (the finding being triaged, the upstream fix being waited on). Optional, but recorded here so the waiver is self-explaining at review time."
+              }
+            },
+            "required": [
+              "gate",
+              "until"
+            ]
+          },
+          "default": []
+        },
+        "supply_chain": {
+          "type": "object",
+          "description": "Supply-chain provenance for images pushed to ECR by the shared docker-build workflow. Every key is independent and every default preserves the behavior a consumer had before this block existed. Only evaluated on a leg that actually pushes; a build-only run (dev.yml) does none of this.",
+          "additionalProperties": false,
+          "properties": {
+            "sign_images": {
+              "type": "boolean",
+              "description": "Sign each pushed image digest with cosign keyless (Fulcio/Rekor via the workflow's OIDC identity). Off by default because it is not a private operation: the image digest and the signing workflow identity are published to the PUBLIC Rekor transparency log, and a .sig artifact is written into the consumer's own ECR repository. Both are decisions about disclosure and registry contents that a consumer must take deliberately rather than inherit from a pipeline upgrade.",
+              "default": false
+            },
+            "sbom": {
+              "type": "boolean",
+              "description": "Generate a CycloneDX SBOM per pushed image and upload it as a build artifact (30-day retention). On by default: it writes nothing to the registry, requires no plan or entitlement, and is deliberately non-blocking, so it cannot turn a good build red. Set false to skip the generation entirely for consumers that produce their SBOMs elsewhere.",
+              "default": true
+            },
+            "provenance": {
+              "type": "boolean",
+              "description": "Attest SLSA build provenance for each pushed image digest via actions/attest-build-provenance. Off by default because GitHub's attestation API requires a paid organization plan or a public repository; without that entitlement the step fails with 'Feature not available for the <org> organization'. Turning it on is the consumer asserting it has the entitlement, so the step is then a real blocking gate rather than an advisory one.",
+              "default": false
+            }
+          }
+        },
+        "sca": {
+          "type": "object",
+          "description": "Software-composition-analysis (dependency audit) inputs. Grouped rather than split per ecosystem because a consumer's ignore list and install location are one decision about how its dependency tree is resolved.",
+          "additionalProperties": false,
+          "properties": {
+            "npm_install_root": {
+              "type": "string",
+              "description": "Directory (relative to the repository root) in which to run the npm install before auditing. A consumer whose workspace overrides live in the root package.json must install at the root for the audit to see the resolved tree; omitted, the audit installs per-component as it does today.",
+              "examples": [
+                ".",
+                "frontend"
+              ]
+            },
+            "ignore_vulnerabilities": {
+              "type": "array",
+              "description": "Vulnerability identifiers (advisory or CVE ids) to exclude from the dependency audit result — findings triaged as not-applicable or without an available fix. Empty or omitted means nothing is ignored.",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "examples": [
+                [
+                  "GHSA-3xgq-45jj-v275",
+                  "CVE-2024-21538"
+                ]
+              ]
+            }
+          }
+        }
+      }
+    },
     "commands": {
       "type": "object",
       "description": "Custom command overrides",
@@ -1457,7 +2739,6 @@
         }
       }
     },
-
     "schemaSync": {
       "type": "object",
       "description": "Schema sync to Open Metadata configuration. Automatically syncs database schema changes to Open Metadata during production deploys with AI-generated field descriptions.",
@@ -1479,7 +2760,9 @@
               "description": "Open Metadata instance URL (e.g., https://catalog.example.com). Token comes from OPEN_METADATA_TOKEN secret, not PROJECT.yaml."
             }
           },
-          "required": ["url"]
+          "required": [
+            "url"
+          ]
         },
         "exclude_tables": {
           "type": "array",
@@ -1505,200 +2788,353 @@
           }
         }
       },
-      "required": ["enabled", "open_metadata"]
+      "required": [
+        "enabled",
+        "open_metadata"
+      ]
     },
-
     "conditionals": {
+      "secretsBackendAws": {
+        "if": {
+          "properties": {
+            "secrets": {
+              "type": "object",
+              "properties": {
+                "backend": {
+                  "const": "aws"
+                }
+              },
+              "required": [
+                "backend"
+              ]
+            }
+          },
+          "required": [
+            "secrets"
+          ]
+        },
+        "then": {
+          "properties": {
+            "secrets": {
+              "properties": {
+                "infisical": false
+              }
+            }
+          }
+        }
+      },
       "deploymentScript": {
         "if": {
           "properties": {
             "deployment": {
               "type": "object",
-              "properties": { "method": { "const": "script" } },
-              "required": ["method"]
+              "properties": {
+                "method": {
+                  "const": "script"
+                }
+              },
+              "required": [
+                "method"
+              ]
             }
           },
-          "required": ["deployment"]
+          "required": [
+            "deployment"
+          ]
         },
         "then": {
           "properties": {
             "deployment": {
               "properties": {
                 "staging": {
-                  "required": ["script"]
+                  "required": [
+                    "script"
+                  ]
                 },
                 "production": {
-                  "required": ["script"]
+                  "required": [
+                    "script"
+                  ]
                 }
               },
-              "required": ["staging", "production"]
+              "required": [
+                "staging",
+                "production"
+              ]
             }
           }
         }
       },
-
       "deploymentSsh": {
         "if": {
           "properties": {
             "deployment": {
               "type": "object",
-              "properties": { "method": { "const": "ssh" } },
-              "required": ["method"]
+              "properties": {
+                "method": {
+                  "const": "ssh"
+                }
+              },
+              "required": [
+                "method"
+              ]
             }
           },
-          "required": ["deployment"]
+          "required": [
+            "deployment"
+          ]
         },
         "then": {
           "properties": {
             "deployment": {
               "properties": {
                 "staging": {
-                  "required": ["host", "user"]
+                  "required": [
+                    "host",
+                    "user"
+                  ]
                 },
                 "production": {
-                  "required": ["host", "user"]
+                  "required": [
+                    "host",
+                    "user"
+                  ]
                 }
               },
-              "required": ["staging", "production"]
+              "required": [
+                "staging",
+                "production"
+              ]
             }
           }
         }
       },
-
+      "deploymentAnsible": {
+        "if": {
+          "properties": {
+            "deployment": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "const": "ansible"
+                }
+              },
+              "required": [
+                "method"
+              ]
+            }
+          },
+          "required": [
+            "deployment"
+          ]
+        },
+        "then": {
+          "properties": {
+            "deployment": {
+              "required": [
+                "ansible"
+              ],
+              "properties": {
+                "ansible": {
+                  "required": [
+                    "playbooks_dir"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
       "deploymentSsm": {
         "if": {
           "properties": {
             "deployment": {
               "type": "object",
-              "properties": { "method": { "const": "ssm" } },
-              "required": ["method"]
+              "properties": {
+                "method": {
+                  "const": "ssm"
+                }
+              },
+              "required": [
+                "method"
+              ]
             }
           },
-          "required": ["deployment"]
+          "required": [
+            "deployment"
+          ]
         },
         "then": {
           "properties": {
             "deployment": {
               "properties": {
                 "staging": {
-                  "required": ["instance_id", "region"]
+                  "required": [
+                    "instance_id",
+                    "region"
+                  ]
                 },
                 "production": {
-                  "required": ["instance_id", "region"]
+                  "required": [
+                    "instance_id",
+                    "region"
+                  ]
                 }
               },
-              "required": ["staging", "production"]
+              "required": [
+                "staging",
+                "production"
+              ]
             }
           }
         }
       },
-
       "taskManagementAsana": {
         "if": {
           "properties": {
             "task_management": {
               "type": "object",
               "properties": {
-                "backend": { "const": "asana" }
+                "backend": {
+                  "const": "asana"
+                }
               },
-              "required": ["backend"]
+              "required": [
+                "backend"
+              ]
             }
           },
-          "required": ["task_management"]
+          "required": [
+            "task_management"
+          ]
         },
         "then": {
           "properties": {
             "task_management": {
               "properties": {
                 "asana": {
-                  "required": ["workspace_id"]
+                  "required": [
+                    "workspace_id"
+                  ]
                 }
               },
-              "required": ["asana"]
+              "required": [
+                "asana"
+              ]
             }
           }
         }
       },
-
       "taskManagementGitlab": {
         "if": {
           "properties": {
             "task_management": {
               "type": "object",
               "properties": {
-                "backend": { "const": "gitlab" }
+                "backend": {
+                  "const": "gitlab"
+                }
               },
-              "required": ["backend"]
+              "required": [
+                "backend"
+              ]
             }
           },
-          "required": ["task_management"]
+          "required": [
+            "task_management"
+          ]
         },
         "then": {
           "properties": {
             "task_management": {
               "properties": {
                 "gitlab": {
-                  "required": ["project_id"]
+                  "required": [
+                    "project_id"
+                  ]
                 }
               },
-              "required": ["gitlab"]
+              "required": [
+                "gitlab"
+              ]
             }
           }
         }
       },
-
       "taskManagementTaskforge": {
         "if": {
           "properties": {
             "task_management": {
               "type": "object",
               "properties": {
-                "backend": { "const": "taskforge" }
+                "backend": {
+                  "const": "taskforge"
+                }
               },
-              "required": ["backend"]
+              "required": [
+                "backend"
+              ]
             }
           },
-          "required": ["task_management"]
+          "required": [
+            "task_management"
+          ]
         },
         "then": {
           "properties": {
             "task_management": {
               "properties": {
                 "taskforge": {
-                  "required": ["project_id"]
+                  "required": [
+                    "project_id"
+                  ]
                 }
               },
-              "required": ["taskforge"]
+              "required": [
+                "taskforge"
+              ]
             }
           }
         }
       },
-
       "infrastructureEnabled": {
         "if": {
           "properties": {
             "infrastructure": {
               "type": "object",
               "properties": {
-                "enabled": { "const": true }
+                "enabled": {
+                  "const": true
+                }
               },
-              "required": ["enabled"]
+              "required": [
+                "enabled"
+              ]
             }
           },
-          "required": ["infrastructure"]
+          "required": [
+            "infrastructure"
+          ]
         },
         "then": {
           "properties": {
             "infrastructure": {
               "properties": {
                 "link": {
-                  "required": ["target"]
+                  "required": [
+                    "target"
+                  ]
                 },
                 "repo": {
-                  "required": ["type"]
+                  "required": [
+                    "type"
+                  ]
                 }
               },
-              "required": ["link", "repo"]
+              "required": [
+                "link",
+                "repo"
+              ]
             }
           }
         }
