@@ -332,6 +332,20 @@
           "minLength": 1,
           "description": "Declaration source for the feature-flags-contract check: the COMMITTED mirror of the Praxis flag manifest (the file `make sync-flags` writes and the flag registry imports), path relative to the repo root. Omit to use <component path>/feature-flags.json. The check reads only this committed file — it never calls Praxis or Unleash, so it needs no credential and behaves identically on a fork PR. A component that references no feature flags at all is asked for nothing: no manifest, no Unleash dependency, no wiring, and the check is clean. The moment one flag reference exists, the manifest must resolve and parse, the referenced key must be declared in it, and the consumer wiring must be present."
         },
+        "flag_accessors": {
+          "type": "array",
+          "description": "Generic flag-evaluation ACCESSORS whose dynamic key is correct by construction -- e.g. the NestJS guard behind @RequireFlag, which evaluates whatever key the decorator put in metadata. The flags-contract check drops DYNAMIC references inside these functions' bodies only: a literal key evaluated there is still judged, and every call site (each @RequireFlag) is still fully judged. Each entry is '<path glob>::<function name>', relative to the component path; the '::<function name>' half is required, because an entry naming only a file would exempt every reference in it, which is scan_exclude's job. The count is rendered on the report's scope line.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^:]+::[A-Za-z_$][A-Za-z0-9_$]*$"
+          }
+        },
+        "flag_wiring_via": {
+          "type": "string",
+          "minLength": 1,
+          "description": "For a FRONTEND component that resolves its flags through its own backend (useFlag reads a context filled from a backend flags endpoint) rather than running an Unleash client: the name of that backend components[] entry. The flags-contract F5 wiring check then looks for the Unleash dependency and initialisation in the named backend instead of in this component -- the evidence is moved, never waived, so an unwired backend still fails F5 here. Must name a different components[] entry whose role is backend."
+        },
         "scan_exclude": {
           "type": "array",
           "description": "Paths the secrets-contract check must NOT scan, as fnmatch globs against the component-relative path (note: * crosses directory separators). REPLACES the built-in default list wholesale rather than extending it, so the effective list is always exactly what is written here. Omit to use the defaults (test/spec trees plus build and container-runtime tooling entrypoints); set to [] to scan everything.",
@@ -1284,6 +1298,11 @@
           "type": "string",
           "description": "Version endpoint path (default: /api/version)"
         },
+        "image_prune": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run a host-wide `docker image prune -af` on the target during each deploy (default: true). Set false when the host is SHARED with another, separately-deployed app: a host-wide prune deletes that app's unattached images, including its rollback images. With false, the deploy removes only this project's own superseded images (its compose-built repositories, excluding images in use, the deployed tag, the :<env> tag and any *-previous-N rotation tag)."
+        },
         "extra_paths": {
           "type": "array",
           "description": "Files/dirs (relative to repo root) the deploy job ships to the target alongside docker-compose.yml \u2014 e.g. a config/ directory mounted as a volume. Never includes docker-compose.override.yml (local-dev only).",
@@ -1470,9 +1489,30 @@
             "ssm",
             "pipeline",
             "ansible",
+            "gcp",
             ""
           ],
-          "description": "Per-environment method override"
+          "description": "Per-environment method override (gcp = blue/green GCP VM via misc/pipelines gcp-deploy; see the gcp block)"
+        },
+        "gcp": {
+          "type": "object",
+          "description": "Blue/green GCP VM target (for method=gcp), read by misc/pipelines lib/project-yaml.sh py_gcp_* getters",
+          "additionalProperties": false,
+          "properties": {
+            "project": { "type": "string", "description": "GCP project id" },
+            "zone": { "type": "string", "description": "VM zone (e.g. us-central1-a)" },
+            "instance": { "type": "string", "description": "VM instance name, reached over IAP" },
+            "artifact_registry": { "type": "string", "description": "Artifact Registry repo images are copied to (host/project/repo). Defaults to docker.environments.production.registry" },
+            "source_registry": { "type": "string", "description": "Registry host images are copied from. Defaults to the project registry" },
+            "images": { "type": "array", "items": { "type": "string" }, "description": "Images to copy (built ones only). Defaults to docker.services" },
+            "sync_script": { "type": "string", "description": "Repo script that ships runtime files to the VM; called with --project --zone --instance" },
+            "deploy_command": { "type": "string", "description": "VM command run as root with the image tag: brings up the idle color only" },
+            "cutover_command": { "type": "string", "description": "VM command run as root that moves traffic to the other color; running it again is the rollback" },
+            "check_host": { "type": "string", "description": "Host for the post-cutover https check (resolved to public_ip when set)" },
+            "check_path": { "type": "string", "description": "Path for the post-cutover check. Defaults to deployment.health_check_path" },
+            "verify_tls": { "type": "boolean", "description": "Verify the certificate in the post-cutover check (false only while the site has no real certificate). Default true" }
+          },
+          "required": ["project", "zone", "instance", "deploy_command", "cutover_command"]
         },
         "transport": {
           "type": "string",
@@ -1644,6 +1684,7 @@
             "pipeline",
             "cloud-run",
             "ansible",
+            "gcp",
             ""
           ],
           "description": "Deployment method for this environment"
