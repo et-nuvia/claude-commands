@@ -644,6 +644,47 @@
         "smoke_command": {
           "type": "string",
           "description": "Post-deploy smoke test command (e.g. make smoke). Read by the service-pipeline smoke stage / /test-smoke."
+        },
+        "report": {
+          "type": "object",
+          "description": "Opt-in reporting of CI test results to Praxis. When `praxis` is true the shared pipeline collects each component's test-report directory and posts it to Praxis on the listed branches. Absent or `praxis: false` leaves the pipeline unchanged.",
+          "additionalProperties": false,
+          "properties": {
+            "praxis": {
+              "type": "boolean",
+              "default": false,
+              "description": "Report test results to Praxis (default: false)."
+            },
+            "branches": {
+              "type": "array",
+              "default": ["dev", "staging"],
+              "description": "Branches whose runs report to Praxis (default: [\"dev\", \"staging\"]).",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "paths": {
+              "type": "object",
+              "description": "Override where a component's test reports are written, keyed by component name then test type (`unit` | `integration`). Unset entries default to `reports/<component>/<testType>`.",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "unit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Directory holding the component's unit-test reports."
+                  },
+                  "integration": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Directory holding the component's integration-test reports."
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -2213,7 +2254,16 @@
         },
         "model": {
           "type": "string",
-          "description": "LLM model used to summarize commits into audience-targeted notes (commit-history fallback when unreachable)"
+          "description": "LLM model used to summarize commits into a single non-technical document for clinical and business staff (commit-history fallback when unreachable)"
+        },
+        "large_model": {
+          "type": "string",
+          "description": "Bedrock inference-profile id (us.*) used for large releases (more than large_threshold commits, or an oversized prompt) and for the single repair call; `model` handles small releases. Size routing is Bedrock-only: the first-party Anthropic API path (ANTHROPIC_API_KEY) always uses claude-sonnet-4-6"
+        },
+        "large_threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Commit count above which a release is large and large_model writes it (default 15; Bedrock-only, the first-party API path ignores it)"
         },
         "image_service": {
           "type": "string",
