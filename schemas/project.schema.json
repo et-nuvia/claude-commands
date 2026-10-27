@@ -973,6 +973,13 @@
           ],
           "description": "Secrets backend (aws for macOS/work, infisical for Linux/home)"
         },
+        "prefix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+          "description": "Secrets Manager path prefix for this project (backend=aws). A secret lives at <prefix>/<environment>/<bucket>, where <bucket> is a databases[].users.*.secret_bucket or a `required` bucket name. Read by Praxis to locate each database's credentials for the collation audit; secret_keys then name the username/password keys inside that secret."
+        },
         "required": {
           "type": "array",
           "description": "Secret bucket names this project uses (loaded fail-fast at startup)",
@@ -1886,6 +1893,33 @@
             "warning"
           ],
           "description": "warning: failure logged but doesn't fail the smoke test"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Hard request timeout in milliseconds (default 10000). A request still outstanding after this is reported as 'timed out after Nms'."
+        },
+        "max_latency_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Latency budget in milliseconds. A correct response that took longer is reported as 'slow' via the endpoint severity."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "HEAD"
+          ],
+          "description": "HTTP method (default GET)"
+        },
+        "body": {
+          "type": "string",
+          "description": "Request body, sent verbatim"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Content-Type of body (default application/x-www-form-urlencoded when body is set)"
         }
       }
     },
@@ -1922,8 +1956,19 @@
       "additionalProperties": false,
       "properties": {
         "status_code": {
-          "type": "integer",
-          "description": "Expected HTTP status code"
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "integer"
+              }
+            }
+          ],
+          "description": "Expected HTTP status code, or a list of acceptable codes (any match passes)"
         },
         "fields": {
           "type": "object",
@@ -2258,12 +2303,12 @@
         },
         "large_model": {
           "type": "string",
-          "description": "Bedrock inference-profile id (us.*) used for large releases (more than large_threshold commits, or an oversized prompt) and for the single repair call; `model` handles small releases. Size routing is Bedrock-only: the first-party Anthropic API path (ANTHROPIC_API_KEY) always uses claude-sonnet-4-6"
+          "description": "Bedrock inference-profile id (us.*) used for large releases (more than large_threshold commits, or an oversized prompt) and for the single repair call; `model` handles small releases"
         },
         "large_threshold": {
           "type": "integer",
           "minimum": 0,
-          "description": "Commit count above which a release is large and large_model writes it (default 15; Bedrock-only, the first-party API path ignores it)"
+          "description": "Commit count above which a release is large and large_model writes it (default 15)"
         },
         "image_service": {
           "type": "string",
