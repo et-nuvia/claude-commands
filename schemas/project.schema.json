@@ -51,6 +51,9 @@
         "$ref": "#/$defs/component"
       }
     },
+    "codegen": {
+      "$ref": "#/$defs/codegen"
+    },
     "testing": {
       "$ref": "#/$defs/testing"
     },
@@ -440,6 +443,17 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
           "description": "Opt-in make target run before this component's lint/test/typecheck legs to install its dependencies (e.g., setup-ai-ci). The pipeline only runs `make <target>`; which installer it drives (uv, poetry, pip, in-container) is the project's business. Omit when the component's targets self-bootstrap."
         },
+        "test_shards": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 8,
+          "description": "Opt-in: split this component's unit-test leg into N parallel shard legs. Each leg runs `make <test_target>` with SHARD_INDEX (1-based) and SHARD_TOTAL set, and must NOT enforce its coverage threshold (a slice measures only part of the suite); it uploads its report directory for the coverage-merge job. Requires coverage_merge_target. Omit to keep a single test leg."
+        },
+        "coverage_merge_target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Make target run once after all test_shards legs finish, with every shard's reports downloaded under reports/<component>/shards/<artifact>/ and SHARD_TOTAL set. It must merge them into the component's unit report directory (coverage summary + junit) and enforce the component's coverage thresholds on the MERGED result — it is the coverage gate for a sharded component. Required with, and only valid with, test_shards."
+        },
         "openapi": {
           "description": "Opt into the OpenAPI spec gates (snapshot-drift, Spectral quality lint, oasdiff breaking-change check) for this component. Omit or set to false to skip them entirely.",
           "oneOf": [
@@ -685,6 +699,47 @@
               }
             }
           }
+        },
+        "min_engine_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Lowest version of the global test engine (~/.claude/scripts/helpers/testing) this project supports, as MAJOR.MINOR.PATCH. The engine refuses to run below it, so a breaking engine change is gated per project instead of reaching every repo at once."
+        },
+        "services": {
+          "type": "object",
+          "description": "Per-component test runner settings read by the global test engine, keyed by `components[].name` (same keying as `report.paths`). Components with no entry are not driven by the engine.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "runner"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "runner": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                "description": "Test framework the engine drives for this component (e.g. jest, pytest, vitest, playwright, phpunit, bats)."
+              },
+              "image_target": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Dockerfile stage the engine builds and runs the tests in (e.g. testing). Omit when the runner runs natively, or when the testing stage is CI-only and never built locally."
+              },
+              "baked_inputs": {
+                "type": "array",
+                "description": "Paths (relative to the project root) baked into the test image. The engine rebuilds `image_target` only when one of these changes. Meaningful only with `image_target`.",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "workers": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Parallel test workers for this component. Mirror the runner's own setting (e.g. jest maxWorkers, or 1 for --runInBand) so the engine's slot accounting matches what actually runs."
+              }
+            }
+          }
         }
       }
     },
@@ -868,7 +923,7 @@
         },
         "branches": {
           "type": "object",
-          "description": "Branch-to-environment mapping",
+          "description": "Environment-to-branch mapping: the KEY is the environment, the VALUE is the git branch that deploys it, e.g. {development: dev, staging: dev, production: prod}. Having a `staging` key is what marks the project as having a staging environment (staging-production layout); only `production` means prod-only. Read by /pipeline-audit and the task scripts. The inverse form {main: production} exists in a few older projects: readers should tolerate it when the key is not an environment name but the value is, and /pipeline-audit warns about it",
           "additionalProperties": {
             "type": "string"
           }
@@ -1142,6 +1197,29 @@
         }
       }
     },
+    "codegen": {
+      "type": "object",
+      "description": "Deterministic code generation inputs and outputs",
+      "properties": {
+        "openapi": {
+          "type": "string",
+          "description": "Path to the OpenAPI document"
+        },
+        "client_dir": {
+          "type": "string",
+          "description": "Output directory for the generated API client"
+        },
+        "models_dir": {
+          "type": "string",
+          "description": "Output directory for generated models"
+        },
+        "db_schema": {
+          "type": "string",
+          "description": "SQLAlchemy database URL for gen-models.sh: a password-free URL, or secret:<folder>/<KEY> resolved through the secrets manager (never embed a password)"
+        }
+      },
+      "additionalProperties": false
+    },
     "database": {
       "type": "object",
       "description": "Database configuration",
@@ -1197,6 +1275,57 @@
         },
         "migrations": {
           "$ref": "#/$defs/databaseMigrations"
+        },
+        "ownership": {
+          "type": "string",
+          "enum": [
+            "self",
+            "external"
+          ],
+          "default": "self",
+          "description": "external = the project only references this database; another team owns its server and schema, so Praxis audits do not inspect it."
+        },
+        "collation_exceptions": {
+          "type": "array",
+          "description": "Columns that deliberately differ from utf8mb4/utf8mb4_0900_ai_ci. The same rule must also be written in the column's COMMENT as `collation-exception: <character_set>/<collation>; reason: <reason>`; the collation audit checks the column against this rule and that both places agree.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "table",
+              "column",
+              "character_set",
+              "collation",
+              "reason"
+            ],
+            "properties": {
+              "table": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Table holding the column"
+              },
+              "column": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Column that deliberately differs"
+              },
+              "character_set": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Character set the column must have (e.g., ascii)"
+              },
+              "collation": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Collation the column must have (e.g., ascii_bin)"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 10,
+                "description": "Why the column differs; must match the reason in the column's COMMENT"
+              }
+            }
+          }
         }
       },
       "allOf": [
@@ -1303,9 +1432,10 @@
             "ssm",
             "pipeline",
             "ansible",
+            "gcp",
             ""
           ],
-          "description": "Deployment method: pipeline (CI/CD), script (local), ssh (direct), ssm (AWS Systems Manager), ansible (operator runs playbooks against inventory)"
+          "description": "Deployment method: pipeline (CI/CD), script (local), ssh (direct), ssm (AWS Systems Manager), ansible (operator runs playbooks against inventory), gcp (blue/green GCP VM via misc/pipelines gcp-deploy; usually set per environment in deployment.<env>.method)"
         },
         "transport": {
           "type": "string",
@@ -1324,7 +1454,7 @@
             "none",
             "operator-driven"
           ],
-          "description": "Deployment strategy. blue-green: deploy to inactive color and swap. staging-production: promote through staging first. prod-only: deploy directly to production. operator-driven: operator runs playbooks/scripts on demand (no pipeline). none: no deployment configured"
+          "description": "Optional layout hint; the audit DETECTS the layout and blue/green from config and only warns when this contradicts what it finds. staging-production: promote through staging first (detected: a staging environment exists). prod-only: deploy directly to production (detected: no staging environment). operator-driven: operator runs playbooks/scripts on demand (no pipeline). none: no deployment configured. blue-green is DEPRECATED: blue/green is detected per environment (both `blue` and `green` instance objects = separate hosts; a `gcp` block with both deploy_command and cutover_command = two stacks on one host), so do not declare it here"
         },
         "active": {
           "type": "string",
@@ -1356,6 +1486,31 @@
           "description": "Files/dirs (relative to repo root) the deploy job ships to the target alongside docker-compose.yml \u2014 e.g. a config/ directory mounted as a volume. Never includes docker-compose.override.yml (local-dev only).",
           "items": {
             "type": "string"
+          }
+        },
+        "restart_on_change": {
+          "type": "object",
+          "description": "Map of {<extra_path>: <compose service>}. When the content under that shipped path differs from the host, misc/pipelines deploy.sh force-recreates the service (`up -d --force-recreate --no-deps --wait`) after the normal `up`. Needed for bind-mounted files, because the copy swaps the inode and the running container keeps the old content (e.g. {caddy: proxy}).",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "provision": {
+          "type": "object",
+          "description": "Host-side provisioning that must run before migrations, read by misc/pipelines deploy.sh. Needed when a least-privilege role split means the migration role cannot grant itself privileges. Order on the host: pull, bring up `services` healthy, run `script`, migrate, up. The script and anything it sources must be shipped via `extra_paths`; ENVIRONMENT is exported into its shell.",
+          "additionalProperties": false,
+          "properties": {
+            "script": {
+              "type": "string",
+              "description": "Repo-relative script run on the host after pull and before migrate"
+            },
+            "services": {
+              "type": "array",
+              "description": "Compose services brought up --wait healthy before the script runs",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         },
         "cloudflare": {
@@ -1526,7 +1681,7 @@
     },
     "deploymentEnvironment": {
       "type": "object",
-      "description": "Per-environment deployment configuration",
+      "description": "Per-environment deployment configuration. Blue/green is DETECTED from this object, never declared: defining both `blue` and `green` instance objects means two separate hosts (AWS model, DNS cutover is manual); a `gcp` block with both deploy_command and cutover_command means two stacks on one VM (GCP model, router cutover). Defining only one color, or only one of the two gcp commands, is an audit finding",
       "additionalProperties": false,
       "properties": {
         "method": {
@@ -1617,6 +1772,13 @@
         "path": {
           "type": "string",
           "description": "Deployment directory on target"
+        },
+        "extra_paths": {
+          "type": "array",
+          "description": "Per-environment form of deployment.extra_paths: files/dirs shipped to this environment's host alongside docker-compose.yml. misc/pipelines reads deployment.extra_paths first, then this. Never includes docker-compose.override.yml.",
+          "items": {
+            "type": "string"
+          }
         },
         "instance_id": {
           "type": "string",
@@ -2638,6 +2800,58 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "stacks": {
+          "type": "object",
+          "description": "Independently applied roots of this tool, keyed by stack name (e.g. bootstrap, main). Use when one tool has more than one root; path/var_files above then name the primary stack.",
+          "additionalProperties": {
+            "$ref": "#/$defs/infrastructureStack"
+          }
+        },
+        "wrapper": {
+          "type": "string",
+          "description": "Repo-relative script that runs the tool (e.g. scripts/terraform.sh pins the image and wires credentials). Prefer it over invoking the tool directly."
+        },
+        "make_targets": {
+          "type": "object",
+          "description": "Action to make target (plan, apply, output, fmt, validate). The Makefile is the supported interface.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "infrastructureStack": {
+      "type": "object",
+      "description": "One independently applied root of an infrastructure tool",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Repo-relative directory of the stack"
+        },
+        "role": {
+          "type": "string",
+          "description": "What the stack is for (bootstrap = creates the state bucket; main = the environment itself)"
+        },
+        "var_files": {
+          "type": "object",
+          "description": "Variable file per environment, repo-relative",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "var_files_example": {
+          "type": "string",
+          "description": "Committed template to copy when var_files are not tracked"
+        },
+        "var_files_tracked": {
+          "type": "boolean",
+          "description": "false when var_files are gitignored and exist only in the checkout that created them (copy var_files_example in a fresh clone or worktree)"
+        },
+        "state_source": {
+          "type": "string",
+          "description": "How the state location is found (e.g. local, or gcs bucket from the bootstrap output state_bucket)"
         }
       }
     },
@@ -3105,20 +3319,19 @@
             "deployment": {
               "properties": {
                 "staging": {
-                  "required": [
-                    "instance_id",
-                    "region"
+                  "anyOf": [
+                    { "required": ["instance_id", "region"] },
+                    { "required": ["blue", "green"] }
                   ]
                 },
                 "production": {
-                  "required": [
-                    "instance_id",
-                    "region"
+                  "anyOf": [
+                    { "required": ["instance_id", "region"] },
+                    { "required": ["blue", "green"] }
                   ]
                 }
               },
               "required": [
-                "staging",
                 "production"
               ]
             }
